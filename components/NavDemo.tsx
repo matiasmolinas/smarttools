@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MARKERS, TARGETS, simulate, type SimState } from "@/lib/sim";
-import { useLiveImu } from "@/lib/useLiveImu";
 import { drawHud } from "@/lib/hud";
 
 const C_CYAN = 0x5ad8ff;
@@ -81,7 +80,6 @@ export default function NavDemo() {
   const mountRef = useRef<HTMLDivElement>(null);
   const hudRef = useRef<HTMLCanvasElement>(null);
   const labelRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const { live, msg: imuMsg, toggle: toggleLive, tiltRef: liveRef } = useLiveImu();
   const [phaseText, setPhaseText] = useState("approach");
 
   // ---------- three.js scene ----------
@@ -341,7 +339,7 @@ export default function NavDemo() {
       const dt = Math.min(clock.getDelta(), 0.05);
       if (!visible) return;
       simT += dt;
-      const s: SimState = simulate(simT, liveRef.current);
+      const s: SimState = simulate(simT);
 
       // drill pose
       drill.position.set(s.tip.x, s.tip.y, s.tip.z);
@@ -486,13 +484,6 @@ export default function NavDemo() {
           </div>
         </div>
         <div className="flex w-full max-w-[340px] flex-col gap-2">
-          <button
-            onClick={toggleLive}
-            className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-4 py-2 font-mono text-xs text-cyan-100 transition hover:bg-cyan-300/20"
-          >
-            {live ? "Stop live IMU" : "Tilt the chuck ring with your phone's IMU"}
-          </button>
-          {imuMsg && <p className="text-center font-mono text-[11px] text-white/50">{imuMsg}</p>}
           <a
             href="/hud"
             className="rounded-full border border-[var(--green)]/50 bg-[var(--green)]/10 px-4 py-2 text-center font-mono text-xs text-[var(--green)] transition hover:bg-[var(--green)]/20"

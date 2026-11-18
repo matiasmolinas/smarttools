@@ -207,7 +207,7 @@ export function drawHud(
   }
 
   // tiny mode tag
-  label(ctx, s.live ? "● IMU" : "SIM", u * 4, u * 5, u * 2.6, s.live ? GREEN : SOFT, "left", MONO, 500);
+  label(ctx, "OPTICAL · SIM", u * 4, u * 5, u * 2.6, SOFT, "left", MONO, 500);
 }
 
 // ---------- what to say at each moment ----------

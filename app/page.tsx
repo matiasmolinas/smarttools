@@ -35,7 +35,7 @@ const STEPS = [
   {
     n: "03",
     t: "Deterministic guidance",
-    d: "IMU + camera pose run at 60 fps in WebAssembly in the browser. Two rings: stack them on the crosshair and you are on target and square. 0 tokens at runtime.",
+    d: "The rear camera sees printed markers and computes the tool's 6-DoF pose at camera rate, in the browser. Centre the tip and chuck rings on the mark and you are on target and square. 0 tokens at runtime.",
   },
   {
     n: "04",
@@ -105,7 +105,7 @@ export default function Home() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">LLMs plan. Math verifies.</h2>
           <p className="mt-4 leading-relaxed text-white/65">
-            A language model cannot run a Kalman filter at 120 Hz or promise a 0.5° tolerance. So we split the system:
+            A language model cannot estimate a 6-DoF pose at camera rate or promise a 0.5° tolerance. So we split the system:
             agentic plugins reason about <em>what</em> to build; deterministic plugins (WebAssembly / Rust / Mojo) compute
             pose, angle and depth in milliseconds and gate every step. Nothing probabilistic sits between the sensor and
             the trigger.
@@ -124,7 +124,7 @@ export default function Home() {
           <div className="rounded-2xl border border-[var(--green)]/30 p-4">
             <div className="text-[var(--green)]">DETERMINISTIC</div>
             <ul className="mt-3 space-y-1.5 text-white/65">
-              <li>IMU + visual pose</li>
+              <li>marker-based optical pose</li>
               <li>angle · offset · depth</li>
               <li>Check: pass / fail</li>
               <li>&lt;10 ms · 0 tokens</li>
@@ -155,7 +155,7 @@ export default function Home() {
           <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Why now</h2>
           <p className="mt-4 leading-relaxed text-white/65">
             Fifteen years ago, 6-DoF navigation for total knee replacement needed an infrared tracking tower and a
-            dedicated workstation. Today a phone carries a 6-axis IMU, multiple cameras, depth sensing, an NPU and a
+            dedicated workstation. Today a phone carries high-resolution cameras, depth sensing, an NPU and a
             bright screen, and a browser can reach all of it. No regulator stands between this math and a workshop.
           </p>
         </div>

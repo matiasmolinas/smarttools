@@ -27,7 +27,6 @@ export interface SimState {
   onTarget: boolean;
   drilled: boolean[];
   bitSpin: number;
-  live: boolean;
 }
 
 export const TARGETS = [
@@ -67,12 +66,7 @@ const ease = (v: number) => {
 const easeOut = (v: number) => 1 - Math.pow(1 - clamp01(v), 3);
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
-export interface LiveTilt {
-  yaw: number;
-  pitch: number;
-}
-
-export function simulate(t: number, live?: LiveTilt | null): SimState {
+export function simulate(t: number): SimState {
   const cycleIndex = Math.floor(t / CYCLE);
   const local = t - cycleIndex * CYCLE;
   const targetIndex = cycleIndex % TARGETS.length;
@@ -151,11 +145,6 @@ export function simulate(t: number, live?: LiveTilt | null): SimState {
   ox += tr * 0.00025 * Math.sin(t * 5.3);
   oy += tr * 0.00025 * Math.sin(t * 4.7 + 1);
 
-  if (live) {
-    yaw = live.yaw;
-    pitch = live.pitch;
-  }
-
   const ax = Math.tan((yaw * Math.PI) / 180);
   const ay = Math.tan((pitch * Math.PI) / 180);
   const n = Math.hypot(ax, ay, 1);
@@ -194,7 +183,6 @@ export function simulate(t: number, live?: LiveTilt | null): SimState {
     onTarget: offsetMm < OFFSET_TOL_MM,
     drilled,
     bitSpin,
-    live: !!live,
   };
 }
 

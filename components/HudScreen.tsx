@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { simulate } from "@/lib/sim";
 import { drawHud, type HudBackground } from "@/lib/hud";
-import { useLiveImu } from "@/lib/useLiveImu";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 
@@ -12,7 +11,7 @@ const SURF_LABEL: Record<HudBackground, string> = { wall: "Wall", wood: "Wood", 
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { live, msg, toggle, rezero, tiltRef } = useLiveImu();
+  const restartRef = useRef(false);
   const [bg, setBg] = useState<HudBackground>("wall");
   const bgRef = useRef<HudBackground>("wall");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -25,10 +24,6 @@ export default function HudScreen() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2500);
   }
-
-  useEffect(() => {
-    if (msg) say(msg);
-  }, [msg]);
 
   // initial background from ?bg= or the last choice (camera needs a tap, never auto-started)
   useEffect(() => {
@@ -103,7 +98,11 @@ export default function HudScreen() {
       raf = requestAnimationFrame(tick);
       t += Math.min((now - last) / 1000, 0.05);
       last = now;
-      const s = simulate(t, tiltRef.current);
+      if (restartRef.current) {
+        restartRef.current = false;
+        t = 0;
+      }
+      const s = simulate(t);
       const w = canvas.width;
       const h = canvas.height;
       if (w > 0 && h > 0) drawHud(ctx, s, w, h, false, { background: bgRef.current, video: videoRef.current });
@@ -113,7 +112,7 @@ export default function HudScreen() {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [tiltRef]);
+  }, []);
 
   // keep the screen awake during a demo
   useEffect(() => {
@@ -153,19 +152,15 @@ export default function HudScreen() {
         <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
           <SurfIcon />
         </RoundButton>
-        <RoundButton label={live ? "On" : "Off"} caption="IMU" active={live} onClick={toggle}>
-          <ImuIcon />
-        </RoundButton>
         <RoundButton
-          label="90°"
-          caption="Zero"
-          disabled={!live}
+          label=""
+          caption="Restart"
           onClick={() => {
-            rezero();
-            say("ZERO SET · 90°");
+            restartRef.current = true;
+            say("RESTART");
           }}
         >
-          <ZeroIcon />
+          <RestartIcon />
         </RoundButton>
         <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
@@ -225,20 +220,11 @@ function SurfIcon() {
     </svg>
   );
 }
-function ImuIcon() {
+function RestartIcon() {
   return (
     <svg {...ico}>
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 4v4M12 16v4M4 12h4M16 12h4" />
-      <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-    </svg>
-  );
-}
-function ZeroIcon() {
-  return (
-    <svg {...ico}>
-      <path d="M4 20h16M6 20V6" />
-      <path d="M6 14a6 6 0 0 1 6 6" />
+      <path d="M4 12a8 8 0 1 0 2.4-5.7" />
+      <path d="M4 4v4h4" />
     </svg>
   );
 }
