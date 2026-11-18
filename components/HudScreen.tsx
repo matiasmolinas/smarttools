@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { simulate } from "@/lib/sim";
 import { drawHud, type HudBackground } from "@/lib/hud";
+import { OpticalTracker } from "@/lib/tracker";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 
@@ -12,6 +13,7 @@ const SURF_LABEL: Record<HudBackground, string> = { wall: "Wall", wood: "Wood", 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const restartRef = useRef(false);
+  const trackerRef = useRef<OpticalTracker | null>(null);
   const [bg, setBg] = useState<HudBackground>("wall");
   const bgRef = useRef<HudBackground>("wall");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -102,10 +104,20 @@ export default function HudScreen() {
         restartRef.current = false;
         t = 0;
       }
-      const s = simulate(t);
       const w = canvas.width;
       const h = canvas.height;
-      if (w > 0 && h > 0) drawHud(ctx, s, w, h, false, { background: bgRef.current, video: videoRef.current });
+      if (w <= 0 || h <= 0) return;
+      const v = videoRef.current;
+      if (bgRef.current === "camera" && v && v.readyState >= 2) {
+        // 100% optical: markers -> pose -> drill state
+        trackerRef.current ??= new OpticalTracker();
+        const r = trackerRef.current.update(v, t);
+        if (r) {
+          drawHud(ctx, r.state, w, h, false, { background: "camera", video: v, overlay: r.overlay });
+          return;
+        }
+      }
+      drawHud(ctx, simulate(t), w, h, false, { background: bgRef.current, video: v });
     };
     raf = requestAnimationFrame(tick);
     return () => {
@@ -152,20 +164,36 @@ export default function HudScreen() {
         <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
           <SurfIcon />
         </RoundButton>
-        <RoundButton
-          label=""
-          caption="Restart"
-          onClick={() => {
-            restartRef.current = true;
-            say("RESTART");
-          }}
-        >
-          <RestartIcon />
-        </RoundButton>
+        {bg === "camera" ? (
+          <RoundButton
+            label="A2"
+            caption="Calibrate"
+            onClick={() => {
+              const ok = trackerRef.current?.calibrateTipOn("A2");
+              say(ok ? "TIP CALIBRATED ON A2" : "POINT AT THE MARKERS");
+            }}
+          >
+            <CalIcon />
+          </RoundButton>
+        ) : (
+          <RoundButton
+            label=""
+            caption="Restart"
+            onClick={() => {
+              restartRef.current = true;
+              say("RESTART");
+            }}
+          >
+            <RestartIcon />
+          </RoundButton>
+        )}
         <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
         </RoundButton>
-        <a href="/" className="mt-1 font-mono text-[10px] text-white/50 hover:text-white/80">
+        <a href="/markers" className="mt-1 font-mono text-[10px] text-white/60 hover:text-white">
+          Markers
+        </a>
+        <a href="/" className="font-mono text-[10px] text-white/50 hover:text-white/80">
           ← 3D
         </a>
       </div>
@@ -217,6 +245,14 @@ function SurfIcon() {
     <svg {...ico}>
       <rect x="3" y="4" width="18" height="16" rx="1.5" />
       <path d="M3 10h18M3 15h18M9 4v6M15 10v5M9 15v5" />
+    </svg>
+  );
+}
+function CalIcon() {
+  return (
+    <svg {...ico}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
     </svg>
   );
 }

@@ -24,9 +24,17 @@ const SANS = '"Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans
 const MONO = '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
 export type HudBackground = "grid" | "wall" | "wood" | "camera";
+export interface Overlay {
+  lost: boolean;
+  aim: { x: number; y: number } | null; // video px: where the bit axis meets the surface
+  mark: { x: number; y: number } | null; // video px: the planned hole
+  quads: { x: number; y: number }[][]; // video px: detected markers
+  info: string;
+}
 export interface HudOptions {
   background?: HudBackground;
   video?: HTMLVideoElement | null;
+  overlay?: Overlay | null;
 }
 
 const LOCK_TIME = 0.75; // s of continuous on-mark + square before "ready"
@@ -56,11 +64,15 @@ export function drawHud(
   const bg = opts.background ?? "grid";
   const video = opts.video;
   const camLive = bg === "camera" && !!video && video.readyState >= 2 && video.videoWidth > 0;
+  let vmap: ((p: { x: number; y: number }) => { x: number; y: number }) | null = null;
   if (camLive) {
     const vw = video!.videoWidth;
     const vh = video!.videoHeight;
     const sc = Math.max(w / vw, h / vh);
-    ctx.drawImage(video!, (w - vw * sc) / 2, (h - vh * sc) / 2, vw * sc, vh * sc);
+    const offX = (w - vw * sc) / 2;
+    const offY = (h - vh * sc) / 2;
+    ctx.drawImage(video!, offX, offY, vw * sc, vh * sc);
+    vmap = (p) => ({ x: offX + p.x * sc, y: offY + p.y * sc });
   } else if (bg === "wall" || bg === "wood") {
     const tex = getSurface(bg);
     ctx.fillStyle = bg === "wall" ? "#bdb8ad" : "#8a6440";
@@ -72,6 +84,7 @@ export function drawHud(
   } else {
     drawGridFeed(ctx, s, w, h, u, cx, cy, toX, toY, scale);
   }
+  const ov = vmap && opts.overlay ? opts.overlay : null;
   // light vignette only: keep the work area visible
   const vg = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.35, cx, cy, Math.max(w, h) * 0.85);
   vg.addColorStop(0, "rgba(0,0,0,0)");
@@ -103,11 +116,25 @@ export function drawHud(
   ctx.shadowBlur = u * 0.9;
 
   // ---------- the mark (where the hole goes) ----------
-  const mx = toX(s.target.x);
-  const my = toY(s.target.y);
-  const inView = mx > u * 6 && mx < w - u * 6 && my > u * 6 && my < h - u * 6;
+  // tracked markers: thin outlines, so the user sees what the camera locks onto
+  if (ov && vmap) {
+    for (const q of ov.quads) {
+      const m = q.map(vmap);
+      line(ctx, () => {
+        ctx.moveTo(m[0].x, m[0].y);
+        for (let i = 1; i < 4; i++) ctx.lineTo(m[i].x, m[i].y);
+        ctx.closePath();
+      }, "rgba(62,229,155,0.7)", Math.max(1, lw * 0.7));
+    }
+  }
+  const tracked = !!(ov && !ov.lost && ov.aim);
+  const rc = tracked ? vmap!(ov!.aim!) : { x: cx, y: cy };
+  const mk = ov ? (ov.mark && !ov.lost ? vmap!(ov.mark) : null) : { x: toX(s.target.x), y: toY(s.target.y) };
+  const mx = mk ? mk.x : -1e4;
+  const my = mk ? mk.y : -1e4;
+  const inView = !!mk && mx > u * 6 && mx < w - u * 6 && my > u * 6 && my < h - u * 6;
   const showMark = s.phase !== "hold";
-  if (showMark) {
+  if (showMark && !(ov && ov.lost)) {
     if (inView) {
       const r = u * 2;
       line(ctx, () => {
@@ -118,11 +145,11 @@ export function drawHud(
         }
       }, WHITE, lw);
       if (!onMark && s.phase !== "drill" && s.offsetMm > 3) {
-        label(ctx, `${TARGETS[s.targetIndex].label} · ${s.offsetMm.toFixed(0)} mm`, mx + r * 3.4, my - r * 2.2, u * 3, SOFT, "left");
+        label(ctx, `${s.label} · ${s.offsetMm.toFixed(0)} mm`, mx + r * 3.4, my - r * 2.2, u * 3, SOFT, "left");
       }
     } else {
       // off-screen: a small chevron on the edge pointing to it
-      const a = Math.atan2(my - cy, mx - cx);
+      const a = Math.atan2(my - rc.y, mx - rc.x);
       const ex = Math.min(w - u * 6, Math.max(u * 6, cx + Math.cos(a) * w));
       const ey = Math.min(h - u * 6, Math.max(u * 6, cy + Math.sin(a) * h));
       chevron(ctx, ex, ey, a, u * 2.4, WHITE, lw * 1.4);
@@ -138,8 +165,8 @@ export function drawHud(
     ox = (ox / oLen) * oMax;
     oy = (oy / oLen) * oMax;
   }
-  const chX = cx + ox;
-  const chY = cy + oy;
+  const chX = rc.x + ox;
+  const chY = rc.y + oy;
 
   let col = AMBER;
   if (broken) col = RED;
@@ -148,29 +175,29 @@ export function drawHud(
   // gentle blink while locking (3 pulses), then steady
   const pulse = locking ? 0.35 + 0.65 * (0.5 + 0.5 * Math.cos(lockAge * Math.PI * 2 * (3 / LOCK_TIME))) : 1;
 
-  ctx.globalAlpha = pulse;
+  ctx.globalAlpha = ov && ov.lost ? 0.25 : pulse;
   const tipR = u * 4;
   const chuckR = u * 8.5;
   // axis line: chuck -> tip
   if (Math.hypot(ox, oy) > u * 1.5) {
     line(ctx, () => {
       ctx.moveTo(chX, chY);
-      ctx.lineTo(cx, cy);
+      ctx.lineTo(rc.x, rc.y);
     }, col, lw * 0.8, [u * 1, u * 1]);
   }
   line(ctx, () => ctx.arc(chX, chY, chuckR, 0, Math.PI * 2), square && !broken ? col : AMBER, lw * 1.1);
-  line(ctx, () => ctx.arc(cx, cy, tipR, 0, Math.PI * 2), onMark || drilling ? col : WHITE, lw * 1.4);
-  dot(ctx, cx, cy, u * 0.7, onMark || drilling ? col : WHITE);
+  line(ctx, () => ctx.arc(rc.x, rc.y, tipR, 0, Math.PI * 2), onMark || drilling ? col : WHITE, lw * 1.4);
+  dot(ctx, rc.x, rc.y, u * 0.7, onMark || drilling ? col : WHITE);
   ctx.globalAlpha = 1;
 
   // depth progress: thin arc around the tip while drilling
   if (drilling || s.depthMm > 0.05) {
     const frac = Math.min(1, s.depthMm / DEPTH_TARGET_MM);
     const r = u * 12.5;
-    line(ctx, () => ctx.arc(cx, cy, r, 0, Math.PI * 2), "rgba(245,248,252,0.22)", lw * 2.2);
-    line(ctx, () => ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2), frac >= 0.998 ? RED : GREEN, lw * 2.4);
-    label(ctx, `${s.depthMm.toFixed(1)}`, cx + r + u * 2.5, cy - u * 1.2, u * 4.2, WHITE, "left", MONO, 500);
-    label(ctx, `/ ${DEPTH_TARGET_MM} mm`, cx + r + u * 2.5, cy + u * 3, u * 2.6, SOFT, "left", MONO, 400);
+    line(ctx, () => ctx.arc(rc.x, rc.y, r, 0, Math.PI * 2), "rgba(245,248,252,0.22)", lw * 2.2);
+    line(ctx, () => ctx.arc(rc.x, rc.y, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2), frac >= 0.998 ? RED : GREEN, lw * 2.4);
+    label(ctx, `${s.depthMm.toFixed(1)}`, rc.x + r + u * 2.5, rc.y - u * 1.2, u * 4.2, WHITE, "left", MONO, 500);
+    label(ctx, `/ ${DEPTH_TARGET_MM} mm`, rc.x + r + u * 2.5, rc.y + u * 3, u * 2.6, SOFT, "left", MONO, 400);
   } else if (onMark || s.phase === "align") {
     // angle readout beside the chuck ring, only while squaring up
     label(ctx, `${s.angleErrDeg.toFixed(1)}°`, chX + chuckR + u * 2, chY, u * 3.6, square ? GREEN : AMBER, "left", MONO, 500);
@@ -179,7 +206,7 @@ export function drawHud(
   ctx.restore();
 
   // ---------- Athos card: one step, one instruction ----------
-  const cue = instruction(s, { onMark, square, ready, locking, broken });
+  const cue = instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost) });
   const panelW = landscape ? Math.min(w * 0.62, u * 130) : w - u * 8;
   const pad = u * 3.4;
   const titleSize = u * (compact ? 6 : 5.4);
@@ -207,17 +234,18 @@ export function drawHud(
   }
 
   // tiny mode tag
-  label(ctx, "OPTICAL · SIM", u * 4, u * 5, u * 2.6, SOFT, "left", MONO, 500);
+  label(ctx, ov ? `OPTICAL · ${ov.info}` : "OPTICAL · SIM", u * 4, u * 5, u * 2.6, ov && !ov.lost ? GREEN : SOFT, "left", MONO, 500);
 }
 
 // ---------- what to say at each moment ----------
 function instruction(
   s: SimState,
-  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean },
+  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean; lost: boolean },
 ): { text: string; color: string; step: string; pass: boolean; check: string } {
+  if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least one marker in view" };
   if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
   if (s.phase === "hold") return { text: `Stop · ${DEPTH_TARGET_MM} mm`, color: GREEN, step: "3/3", pass: true, check: `depth ${s.depthMm.toFixed(1)} mm · err ${s.angleErrDeg.toFixed(2)}°` };
-  if (s.phase === "retract") return { text: `Done · next ${TARGETS[s.targetIndex].label}`, color: GREEN, step: "1/3", pass: true, check: "hole logged" };
+  if (s.phase === "retract") return { text: `Done · next ${s.label}`, color: GREEN, step: "1/3", pass: true, check: "hole logged" };
   if (s.phase === "drill") {
     const left = DEPTH_TARGET_MM - s.depthMm;
     if (left < 3) return { text: "Ease off", color: AMBER, step: "3/3", pass: false, check: `stop at ${DEPTH_TARGET_MM} mm` };

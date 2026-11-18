@@ -27,6 +27,7 @@ export interface SimState {
   onTarget: boolean;
   drilled: boolean[];
   bitSpin: number;
+  label: string;
 }
 
 export const TARGETS = [
@@ -183,6 +184,7 @@ export function simulate(t: number): SimState {
     onTarget: offsetMm < OFFSET_TOL_MM,
     drilled,
     bitSpin,
+    label: (phase === "retract" ? next : target).label,
   };
 }
 

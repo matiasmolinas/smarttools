@@ -170,8 +170,8 @@ export default function Home() {
       <section className="py-16">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Roadmap</h2>
         <ol className="mt-8 space-y-3 font-mono text-sm">
-          <Road tag="now" text="Browser simulation of drill navigation (this page) + open-source stack" />
-          <Road tag="next" text="Printed dock + marker-based pose on a real drill, measured against a reference jig" />
+          <Road tag="now" text="Optical tracking v0 in the browser: printed markers (/markers) + the phone camera (/hud → Cam), sub-pixel corners, 6-DoF pose" />
+          <Road tag="next" text="Printed dock on a real drill, error measured against a reference jig; then our own camera module if the phone is the limit" />
           <Road tag="next" text="Circular-saw bevel & cut-line guidance; driver sequencing" />
           <Road tag="demo day" text="Live drilling on stage, field pilot with workshops, error data logged in agentvcs" />
         </ol>
