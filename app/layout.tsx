@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SmartTools: smart 3D navigation for everyday power tools",
+  title: "SmartTools: a bicycle for humans in the real world",
   description:
     "Clip your phone to your drill. AI plans the job; deterministic 6-DoF math guides your hands to ±0.5°.",
 };

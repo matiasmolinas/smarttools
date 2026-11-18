@@ -66,13 +66,16 @@ export default function Home() {
           Smart 3D navigation → everyday power tools
         </p>
         <h1 className="max-w-4xl text-4xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
-          Your phone, clipped to your drill,
-          <br className="hidden sm:block" /> becomes a <span className="text-[var(--green)]">±0.5° guide</span>.
+          A bicycle for humans
+          <br className="hidden sm:block" /> in the <span className="text-[var(--green)]">real world</span>.
         </h1>
         <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/65 sm:text-lg">
-          Physical manipulation is where AI agents fail: a hole 3° off or 5 mm too deep ruins the work. SmartTools
-          brings 6-DoF navigation from knee-replacement surgery to a $20 dock and the sensors already in your pocket.
-          AI plans the job; deterministic math guides your hands.
+          Manipulation is where robots fail. SmartTools makes the human better than the robot: your phone, clipped to
+          the drill you already own, becomes a ±0.5° guide. 6-DoF navigation from knee-replacement surgery, on a $20
+          dock and the sensors already in your pocket. AI plans the job; deterministic math guides your hands.
+        </p>
+        <p className="mt-3 max-w-2xl font-mono text-sm text-white/45">
+          Today, the drill and the screwdriver. Tomorrow, every tool in your hands.
         </p>
       </header>
 
@@ -157,7 +160,7 @@ export default function Home() {
           </p>
         </div>
         <dl className="grid grid-cols-2 gap-3">
-          <Stat k="15 yrs" v="building 3D navigation & AR for knee-replacement surgery" />
+          <Stat k="5 yrs" v="building smart tools for knee-replacement surgery: 3D navigation & visualization" />
           <Stat k="$20" v="target cost of the universal 3D-printed dock" />
           <Stat k="±0.5°" v="angular tolerance gate before the trigger" />
           <Stat k="0" v="LLM tokens in the real-time loop" />
