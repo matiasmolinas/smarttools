@@ -8,7 +8,7 @@ import { useLiveImu } from "@/lib/useLiveImu";
 type WakeLockSentinelLike = { release: () => Promise<void> };
 
 const SURFACES: HudBackground[] = ["wall", "wood", "camera", "grid"];
-const SURF_LABEL: Record<HudBackground, string> = { wall: "WALL", wood: "WOOD", camera: "CAM", grid: "GRID" };
+const SURF_LABEL: Record<HudBackground, string> = { wall: "Wall", wood: "Wood", camera: "Cam", grid: "Grid" };
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,7 +76,7 @@ export default function HudScreen() {
       try {
         localStorage.setItem("hud-bg", next);
       } catch {}
-      say(SURF_LABEL[next]);
+      say(SURF_LABEL[next].toUpperCase());
     }
     bgRef.current = next;
     setBg(next);
@@ -137,30 +137,28 @@ export default function HudScreen() {
   };
 
   return (
-    <div className="fixed inset-0 flex bg-black text-[#4dff88]">
-      <div className="relative min-w-0 flex-1">
-        <canvas ref={canvasRef} className="block h-[100dvh] w-full touch-none" />
-        <video ref={videoRef} playsInline muted className="hidden" />
-        {toast && (
-          <div className="pointer-events-none absolute inset-x-0 top-[22%] flex justify-center px-4">
-            <div className="rounded-lg border-2 border-[#4dff88] bg-black/80 px-5 py-2 text-center font-mono text-xl font-extrabold tracking-wider sm:text-2xl">
-              {toast}
-            </div>
+    <div className="fixed inset-0 bg-black text-white">
+      <canvas ref={canvasRef} className="block h-[100dvh] w-full touch-none" />
+      <video ref={videoRef} playsInline muted className="hidden" />
+      {toast && (
+        <div className="pointer-events-none absolute inset-x-0 top-[max(1rem,env(safe-area-inset-top))] flex justify-center px-4">
+          <div className="rounded-full bg-black/60 px-4 py-1.5 font-mono text-xs tracking-wide text-white/90 backdrop-blur-md">
+            {toast}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* side bar: big round controls, usable with gloves */}
-      <aside className="flex w-[84px] shrink-0 flex-col items-center justify-center gap-5 border-l-2 border-[#4dff88]/40 bg-black/90 py-4 pr-[env(safe-area-inset-right)] sm:w-[104px]">
-        <RoundButton label={SURF_LABEL[bg]} caption="SURF" onClick={cycleSurface}>
+      {/* floating control column, right edge (portrait and landscape) */}
+      <div className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 flex -translate-y-1/2 flex-col items-center gap-3.5">
+        <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
           <SurfIcon />
         </RoundButton>
-        <RoundButton label={live ? "ON" : "OFF"} caption="IMU" active={live} onClick={toggle}>
+        <RoundButton label={live ? "On" : "Off"} caption="IMU" active={live} onClick={toggle}>
           <ImuIcon />
         </RoundButton>
         <RoundButton
           label="90°"
-          caption="ZERO"
+          caption="Zero"
           disabled={!live}
           onClick={() => {
             rezero();
@@ -169,13 +167,13 @@ export default function HudScreen() {
         >
           <ZeroIcon />
         </RoundButton>
-        <RoundButton label="FULL" caption="SCREEN" onClick={fullscreen}>
+        <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
         </RoundButton>
-        <a href="/" className="mt-1 font-mono text-[11px] font-bold text-[#4dff88]/60 underline-offset-4 hover:underline">
+        <a href="/" className="mt-1 font-mono text-[10px] text-white/50 hover:text-white/80">
           ← 3D
         </a>
-      </aside>
+      </div>
     </div>
   );
 }
@@ -203,21 +201,21 @@ function RoundButton({
       className="flex flex-col items-center gap-1 disabled:opacity-30"
     >
       <span
-        className={`flex h-[60px] w-[60px] items-center justify-center rounded-full border-[3px] transition active:scale-95 sm:h-[72px] sm:w-[72px] ${
-          active
-            ? "border-[#4dff88] bg-[#4dff88] text-black shadow-[0_0_18px_#4dff88]"
-            : "border-[#4dff88] bg-black text-[#4dff88] shadow-[0_0_10px_rgba(77,255,136,0.35)]"
+        className={`flex h-[52px] w-[52px] items-center justify-center rounded-full border backdrop-blur-md transition active:scale-95 ${
+          active ? "border-[#3ee59b] bg-[#3ee59b]/20 text-[#3ee59b]" : "border-white/35 bg-black/45 text-white/90"
         }`}
       >
         {children}
       </span>
-      <span className="font-mono text-[11px] font-extrabold leading-none tracking-wider">{caption}</span>
-      <span className="font-mono text-[10px] font-bold leading-none text-[#4dff88]/60">{label}</span>
+      <span className="font-mono text-[10px] leading-none text-white/70 [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
+        {caption}
+        {label ? ` · ${label}` : ""}
+      </span>
     </button>
   );
 }
 
-const ico = { width: 28, height: 28, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const ico = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
 function SurfIcon() {
   return (

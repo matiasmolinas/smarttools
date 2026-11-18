@@ -82,9 +82,9 @@ export default function Home() {
       <section aria-label="Live navigation demo" className="pb-6">
         <NavDemo />
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Legend color="var(--green)" title="Reticle + box" body="The fixed reticle is the bit tip. The square box is your mark. AIM until the box sits in the reticle." />
-          <Legend color="var(--amber)" title="Wing = tilt" body="Move the HANDLE until the wing symbol enters the dashed circle: square to the surface within ±0.5°." />
-          <Legend color="var(--green)" title="Diamond = lock" body="The diamond flashes while locking, then holds steady: LOCKED. DRILL, SLOW, STOP at 35 mm." />
+          <Legend color="#f5f8fc" title="Mark" body="Where the hole or screw goes, seen through the phone's rear camera." />
+          <Legend color="var(--amber)" title="Tip & chuck rings" body="The small ring is the bit tip, the large one the chuck. Centre both on the mark: on target and square to ±0.5°." />
+          <Legend color="var(--green)" title="One Athos step at a time" body="The card shows only the current step and its check. Green means the check passed; the depth arc stops you at 35 mm." />
         </div>
       </section>
 

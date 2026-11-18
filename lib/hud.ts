@@ -1,12 +1,9 @@
-// 2D navigation HUD shown on the phone docked behind the drill.
-// Symbology borrowed from fighter-aircraft HUDs, sized for a job site:
-//   boresight reticle (fixed) = where the bit tip is
-//   TD box (moves)            = the pencil mark / target
-//   wing marker + ASE circle  = tool tilt; inside the circle = square to the surface
-//   lock: diamond flashes while acquiring, then holds steady
-//   side tapes                = range to wall (left), drilling depth (right)
-//   break X                   = abort (tilted while drilling)
-// One short command word at the bottom, readable at arm's length.
+// 2D guide shown on the phone docked behind the drill.
+// Calm, minimal symbology that leaves the work area visible:
+//   mark       = where the hole / screw goes (moves with the camera image)
+//   tip ring   = the bit tip (fixed: the camera is rigid with the tool)
+//   chuck ring = the back of the bit; its offset from the tip ring is the tilt
+// Rings centred on the mark = on target and square. Only what the current Athos step needs is shown.
 
 import {
   ANGLE_TOL_DEG,
@@ -18,11 +15,13 @@ import {
 } from "./sim";
 import { SURF, getSurface } from "./surfaces";
 
-const G = "#4dff88"; // HUD phosphor green
-const G_DIM = "rgba(77,255,136,0.5)";
-const AMB = "#ffc247";
-const RED = "#ff5247";
-const FONT = 'ui-monospace, "Geist Mono", SFMono-Regular, Menlo, monospace';
+const WHITE = "rgba(245,248,252,0.95)";
+const SOFT = "rgba(245,248,252,0.6)";
+const GREEN = "#3ee59b";
+const AMBER = "#ffb84d";
+const RED = "#ff5c50";
+const SANS = '"Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+const MONO = '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
 export type HudBackground = "grid" | "wall" | "wood" | "camera";
 export interface HudOptions {
@@ -30,8 +29,8 @@ export interface HudOptions {
   video?: HTMLVideoElement | null;
 }
 
-const LOCK_TIME = 0.7; // s of continuous on-target + square before LOCKED
-const DEG_GAIN = 14; // layout units per degree of tilt for the wing marker
+const LOCK_TIME = 0.75; // s of continuous on-mark + square before "ready"
+const TILT_GAIN = 7; // layout units of chuck-ring offset per degree
 const locks = new WeakMap<CanvasRenderingContext2D, { since: number | null; lastT: number }>();
 
 export function drawHud(
@@ -44,16 +43,16 @@ export function drawHud(
 ) {
   const u = Math.min(w, h) / 100;
   const landscape = w > h * 1.15;
-  const cx = w / 2;
-  const cy = landscape ? h * 0.47 : h * 0.43;
+  const cx = landscape ? w * 0.44 : w / 2;
+  const cy = landscape ? h * 0.44 : h * 0.42;
 
-  // zoom: farther = wider view, closer = more px per metre. View is centred on the bit tip.
+  // view follows the tool (camera rigid with the drill); closer = more zoom
   const k = 1 - Math.min(1, s.gapMm / 1000 / START_GAP);
   const scale = (Math.min(w, h) / 0.5) * (1 + 5 * k * k);
   const toX = (x: number) => cx + (x - s.tip.x) * scale;
   const toY = (y: number) => cy - (y - s.tip.y) * scale;
 
-  // ---------------- background ----------------
+  // ---------- background ----------
   const bg = opts.background ?? "grid";
   const video = opts.video;
   const camLive = bg === "camera" && !!video && video.readyState >= 2 && video.videoWidth > 0;
@@ -73,15 +72,14 @@ export function drawHud(
   } else {
     drawGridFeed(ctx, s, w, h, u, cx, cy, toX, toY, scale);
   }
-  // darken a little so the green symbology pops on any surface
-  const vg = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.2, cx, cy, Math.max(w, h) * 0.8);
-  vg.addColorStop(0, "rgba(0,0,0,0.15)");
-  vg.addColorStop(1, "rgba(0,0,0,0.6)");
+  // light vignette only: keep the work area visible
+  const vg = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.35, cx, cy, Math.max(w, h) * 0.85);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(0,0,0,0.35)");
   ctx.fillStyle = vg;
   ctx.fillRect(0, 0, w, h);
-  if (bg === "camera" && !camLive) text(ctx, "NO CAMERA", cx, cy - u * 30, u * 4, AMB, u);
 
-  // ---------------- state ----------------
+  // ---------- state ----------
   let L = locks.get(ctx);
   if (!L) {
     L = { since: null, lastT: s.t };
@@ -91,332 +89,213 @@ export function drawHud(
   L.lastT = s.t;
   const onMark = s.onTarget && s.gapMm < 0.5;
   const square = s.aligned;
-  const ok = onMark && square;
-  if (ok) L.since ??= s.t;
+  if (onMark && square) L.since ??= s.t;
   else L.since = null;
   const lockAge = L.since == null ? -1 : s.t - L.since;
-  const locked = lockAge >= LOCK_TIME;
-  const locking = lockAge >= 0 && !locked;
-  const blink = Math.floor(s.t * 7) % 2 === 0;
-  const breakX = (s.phase === "drill" || s.phase === "hold") && s.depthMm > 0.3 && !square;
+  const ready = lockAge >= LOCK_TIME;
+  const locking = lockAge >= 0 && !ready;
+  const drilling = s.phase === "drill" || s.phase === "hold";
+  const broken = drilling && s.depthMm > 0.3 && !square;
 
-  const lw = Math.max(1.5, u * 0.55);
+  const lw = Math.max(1.2, u * 0.32);
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.55)";
+  ctx.shadowBlur = u * 0.9;
 
-  // ---------------- boresight reticle (fixed = bit tip) ----------------
-  const R = u * 15;
-  const aseR = ANGLE_TOL_DEG * DEG_GAIN * u;
-  const retCol = breakX ? RED : G;
-  stroke(ctx, () => {
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      const long = i % 3 === 0;
-      const r0 = R;
-      const r1 = R + u * (long ? 3.2 : 1.6);
-      ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
-      ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
-    }
-  }, retCol, lw, u);
-  // reticle ring: segmented while searching, solid when locked
-  stroke(ctx, () => {
-    if (locked) ctx.arc(cx, cy, R, 0, Math.PI * 2);
-    else
-      for (let i = 0; i < 12; i++) {
-        const a0 = (i / 12) * Math.PI * 2 + 0.08;
-        const a1 = ((i + 1) / 12) * Math.PI * 2 - 0.08;
-        ctx.moveTo(cx + Math.cos(a0) * R, cy + Math.sin(a0) * R);
-        ctx.arc(cx, cy, R, a0, a1);
-      }
-  }, retCol, locked ? lw * 1.8 : lw, u);
-  // ASE circle (allowed tilt)
-  ctx.setLineDash([u * 1.2, u * 1.2]);
-  stroke(ctx, () => ctx.arc(cx, cy, aseR, 0, Math.PI * 2), G_DIM, lw * 0.8, u);
-  ctx.setLineDash([]);
-  // pipper
-  fillDot(ctx, cx, cy, u * 1.1, retCol, u);
-
-  // ---------------- TD box (target designator) ----------------
-  const tx = toX(s.target.x);
-  const ty = toY(s.target.y);
-  const margin = u * 12;
-  const inView = tx > margin && tx < w - margin && ty > u * 22 && ty < h - u * 30;
-  const offPx = Math.hypot(tx - cx, ty - cy);
-  if (!onMark) {
+  // ---------- the mark (where the hole goes) ----------
+  const mx = toX(s.target.x);
+  const my = toY(s.target.y);
+  const inView = mx > u * 6 && mx < w - u * 6 && my > u * 6 && my < h - u * 6;
+  const showMark = s.phase !== "hold";
+  if (showMark) {
     if (inView) {
-      const b = u * 5.5;
-      stroke(ctx, () => ctx.rect(tx - b, ty - b, b * 2, b * 2), G, lw * 1.2, u);
-      // target locator line from reticle to box
-      if (offPx > R + b) {
-        const a = Math.atan2(ty - cy, tx - cx);
-        ctx.setLineDash([u * 1.5, u * 1.5]);
-        stroke(ctx, () => {
-          ctx.moveTo(cx + Math.cos(a) * (R + u * 3.5), cy + Math.sin(a) * (R + u * 3.5));
-          ctx.lineTo(tx - Math.cos(a) * b * 1.3, ty - Math.sin(a) * b * 1.3);
-        }, G_DIM, lw * 0.8, u);
-        ctx.setLineDash([]);
+      const r = u * 2;
+      line(ctx, () => {
+        ctx.arc(mx, my, r, 0, Math.PI * 2);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          ctx.moveTo(mx + dx * r * 1.6, my + dy * r * 1.6);
+          ctx.lineTo(mx + dx * r * 2.8, my + dy * r * 2.8);
+        }
+      }, WHITE, lw);
+      if (!onMark && s.phase !== "drill" && s.offsetMm > 3) {
+        label(ctx, `${TARGETS[s.targetIndex].label} · ${s.offsetMm.toFixed(0)} mm`, mx + r * 3.4, my - r * 2.2, u * 3, SOFT, "left");
       }
-      text(ctx, TARGETS[s.targetIndex].label, tx + b + u * 1.5, ty - b, u * 3.6, G, u, "left");
     } else {
-      // off-screen: clamp to the edge with an arrow
-      const a = Math.atan2(ty - cy, tx - cx);
-      const ex = Math.min(w - margin, Math.max(margin, cx + Math.cos(a) * w));
-      const ey = Math.min(h - u * 30, Math.max(u * 22, cy + Math.sin(a) * h));
-      arrow(ctx, ex, ey, a, u * 5, G, u);
-    }
-  } else if (!breakX) {
-    // lock diamond around the pipper: flashes while locking, steady when locked
-    if (locked || (locking && blink)) {
-      const d = u * 7.5;
-      stroke(ctx, () => {
-        ctx.moveTo(cx, cy - d);
-        ctx.lineTo(cx + d, cy);
-        ctx.lineTo(cx, cy + d);
-        ctx.lineTo(cx - d, cy);
-        ctx.closePath();
-      }, G, lw * 1.5, u);
+      // off-screen: a small chevron on the edge pointing to it
+      const a = Math.atan2(my - cy, mx - cx);
+      const ex = Math.min(w - u * 6, Math.max(u * 6, cx + Math.cos(a) * w));
+      const ey = Math.min(h - u * 6, Math.max(u * 6, cy + Math.sin(a) * h));
+      chevron(ctx, ex, ey, a, u * 2.4, WHITE, lw * 1.4);
     }
   }
 
-  // ---------------- tilt marker (wing symbol) ----------------
-  const maxOff = R * 1.9;
-  let mx = -s.yawDeg * DEG_GAIN * u;
-  let my = s.pitchDeg * DEG_GAIN * u;
-  const mOff = Math.hypot(mx, my);
-  const clamped = mOff > maxOff;
-  if (clamped) {
-    mx = (mx / mOff) * maxOff;
-    my = (my / mOff) * maxOff;
+  // ---------- tip ring (fixed) and chuck ring (tilt) ----------
+  let ox = -s.yawDeg * TILT_GAIN * u;
+  let oy = s.pitchDeg * TILT_GAIN * u;
+  const oMax = u * 26;
+  const oLen = Math.hypot(ox, oy);
+  if (oLen > oMax) {
+    ox = (ox / oLen) * oMax;
+    oy = (oy / oLen) * oMax;
   }
-  const fx = cx + mx;
-  const fy = cy + my;
-  const fCol = breakX ? RED : square ? G : AMB;
-  const fr = u * 2.4;
-  stroke(ctx, () => {
-    ctx.moveTo(fx + fr, fy);
-    ctx.arc(fx, fy, fr, 0, Math.PI * 2);
-    ctx.moveTo(fx - fr, fy);
-    ctx.lineTo(fx - fr - u * 4, fy);
-    ctx.moveTo(fx + fr, fy);
-    ctx.lineTo(fx + fr + u * 4, fy);
-    ctx.moveTo(fx, fy - fr);
-    ctx.lineTo(fx, fy - fr - u * 2.6);
-  }, fCol, lw * 1.2, u);
-  if (clamped && blink) text(ctx, "×", fx, fy + u * 5.5, u * 4, fCol, u);
+  const chX = cx + ox;
+  const chY = cy + oy;
 
-  // break X
-  if (breakX) {
-    const x = R * 1.25;
-    stroke(ctx, () => {
-      ctx.moveTo(cx - x, cy - x);
-      ctx.lineTo(cx + x, cy + x);
-      ctx.moveTo(cx + x, cy - x);
-      ctx.lineTo(cx - x, cy + x);
-    }, RED, lw * 3, u);
+  let col = AMBER;
+  if (broken) col = RED;
+  else if (ready || drilling) col = GREEN;
+  else if (onMark && square) col = GREEN;
+  // gentle blink while locking (3 pulses), then steady
+  const pulse = locking ? 0.35 + 0.65 * (0.5 + 0.5 * Math.cos(lockAge * Math.PI * 2 * (3 / LOCK_TIME))) : 1;
+
+  ctx.globalAlpha = pulse;
+  const tipR = u * 4;
+  const chuckR = u * 8.5;
+  // axis line: chuck -> tip
+  if (Math.hypot(ox, oy) > u * 1.5) {
+    line(ctx, () => {
+      ctx.moveTo(chX, chY);
+      ctx.lineTo(cx, cy);
+    }, col, lw * 0.8, [u * 1, u * 1]);
+  }
+  line(ctx, () => ctx.arc(chX, chY, chuckR, 0, Math.PI * 2), square && !broken ? col : AMBER, lw * 1.1);
+  line(ctx, () => ctx.arc(cx, cy, tipR, 0, Math.PI * 2), onMark || drilling ? col : WHITE, lw * 1.4);
+  dot(ctx, cx, cy, u * 0.7, onMark || drilling ? col : WHITE);
+  ctx.globalAlpha = 1;
+
+  // depth progress: thin arc around the tip while drilling
+  if (drilling || s.depthMm > 0.05) {
+    const frac = Math.min(1, s.depthMm / DEPTH_TARGET_MM);
+    const r = u * 12.5;
+    line(ctx, () => ctx.arc(cx, cy, r, 0, Math.PI * 2), "rgba(245,248,252,0.22)", lw * 2.2);
+    line(ctx, () => ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2), frac >= 0.998 ? RED : GREEN, lw * 2.4);
+    label(ctx, `${s.depthMm.toFixed(1)}`, cx + r + u * 2.5, cy - u * 1.2, u * 4.2, WHITE, "left", MONO, 500);
+    label(ctx, `/ ${DEPTH_TARGET_MM} mm`, cx + r + u * 2.5, cy + u * 3, u * 2.6, SOFT, "left", MONO, 400);
+  } else if (onMark || s.phase === "align") {
+    // angle readout beside the chuck ring, only while squaring up
+    label(ctx, `${s.angleErrDeg.toFixed(1)}°`, chX + chuckR + u * 2, chY, u * 3.6, square ? GREEN : AMBER, "left", MONO, 500);
   }
 
-  // ---------------- top: angle box ----------------
-  const angle = 90 - s.angleErrDeg;
-  const topY = u * (landscape ? 9 : 10);
-  const angCol = breakX ? RED : square ? G : AMB;
-  const boxW = u * 30;
-  const boxH = u * 10;
-  stroke(ctx, () => ctx.rect(cx - boxW / 2, topY - boxH / 2, boxW, boxH), angCol, lw, u);
-  text(ctx, `${angle.toFixed(1)}°`, cx, topY, u * 7.5, angCol, u);
-  text(ctx, `Δ ${s.angleErrDeg.toFixed(1)}°`, cx, topY + boxH / 2 + u * 3.6, u * 3.6, G_DIM, u);
+  ctx.restore();
 
-  // corner status
-  text(ctx, s.live ? "IMU" : "SIM", u * 4, u * 5, u * 3.4, s.live ? G : G_DIM, u, "left");
-  text(ctx, `TGT ${TARGETS[s.targetIndex].label}`, w - u * 4, u * 5, u * 3.4, G_DIM, u, "right");
+  // ---------- Athos card: one step, one instruction ----------
+  const cue = instruction(s, { onMark, square, ready, locking, broken });
+  const panelW = landscape ? Math.min(w * 0.62, u * 130) : w - u * 8;
+  const pad = u * 3.4;
+  const titleSize = u * (compact ? 6 : 5.4);
+  const smallSize = u * (compact ? 3.4 : 2.9);
+  const panelH = pad * 2 + smallSize * 1.3 + titleSize * 1.35 + (compact ? 0 : smallSize * 1.5);
+  const px = landscape ? u * 4 : u * 4;
+  const py = h - panelH - u * 4;
+  ctx.fillStyle = "rgba(10,12,16,0.62)";
+  roundRect(ctx, px, py, panelW, panelH, u * 2.6);
+  ctx.fill();
+  // status bar on the left edge of the card
+  ctx.fillStyle = cue.color;
+  roundRect(ctx, px, py, u * 0.9, panelH, u * 0.45);
+  ctx.fill();
 
-  // ---------------- side tapes ----------------
-  const tapeTop = cy - u * 24;
-  const tapeBot = cy + u * 24;
-  const tapeL = landscape ? u * 10 : u * 7;
-  const tapeR = w - tapeL;
-  // left: range to wall (0..START_GAP mm, 0 at bottom)
-  const gapMax = START_GAP * 1000;
-  const gapFrac = Math.min(1, s.gapMm / gapMax);
-  stroke(ctx, () => {
-    ctx.moveTo(tapeL, tapeTop);
-    ctx.lineTo(tapeL, tapeBot);
-    for (let i = 0; i <= 10; i++) {
-      const y = tapeBot - ((tapeBot - tapeTop) * i) / 10;
-      ctx.moveTo(tapeL, y);
-      ctx.lineTo(tapeL + u * (i % 5 === 0 ? 3 : 1.6), y);
-    }
-  }, G_DIM, lw * 0.8, u);
-  const gy = tapeBot - (tapeBot - tapeTop) * gapFrac;
-  caret(ctx, tapeL + u * 3.5, gy, 1, G, u);
-  text(ctx, "RNG", tapeL, tapeTop - u * 4, u * 3.2, G_DIM, u, "left");
-  text(ctx, s.gapMm > 0.5 ? `${s.gapMm.toFixed(0)}` : "0", tapeL + u * 7, gy, u * 4.4, G, u, "left");
-
-  // right: depth (0 at top, grows down) with staple at target
-  const dMax = DEPTH_TARGET_MM * 1.15;
-  const dy = (mm: number) => tapeTop + ((tapeBot - tapeTop) * Math.min(mm, dMax)) / dMax;
-  stroke(ctx, () => {
-    ctx.moveTo(tapeR, tapeTop);
-    ctx.lineTo(tapeR, tapeBot);
-    for (let mm = 0; mm <= dMax; mm += 5) {
-      ctx.moveTo(tapeR, dy(mm));
-      ctx.lineTo(tapeR - u * (mm % 10 === 0 ? 3 : 1.6), dy(mm));
-    }
-  }, G_DIM, lw * 0.8, u);
-  // target staple
-  const sy = dy(DEPTH_TARGET_MM);
-  stroke(ctx, () => {
-    ctx.moveTo(tapeR + u * 1, sy - u * 2);
-    ctx.lineTo(tapeR + u * 2.5, sy - u * 2);
-    ctx.lineTo(tapeR + u * 2.5, sy + u * 2);
-    ctx.lineTo(tapeR + u * 1, sy + u * 2);
-  }, G, lw, u);
-  // fill + caret
-  const depthCol = s.depthMm >= DEPTH_TARGET_MM - 0.05 ? RED : G;
-  if (s.depthMm > 0.05) {
-    ctx.fillStyle = depthCol === RED ? "rgba(255,82,71,0.45)" : "rgba(77,255,136,0.35)";
-    ctx.fillRect(tapeR - u * 1.2, tapeTop, u * 1.2, dy(s.depthMm) - tapeTop);
+  const tx = px + pad + u * 0.6;
+  let ty = py + pad + smallSize * 0.6;
+  label(ctx, `ATHOS · STEP ${cue.step}`, tx, ty, smallSize, SOFT, "left", MONO, 500);
+  ty += smallSize * 0.7 + titleSize * 0.85;
+  label(ctx, cue.text, tx, ty, titleSize, cue.color === RED ? RED : WHITE, "left", SANS, 600, panelW - pad * 2);
+  if (!compact) {
+    ty += titleSize * 0.65 + smallSize * 1.1;
+    const pass = cue.pass;
+    label(ctx, `${pass ? "✓" : "○"}  ${cue.check}`, tx, ty, smallSize, pass ? GREEN : SOFT, "left", MONO, 400, panelW - pad * 2);
   }
-  caret(ctx, tapeR - u * 3.5, dy(s.depthMm), -1, depthCol, u);
-  text(ctx, "DEPTH", tapeR, tapeTop - u * 4, u * 3.2, G_DIM, u, "right");
-  text(ctx, s.depthMm.toFixed(1), tapeR - u * 7, dy(s.depthMm), u * 4.4, depthCol, u, "right");
-  text(ctx, `${DEPTH_TARGET_MM}`, tapeR - u * 4, sy + u * 4.5, u * 3, G_DIM, u, "right");
 
-  // ---------------- command cue ----------------
-  const cmd = command(s, { onMark, square, locked, locking, breakX, tx, ty, cx, cy, fx, fy });
-  const cmdY = h - u * (landscape ? 14 : 17);
-  const cmdSize = u * (compact ? 10 : 11);
-  const show = !cmd.blink || blink;
-  if (show) {
-    ctx.font = `800 ${cmdSize}px ${FONT}`;
-    const tw = ctx.measureText(cmd.word).width;
-    const aw = cmd.arrow != null ? cmdSize * 0.9 : 0;
-    const startX = cx - (tw + aw) / 2;
-    text(ctx, cmd.word, startX + tw / 2, cmdY, cmdSize, cmd.color, u, "center", 800);
-    if (cmd.arrow != null) arrow(ctx, startX + tw + aw * 0.6, cmdY, cmd.arrow, cmdSize * 0.38, cmd.color, u);
-  }
-  if (cmd.sub) text(ctx, cmd.sub, cx, cmdY + cmdSize * 0.85, u * 4.6, cmd.subColor ?? G, u);
-  text(ctx, cmd.step, cx, cmdY - cmdSize * 0.95, u * 3.4, G_DIM, u);
+  // tiny mode tag
+  label(ctx, s.live ? "● IMU" : "SIM", u * 4, u * 5, u * 2.6, s.live ? GREEN : SOFT, "left", MONO, 500);
 }
 
-// ---------------- command logic ----------------
-interface Cue {
-  word: string;
-  arrow?: number;
-  sub?: string;
-  subColor?: string;
-  color: string;
-  blink?: boolean;
-  step: string;
-}
-
-function command(
+// ---------- what to say at each moment ----------
+function instruction(
   s: SimState,
-  c: { onMark: boolean; square: boolean; locked: boolean; locking: boolean; breakX: boolean; tx: number; ty: number; cx: number; cy: number; fx: number; fy: number },
-): Cue {
-  const label = TARGETS[s.targetIndex].label;
-  if (c.breakX) return { word: "BREAK", color: RED, blink: true, sub: "STOP · SQUARE UP", subColor: RED, step: "3/3 DRILL" };
-  if (s.phase === "hold") return { word: "STOP", color: RED, sub: `${s.depthMm.toFixed(1)} MM ✓`, step: "3/3 DRILL" };
-  if (s.phase === "retract") return { word: "NEXT", color: G, sub: `→ ${label}`, step: "DONE ✓" };
-  if (s.phase === "drill" || (c.locked && s.depthMm > 0)) {
+  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean },
+): { text: string; color: string; step: string; pass: boolean; check: string } {
+  if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
+  if (s.phase === "hold") return { text: `Stop · ${DEPTH_TARGET_MM} mm`, color: GREEN, step: "3/3", pass: true, check: `depth ${s.depthMm.toFixed(1)} mm · err ${s.angleErrDeg.toFixed(2)}°` };
+  if (s.phase === "retract") return { text: `Done · next ${TARGETS[s.targetIndex].label}`, color: GREEN, step: "1/3", pass: true, check: "hole logged" };
+  if (s.phase === "drill") {
     const left = DEPTH_TARGET_MM - s.depthMm;
-    if (left < 3) return { word: "SLOW", color: AMB, sub: `${left.toFixed(1)} MM`, step: "3/3 DRILL" };
-    return { word: "DRILL", color: G, sub: `${left.toFixed(0)} MM TO GO`, step: "3/3 DRILL" };
+    if (left < 3) return { text: "Ease off", color: AMBER, step: "3/3", pass: false, check: `stop at ${DEPTH_TARGET_MM} mm` };
+    return { text: `Drill · ${left.toFixed(0)} mm left`, color: GREEN, step: "3/3", pass: false, check: `stop at ${DEPTH_TARGET_MM} mm · keep rings centred` };
   }
   if (!c.onMark) {
-    if (s.offsetMm > 1) {
-      return { word: "AIM", color: AMB, arrow: Math.atan2(c.ty - c.cy, c.tx - c.cx), sub: `${s.offsetMm.toFixed(0)} MM`, step: "1/3 AIM" };
-    }
-    return { word: "TOUCH", color: AMB, sub: `${s.gapMm.toFixed(0)} MM`, step: "1/3 AIM" };
+    if (s.offsetMm > 1) return { text: "Tip to the mark", color: AMBER, step: "1/3", pass: false, check: "tip within 1.0 mm of the mark" };
+    return { text: "Rest on the mark", color: AMBER, step: "1/3", pass: false, check: "tip touching the surface" };
   }
-  if (!c.square) {
-    // move the handle so the wing marker goes into the circle
-    return { word: "HANDLE", color: AMB, arrow: Math.atan2(c.cy - c.fy, c.cx - c.fx), sub: `${s.angleErrDeg.toFixed(1)}°`, step: "2/3 SQUARE" };
-  }
-  if (c.locking) return { word: "HOLD", color: G, blink: true, sub: "LOCKING", step: "2/3 SQUARE" };
-  return { word: "LOCKED", color: G, sub: "PULL TRIGGER", step: "2/3 SQUARE" };
+  if (!c.square) return { text: "Line up the rings", color: AMBER, step: "2/3", pass: false, check: `square to the surface ±${ANGLE_TOL_DEG}°` };
+  if (c.locking) return { text: "Hold steady", color: GREEN, step: "2/3", pass: false, check: "hold 0.75 s" };
+  return { text: "Ready · drill", color: GREEN, step: "2/3", pass: true, check: `square ±${ANGLE_TOL_DEG}° · on the mark` };
 }
 
-// ---------------- drawing helpers ----------------
-function stroke(ctx: CanvasRenderingContext2D, path: () => void, color: string, width: number, u: number) {
+// ---------- drawing helpers ----------
+function line(ctx: CanvasRenderingContext2D, path: () => void, color: string, width: number, dash?: number[]) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.strokeStyle = "rgba(0,0,0,0.7)";
-  ctx.lineWidth = width + u * 0.9;
-  ctx.beginPath();
-  path();
-  ctx.stroke();
   ctx.strokeStyle = color;
   ctx.lineWidth = width;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = u * 1.2;
+  ctx.setLineDash(dash ?? []);
   ctx.beginPath();
   path();
   ctx.stroke();
-  ctx.shadowBlur = 0;
+  ctx.setLineDash([]);
 }
 
-function fillDot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, u: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.7)";
-  ctx.beginPath();
-  ctx.arc(x, y, r + u * 0.5, 0, Math.PI * 2);
-  ctx.fill();
+function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string) {
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
 }
 
-function text(
+function chevron(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, size: number, color: string, width: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(a);
+  line(ctx, () => {
+    ctx.moveTo(-size * 0.6, -size);
+    ctx.lineTo(size * 0.6, 0);
+    ctx.lineTo(-size * 0.6, size);
+  }, color, width);
+  ctx.restore();
+}
+
+function label(
   ctx: CanvasRenderingContext2D,
   str: string,
   x: number,
   y: number,
   size: number,
   color: string,
-  u: number,
   align: CanvasTextAlign = "center",
-  weight = 700,
+  family = MONO,
+  weight = 500,
+  maxW?: number,
 ) {
-  ctx.font = `${weight} ${size}px ${FONT}`;
+  ctx.font = `${weight} ${size}px ${family}`;
   ctx.textAlign = align;
   ctx.textBaseline = "middle";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "rgba(0,0,0,0.75)";
-  ctx.lineWidth = Math.max(2, size * 0.2);
-  ctx.strokeText(str, x, y);
   ctx.fillStyle = color;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = u * 0.8;
-  ctx.fillText(str, x, y);
-  ctx.shadowBlur = 0;
+  let t = str;
+  if (maxW && ctx.measureText(t).width > maxW) {
+    while (t.length > 3 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    t += "…";
+  }
+  ctx.fillText(t, x, y);
 }
 
-function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, size: number, color: string, u: number) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(a);
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
-  ctx.moveTo(size, 0);
-  ctx.lineTo(-size * 0.7, -size * 0.8);
-  ctx.lineTo(-size * 0.3, 0);
-  ctx.lineTo(-size * 0.7, size * 0.8);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
-  ctx.lineWidth = u * 0.9;
-  ctx.strokeStyle = "rgba(0,0,0,0.7)";
-  ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = u;
-  ctx.fill();
-  ctx.restore();
-}
-
-function caret(ctx: CanvasRenderingContext2D, x: number, y: number, dir: 1 | -1, color: string, u: number) {
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x + dir * u * 2.6, y - u * 1.8);
-  ctx.lineTo(x + dir * u * 2.6, y + u * 1.8);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
 }
 
 function drawHoles(
@@ -461,12 +340,12 @@ function drawGridFeed(
   scale: number,
 ) {
   const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.75);
-  g.addColorStop(0, "#1c2420");
-  g.addColorStop(1, "#070a09");
+  g.addColorStop(0, "#22262b");
+  g.addColorStop(1, "#0b0d10");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = "rgba(77,255,136,0.08)";
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let gx = -1; gx <= 1.001; gx += 0.05) {
