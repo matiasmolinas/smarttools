@@ -12,13 +12,27 @@ import {
   athosStep,
   type SimState,
 } from "./sim";
+import { SURF, getSurface } from "./surfaces";
 
 const GREEN = "#3dffa8";
 const AMBER = "#ffb547";
 const CYAN = "#5ad8ff";
 const WHITE = "#e9f2ff";
 
-export function drawHud(ctx: CanvasRenderingContext2D, s: SimState, w: number, h: number, compact = false) {
+export type HudBackground = "grid" | "wall" | "wood" | "camera";
+export interface HudOptions {
+  background?: HudBackground;
+  video?: HTMLVideoElement | null;
+}
+
+export function drawHud(
+  ctx: CanvasRenderingContext2D,
+  s: SimState,
+  w: number,
+  h: number,
+  compact = false,
+  opts: HudOptions = {},
+) {
   const u = Math.min(w, h) / 100; // layout unit
   const cx = w / 2;
   const cy = compact ? h / 2 : h * 0.4;
@@ -29,77 +43,57 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: SimState, w: number, h
   const toX = (x: number) => cx + (x - s.target.x) * scale;
   const toY = (y: number) => cy - (y - s.target.y) * scale;
 
-  // ---- simulated camera feed (wall) ----
-  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.75);
-  g.addColorStop(0, "#2a2f36");
-  g.addColorStop(1, "#0d1014");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
+  const bg = opts.background ?? "grid";
+  const video = opts.video;
+  const camLive = bg === "camera" && !!video && video.readyState >= 2 && video.videoWidth > 0;
 
-  // wall grid (5 cm)
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let gx = -1; gx <= 1.001; gx += 0.05) {
-    const X = toX(gx);
-    if (X < -2 || X > w + 2) continue;
-    ctx.moveTo(X, 0);
-    ctx.lineTo(X, h);
-  }
-  for (let gy = -1; gy <= 1.001; gy += 0.05) {
-    const Y = toY(gy);
-    if (Y < -2 || Y > h + 2) continue;
-    ctx.moveTo(0, Y);
-    ctx.lineTo(w, Y);
-  }
-  ctx.stroke();
-
-  // fiducial markers
-  for (const m of MARKERS) {
-    const X = toX(m.x);
-    const Y = toY(m.y);
-    const sz = 0.06 * scale;
-    if (X < -sz || X > w + sz || Y < -sz || Y > h + sz) continue;
-    ctx.fillStyle = "rgba(240,240,240,0.85)";
-    ctx.fillRect(X - sz / 2, Y - sz / 2, sz, sz);
-    ctx.fillStyle = "#111";
-    const c = sz / 6;
-    const pattern = [1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0];
-    for (let i = 0; i < 16; i++) {
-      if (pattern[i]) ctx.fillRect(X - sz / 2 + c * (1 + (i % 4)), Y - sz / 2 + c * (1 + Math.floor(i / 4)), c, c);
+  if (camLive) {
+    // real rear-camera feed, cover-fit
+    const vw = video!.videoWidth;
+    const vh = video!.videoHeight;
+    const sc = Math.max(w / vw, h / vh);
+    ctx.drawImage(video!, (w - vw * sc) / 2, (h - vh * sc) / 2, vw * sc, vh * sc);
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.fillRect(0, 0, w, h);
+  } else if (bg === "wall" || bg === "wood") {
+    const tex = getSurface(bg);
+    ctx.fillStyle = bg === "wall" ? "#bdb8ad" : "#8a6440";
+    ctx.fillRect(0, 0, w, h);
+    ctx.imageSmoothingQuality = "high";
+    const k2 = scale / SURF.ppm;
+    ctx.drawImage(tex, toX(SURF.x0), toY(SURF.y1), tex.width * k2, tex.height * k2);
+    drawHoles(ctx, s, toX, toY, scale, true);
+    // lens vignette + slight shading so the overlay stays readable
+    const vg = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.25, cx, cy, Math.max(w, h) * 0.8);
+    vg.addColorStop(0, "rgba(0,0,0,0.05)");
+    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, w, h);
+  } else {
+    drawGridFeed(ctx, s, w, h, u, cx, cy, toX, toY, scale);
+    if (bg === "camera") {
+      ctx.fillStyle = "rgba(233,242,255,0.7)";
+      ctx.font = `500 ${u * 3}px ui-monospace, Menlo, monospace`;
+      ctx.textAlign = "center";
+      ctx.fillText("waiting for camera…", cx, cy + u * 16);
     }
-    ctx.strokeStyle = CYAN;
-    ctx.lineWidth = Math.max(1, u * 0.35);
-    ctx.strokeRect(X - sz / 2 - 3, Y - sz / 2 - 3, sz + 6, sz + 6);
   }
-
-  // pencil marks of other targets + drilled holes
-  TARGETS.forEach((t, i) => {
-    const X = toX(t.x);
-    const Y = toY(t.y);
-    if (s.drilled[i]) {
-      ctx.fillStyle = "#050607";
-      ctx.beginPath();
-      ctx.arc(X, Y, Math.max(2, 0.004 * scale), 0, Math.PI * 2);
-      ctx.fill();
-    } else if (i !== s.targetIndex) {
-      ctx.strokeStyle = "rgba(255,255,255,0.35)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(X - 6, Y);
-      ctx.lineTo(X + 6, Y);
-      ctx.moveTo(X, Y - 6);
-      ctx.lineTo(X, Y + 6);
-      ctx.stroke();
-    }
-  });
-
-  ctx.fillStyle = "rgba(4,8,12,0.25)";
-  ctx.fillRect(0, 0, w, h);
 
   // ---- navigation overlay ----
   const ok = s.aligned && s.onTarget;
   const col = ok ? GREEN : AMBER;
+
+  const real = bg !== "grid";
+  if (real) {
+    // dark band behind the readouts so they stay legible on bright surfaces
+    const tg = ctx.createLinearGradient(0, 0, 0, u * (compact ? 30 : 24));
+    tg.addColorStop(0, "rgba(0,0,0,0.7)");
+    tg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = tg;
+    ctx.fillRect(0, 0, w, u * (compact ? 30 : 24));
+  }
+  ctx.shadowColor = "rgba(0,0,0,0.9)";
+  ctx.shadowBlur = real ? u * 1.5 : 0;
 
   // target: crosshair + tolerance ring
   const tolR = Math.max(u * 3.2, (OFFSET_TOL_MM / 1000) * scale);
@@ -141,8 +135,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: SimState, w: number, h
   ctx.globalAlpha = 1;
 
   // chuck ring
-  ctx.shadowColor = col;
-  ctx.shadowBlur = u * 3;
+  ctx.shadowColor = real ? "rgba(0,0,0,0.9)" : col;
+  ctx.shadowBlur = u * (real ? 1.8 : 3);
   ctx.strokeStyle = col;
   ctx.lineWidth = Math.max(1.5, u * 0.8);
   ctx.beginPath();
@@ -295,4 +289,106 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+function drawHoles(
+  ctx: CanvasRenderingContext2D,
+  s: SimState,
+  toX: (x: number) => number,
+  toY: (y: number) => number,
+  scale: number,
+  real: boolean,
+) {
+  TARGETS.forEach((t, i) => {
+    if (!s.drilled[i]) return;
+    const X = toX(t.x);
+    const Y = toY(t.y);
+    const r = Math.max(2, 0.004 * scale);
+    if (real) {
+      // sawdust ring + dark bore
+      ctx.fillStyle = "rgba(225,200,160,0.55)";
+      ctx.beginPath();
+      ctx.arc(X, Y, r * 2.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const g = ctx.createRadialGradient(X, Y, 0, X, Y, r);
+    g.addColorStop(0, "#000");
+    g.addColorStop(1, real ? "#2a1d12" : "#050607");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(X, Y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawGridFeed(
+  ctx: CanvasRenderingContext2D,
+  s: SimState,
+  w: number,
+  h: number,
+  u: number,
+  cx: number,
+  cy: number,
+  toX: (x: number) => number,
+  toY: (y: number) => number,
+  scale: number,
+) {
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.75);
+  g.addColorStop(0, "#2a2f36");
+  g.addColorStop(1, "#0d1014");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let gx = -1; gx <= 1.001; gx += 0.05) {
+    const X = toX(gx);
+    if (X < -2 || X > w + 2) continue;
+    ctx.moveTo(X, 0);
+    ctx.lineTo(X, h);
+  }
+  for (let gy = -1; gy <= 1.001; gy += 0.05) {
+    const Y = toY(gy);
+    if (Y < -2 || Y > h + 2) continue;
+    ctx.moveTo(0, Y);
+    ctx.lineTo(w, Y);
+  }
+  ctx.stroke();
+
+  for (const m of MARKERS) {
+    const X = toX(m.x);
+    const Y = toY(m.y);
+    const sz = 0.06 * scale;
+    if (X < -sz || X > w + sz || Y < -sz || Y > h + sz) continue;
+    ctx.fillStyle = "rgba(240,240,240,0.85)";
+    ctx.fillRect(X - sz / 2, Y - sz / 2, sz, sz);
+    ctx.fillStyle = "#111";
+    const c = sz / 6;
+    const pattern = [1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+    for (let i = 0; i < 16; i++) {
+      if (pattern[i]) ctx.fillRect(X - sz / 2 + c * (1 + (i % 4)), Y - sz / 2 + c * (1 + Math.floor(i / 4)), c, c);
+    }
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth = Math.max(1, u * 0.35);
+    ctx.strokeRect(X - sz / 2 - 3, Y - sz / 2 - 3, sz + 6, sz + 6);
+  }
+
+  TARGETS.forEach((t, i) => {
+    if (s.drilled[i] || i === s.targetIndex) return;
+    const X = toX(t.x);
+    const Y = toY(t.y);
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(X - 6, Y);
+    ctx.lineTo(X + 6, Y);
+    ctx.moveTo(X, Y - 6);
+    ctx.lineTo(X, Y + 6);
+    ctx.stroke();
+  });
+  drawHoles(ctx, s, toX, toY, scale, false);
+
+  ctx.fillStyle = "rgba(4,8,12,0.25)";
+  ctx.fillRect(0, 0, w, h);
 }

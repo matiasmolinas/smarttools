@@ -405,7 +405,7 @@ export default function NavDemo() {
       // 2D HUD: in-scene phone screen (compact) + side panel
       drawHud(screenCtx, s, screenCanvas.width, screenCanvas.height, true);
       screenTex.needsUpdate = true;
-      if (hud.width > 0) drawHud(hudCtx, s, hud.width, hud.height, false);
+      if (hud.width > 0) drawHud(hudCtx, s, hud.width, hud.height, false, { background: "wall" });
 
       // follow the drill smoothly
       controls.target.lerp(tmp.set(s.tip.x * 0.8 + 0.02, s.tip.y * 0.8 + 0.01, 0.16), 0.03);

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { simulate } from "@/lib/sim";
-import { drawHud } from "@/lib/hud";
+import { drawHud, type HudBackground } from "@/lib/hud";
 import { useLiveImu } from "@/lib/useLiveImu";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
@@ -11,6 +11,63 @@ export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { live, msg, toggle, rezero, tiltRef } = useLiveImu();
   const [showUi, setShowUi] = useState(true);
+  const [bg, setBg] = useState<HudBackground>("wall");
+  const bgRef = useRef<HudBackground>("wall");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [camMsg, setCamMsg] = useState<string | null>(null);
+
+  // initial background from ?bg= or the last choice
+  useEffect(() => {
+    let initial: string | null = new URLSearchParams(window.location.search).get("bg");
+    if (!initial) {
+      try {
+        initial = localStorage.getItem("hud-bg");
+      } catch {}
+    }
+    if (initial === "wall" || initial === "wood" || initial === "grid") choose(initial);
+    // camera needs a user gesture on iOS, so it is never auto-started
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function stopCamera() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }
+
+  async function choose(next: HudBackground) {
+    if (next === "camera") {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCamMsg("Camera not available in this browser.");
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+        stopCamera();
+        streamRef.current = stream;
+        const v = videoRef.current!;
+        v.srcObject = stream;
+        await v.play().catch(() => {});
+        setCamMsg("Live camera: the guide is drawn over the real image. Target tracking from markers is the next step.");
+      } catch {
+        setCamMsg("Camera permission denied.");
+        return;
+      }
+    } else {
+      stopCamera();
+      setCamMsg(null);
+      try {
+        localStorage.setItem("hud-bg", next);
+      } catch {}
+    }
+    bgRef.current = next;
+    setBg(next);
+  }
+
+  useEffect(() => stopCamera, []);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // render loop
@@ -35,7 +92,7 @@ export default function HudScreen() {
       const s = simulate(t, tiltRef.current);
       const w = canvas.width;
       const h = canvas.height;
-      if (w > 0 && h > 0) drawHud(ctx, s, w, h, w > h * 1.15);
+      if (w > 0 && h > 0) drawHud(ctx, s, w, h, w > h * 1.15, { background: bgRef.current, video: videoRef.current });
     };
     raf = requestAnimationFrame(tick);
     return () => {
@@ -84,11 +141,24 @@ export default function HudScreen() {
   return (
     <div className="fixed inset-0 bg-black" onPointerDown={poke}>
       <canvas ref={canvasRef} className="block h-[100dvh] w-full touch-none" />
+      <video ref={videoRef} playsInline muted className="hidden" />
       <div
         className={`pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] transition-opacity duration-500 ${
           showUi ? "opacity-100" : "opacity-0"
         }`}
       >
+        {camMsg && <p className="max-w-sm rounded bg-black/70 px-2 py-1 text-center font-mono text-[10px] text-white/70">{camMsg}</p>}
+        <div className={`flex gap-1 rounded-full border border-white/20 bg-black/70 p-1 backdrop-blur ${showUi ? "pointer-events-auto" : ""}`}>
+          {(["wall", "wood", "camera", "grid"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => choose(k)}
+              className={`rounded-full px-3 py-1.5 font-mono text-[11px] capitalize ${bg === k ? "bg-white text-black" : "text-white/80"}`}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
         {msg && <p className="max-w-sm rounded bg-black/70 px-2 py-1 text-center font-mono text-[10px] text-white/70">{msg}</p>}
         <div className={`flex flex-wrap justify-center gap-2 ${showUi ? "pointer-events-auto" : ""}`}>
           <button className={btn} onClick={toggle}>
