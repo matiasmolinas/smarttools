@@ -82,9 +82,9 @@ export default function Home() {
       <section aria-label="Live navigation demo" className="pb-6">
         <NavDemo />
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Legend color="var(--amber)" title="Tip ring" body="Where the bit tip is relative to the crosshair. Bring it onto the mark." />
-          <Legend color="var(--amber)" title="Chuck ring" body="Where the back of the bit projects. Off-centre = the drill is tilted." />
-          <Legend color="var(--green)" title="Concentric = go" body="Both rings stacked on the crosshair: on target and square to the wall. Depth gauge stops you at 35 mm." />
+          <Legend color="var(--green)" title="Reticle + box" body="The fixed reticle is the bit tip. The square box is your mark. AIM until the box sits in the reticle." />
+          <Legend color="var(--amber)" title="Wing = tilt" body="Move the HANDLE until the wing symbol enters the dashed circle: square to the surface within ±0.5°." />
+          <Legend color="var(--green)" title="Diamond = lock" body="The diamond flashes while locking, then holds steady: LOCKED. DRILL, SLOW, STOP at 35 mm." />
         </div>
       </section>
 

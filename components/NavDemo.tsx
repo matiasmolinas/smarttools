@@ -474,7 +474,7 @@ export default function NavDemo() {
         </div>
         <div className="pointer-events-none absolute bottom-3 left-4 right-4 flex justify-between font-mono text-[10px] text-white/40">
           <span>drag to orbit · simulation</span>
-          <span>wall plane shows the same 2D rings the user sees</span>
+          <span>phone screen = the 2D guide the user sees</span>
         </div>
       </div>
 
@@ -490,7 +490,7 @@ export default function NavDemo() {
             onClick={toggleLive}
             className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-4 py-2 font-mono text-xs text-cyan-100 transition hover:bg-cyan-300/20"
           >
-            {live ? "Stop live IMU" : "Drive the chuck ring with your phone's IMU"}
+            {live ? "Stop live IMU" : "Drive the tilt marker with your phone's IMU"}
           </button>
           {imuMsg && <p className="text-center font-mono text-[11px] text-white/50">{imuMsg}</p>}
           <a

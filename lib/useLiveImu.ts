@@ -60,21 +60,21 @@ export function useLiveImu() {
       | (typeof DeviceOrientationEvent & { requestPermission?: () => Promise<string> })
       | undefined;
     if (!DOE) {
-      setMsg("No orientation sensor here. Open this page on a phone.");
+      setMsg("NO MOTION SENSOR");
       return;
     }
     try {
       if (typeof DOE.requestPermission === "function") {
         const r = await DOE.requestPermission();
         if (r !== "granted") {
-          setMsg("Motion permission denied.");
+          setMsg("MOTION BLOCKED");
           return;
         }
       }
       setLive(true);
-      setMsg("Point the rear camera at the wall and hold still: that pose is 90°. Tilt to move the chuck ring.");
+      setMsg("IMU ON · AIM AT WALL · ZERO");
     } catch {
-      setMsg("Could not access motion sensors.");
+      setMsg("NO MOTION SENSOR");
     }
   }, [live]);
 
