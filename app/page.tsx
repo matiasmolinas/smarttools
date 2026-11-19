@@ -54,10 +54,10 @@ export default function Home() {
           <span className="hidden text-white/40 sm:inline">/ physical AI for the tools you own</span>
         </div>
         <a
-          href="https://github.com/EvolvingAgentsLabs"
+          href="https://github.com/matiasmolinas/smarttools"
           className="rounded-full border border-white/15 px-3 py-1.5 font-mono text-xs text-white/70 hover:border-white/40 hover:text-white"
         >
-          GitHub ↗
+          Source on GitHub ↗
         </a>
       </nav>
 
@@ -178,7 +178,13 @@ export default function Home() {
       </section>
 
       <footer className="flex flex-col gap-2 border-t border-white/10 py-10 font-mono text-xs text-white/40 sm:flex-row sm:justify-between">
-        <span>SmartTools · EvolvingAgentsLabs</span>
+        <span>
+          SmartTools ·{" "}
+          <a href="https://github.com/matiasmolinas/smarttools" className="underline decoration-white/20 hover:text-white">
+            github.com/matiasmolinas/smarttools
+          </a>{" "}
+          · Apache 2.0
+        </span>
         <span>The navigation shown above is a simulation running in your browser.</span>
       </footer>
     </main>
