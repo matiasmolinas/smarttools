@@ -488,7 +488,7 @@ export default function NavDemo() {
             href="/hud"
             className="rounded-full border border-[var(--green)]/50 bg-[var(--green)]/10 px-4 py-2 text-center font-mono text-xs text-[var(--green)] transition hover:bg-[var(--green)]/20"
           >
-            Open the phone screen only (for the dock) →
+            Open the phone screen demo →
           </a>
         </div>
       </div>

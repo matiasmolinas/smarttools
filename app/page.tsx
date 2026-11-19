@@ -35,7 +35,7 @@ const STEPS = [
   {
     n: "03",
     t: "Deterministic guidance",
-    d: "The rear camera sees printed markers and computes the tool's 6-DoF pose at camera rate, in the browser. Centre the tip and chuck rings on the mark and you are on target and square. 0 tokens at runtime.",
+    d: "The rear camera sees printed markers and computes the tool's 6-DoF pose at camera rate, on the phone. Centre the tip and chuck rings on the mark and you are on target and square. 0 tokens at runtime.",
   },
   {
     n: "04",
@@ -76,6 +76,9 @@ export default function Home() {
         </p>
         <p className="mt-3 max-w-2xl font-mono text-sm text-white/45">
           Today, the drill and the screwdriver. Tomorrow, every tool in your hands.
+        </p>
+        <p className="mt-6 inline-block rounded-full border border-[var(--amber)]/40 bg-[var(--amber)]/10 px-4 py-1.5 font-mono text-xs text-[var(--amber)]">
+          This site is a demo. The SmartTools app ships in the coming weeks.
         </p>
       </header>
 
@@ -170,7 +173,8 @@ export default function Home() {
       <section className="py-16">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Roadmap</h2>
         <ol className="mt-8 space-y-3 font-mono text-sm">
-          <Road tag="now" text="Optical tracking v0 in the browser: printed markers (/markers) + the phone camera (/hud → Cam), sub-pixel corners, 6-DoF pose" />
+          <Road tag="now" text="This website: simulated navigation, the phone HUD (/hud) and a browser prototype of marker-based tracking (/markers, /hud → Cam)" />
+          <Road tag="weeks" text="The SmartTools app: first public release, within the next month" />
           <Road tag="next" text="Printed dock on a real drill, error measured against a reference jig; then our own camera module if the phone is the limit" />
           <Road tag="next" text="Circular-saw bevel & cut-line guidance; driver sequencing" />
           <Road tag="demo day" text="Live drilling on stage, field pilot with workshops, error data logged in agentvcs" />
@@ -185,7 +189,7 @@ export default function Home() {
           </a>{" "}
           · Apache 2.0
         </span>
-        <span>The navigation shown above is a simulation running in your browser.</span>
+        <span>Demo site: the navigation above is a simulation, and the camera mode is a prototype.</span>
       </footer>
     </main>
   );
