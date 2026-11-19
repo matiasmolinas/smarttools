@@ -1,72 +1,87 @@
-# SmartTools Dock v0.2: soporte universal de teléfono para taladro atornillador
+# SmartTools Dock v0.2: universal phone mount for cordless drill/drivers
 
-Soporte regulable para montar un teléfono (cámara hacia la mecha, pantalla hacia el usuario) sobre un taladro
-atornillador inalámbrico. Diseñado para Ingco CDLI20022 + Xiaomi Redmi Note 13, pero **regulable** para otros
-modelos.
+**English** · [Español](README.es.md)
 
-| Regulación | Rango |
+An adjustable mount that holds a phone on a cordless drill/driver, with the camera facing the bit and the screen
+facing the user. Designed for the Ingco CDLI20022 and the Xiaomi Redmi Note 13, but **adjustable** for other models.
+
+![Dock preview](preview.png)
+
+| Adjustment | Range |
 |---|---|
-| Largo del teléfono (apaisado) | 140–175 mm (mordaza deslizante + tuerca mariposa M4) |
-| Espesor del teléfono | hasta 12 mm, con funda fina |
-| Cuerpo del taladro | Ø 40–68 mm aprox. (abrazadera partida: dos V de 90° enfrentadas, goma y 2 tornillos M5 con mariposa) |
-| Inclinación de la cámara | ±15° (bisagra M5 con ranura en arco), para dejarla paralela a la mecha |
+| Phone length (landscape) | 140–175 mm (sliding jaw + M4 wing nut) |
+| Phone thickness | up to 12 mm, slim case included |
+| Drill body | approx. Ø 38–68 mm (split clamp: two facing 90° V-blocks, rubber pads and 2 M5 bolts with wing nuts) |
+| Camera tilt | ±15° (M5 hinge with an arc slot), to set the camera parallel to the bit |
 
-Los topes del lado de la cámara son bajos (12 mm), así que la cámara queda libre en cualquier modelo.
+The stops on the camera side are low (12 mm), so the camera stays clear on any phone model.
 
-## Piezas a imprimir (1 de cada una)
+## Parts to print (1 of each)
 
-| Archivo | Tamaño aprox. | Volumen sólido | Orientación sugerida |
+| File | Approx. size | Solid volume | Suggested orientation |
 |---|---|---|---|
-| `saddle.stl` (base en V superior) | 60 × 94 × 70 mm | 123 cm³ | Apoyada sobre la cara inferior (abertura de la V hacia la cama). La V a 45° no necesita soportes; los túneles de las correas sí (soportes solo en la cama) |
-| `lower.stl` (mordaza en V inferior) | 24 × 94 × 34 mm | 20 cm³ | Con la abertura de la V hacia arriba, las orejas apoyadas: sin soportes |
-| `arm.stl` (brazo + riel + tope fijo) | 44 × 196 × 86 mm | 46 cm³ | Acostada de lado (la lengüeta plana sobre la cama). Soportes permitidos |
-| `jaw.stl` (mordaza deslizante) | 19 × 21 × 40 mm | 3 cm³ | Con la cara de apoyo del teléfono hacia la cama |
+| `saddle.stl` (upper V-block) | 60 × 94 × 70 mm | 123 cm³ | On its bottom face (V opening toward the bed). The 45° V needs no supports; the strap tunnels do (supports on the bed only) |
+| `lower.stl` (lower V jaw) | 24 × 94 × 34 mm | 20 cm³ | V opening up, resting on the ears: no supports |
+| `arm.stl` (arm + rail + fixed jaw) | 44 × 196 × 86 mm | 46 cm³ | On its side (flat tongue on the bed). Supports allowed |
+| `jaw.stl` (sliding jaw) | 19 × 21 × 40 mm | 3 cm³ | Phone contact face toward the bed |
 
-**Material:** PETG (o ASA/ABS). No uses PLA: se deforma con el calor del motor y del sol.
-**Parámetros:** capa de 0.2 mm · 4 perímetros · 5 capas arriba y abajo · relleno gyroid del 30–40 %.
-**Tolerancias:** juego de 0.3 mm por lado en la bisagra y en la mordaza. Agujeros para M5 de Ø5.5 y para M4 de Ø4.5.
+**Material:** PETG (or ASA/ABS). Do not use PLA: it deforms with motor heat and sunlight.
+**Settings:** 0.2 mm layers · 4 perimeters · 5 top and bottom layers · 30–40 % gyroid infill.
+**Tolerances:** 0.3 mm clearance per side at the hinge and the jaw. Holes are Ø5.5 for M5 and Ø4.5 for M4.
 
-## Tornillería (no impresa)
+## Hardware (not printed)
 
-- 2 × tornillo M5 × 35 mm + 2 arandelas + 2 tuercas mariposa M5 (bisagra y traba de inclinación)
-- 2 × tornillo M5 × 80 mm + 2 arandelas planas + 2 **arandelas de presión** + 2 tuercas mariposa M5 (abrazadera). Para cuerpos de hasta Ø56 mm alcanza con M5 × 60
-- 1 × tornillo M4 × 16 mm + arandela + tuerca mariposa M4 (mordaza)
-- Opcional: 1 correa de velcro de 20 mm × 300 mm como respaldo (pasa por los túneles de la base)
-- Goma o neoprene autoadhesivo de 2 mm para pegar en las **4** caras de las dos V (agarre y amortiguación de vibraciones)
-- Opcional: tira de goma espuma de 2 mm en el fondo del riel, para teléfonos finos
+- 2 × M5 × 35 mm bolt + 2 washers + 2 M5 wing nuts (hinge and tilt lock)
+- 2 × M5 × 80 mm bolt + 2 flat washers + 2 **lock washers** + 2 M5 wing nuts (clamp). For bodies up to Ø56 mm, M5 × 60 is enough
+- 1 × M4 × 16 mm bolt + washer + M4 wing nut (jaw)
+- Optional: 1 hook-and-loop strap, 20 mm × 300 mm, as a backup (runs through the saddle tunnels)
+- 2 mm self-adhesive rubber or neoprene for **all 4** faces of the two V-blocks (grip and vibration damping)
+- Optional: a 2 mm foam strip at the bottom of the rail, for thin phones
 
-## Armado
+## Assembly
 
-1. Pegá la goma en las 4 caras de las dos V.
-2. Apoyá la base sobre el cuerpo del motor, detrás del mandril y delante del gatillo. Poné la mordaza inferior debajo, pasá los 2 tornillos M5 × 80 de arriba hacia abajo por las orejas y apretá las mariposas (con arandela de presión) en forma pareja, de a poco de cada lado, hasta que no gire ni deslice. No aprietes de más: la carcasa es de plástico.
-   Opcional: pasá una correa de velcro por un túnel como respaldo.
-3. Meté la lengüeta del brazo entre las orejas: el M5 de adelante es la bisagra y el de atrás va por la ranura en arco (traba).
-4. Apoyá el teléfono apaisado en el riel, con la pantalla hacia vos y la cámara hacia la mecha, contra el tope fijo. Acercá la mordaza y apretá la mariposa M4.
-5. Ajustá la inclinación hasta que la cámara quede paralela a la mecha y apretá la mariposa de la traba.
-6. En la app: imprimí `/markers`, abrí `/hud` → **Cam**, apoyá la punta en **A2** y tocá **Calibrate**.
+1. Stick the rubber on the 4 faces of the two V-blocks.
+2. Set the saddle on the motor housing, behind the chuck and in front of the trigger. Put the lower jaw underneath,
+   pass the 2 M5 × 80 bolts top-down through the ears and tighten the wing nuts (with lock washers) evenly, a little on
+   each side, until the dock neither turns nor slides. Do not overtighten: the housing is plastic.
+   Optional: run a strap through one tunnel as a backup.
+3. Insert the arm's tongue between the ears: the front M5 is the hinge, the rear one goes through the arc slot (lock).
+4. Put the phone in landscape on the rail, screen toward you and camera toward the bit, against the fixed jaw. Slide the
+   moving jaw in and tighten the M4 wing nut.
+5. Adjust the tilt until the camera is parallel to the bit and tighten the lock wing nut.
+6. In the app: print `/markers`, open `/hud` → **Cam**, rest the tip on **A2** and tap **Calibrate**.
 
-## Antes de mandar a imprimir: medí tu taladro
+## Before printing: measure your drill
 
-No tengo los planos del Ingco CDLI20022, así que la abrazadera usa dos V que se adaptan a varios diámetros
-(el script lo verifica de Ø38 a Ø68 mm sin choques entre piezas). Con un calibre, verificá:
+I don't have drawings of the Ingco CDLI20022, so the clamp uses two V-blocks that fit a range of diameters (the script
+checks Ø38 to Ø68 mm with no collisions between parts). With calipers, check:
 
-- [ ] Que el diámetro del cuerpo del motor, entre el mandril y el gatillo, esté entre 40 y 68 mm.
-- [ ] Que haya al menos 60 mm de largo libre arriba para la base y 24 mm abajo para la mordaza inferior, delante del gatillo (sin el selector de torque ni la luz LED).
-- [ ] Que el selector de avance/retroceso y el de velocidad queden accesibles con la base puesta.
+- [ ] The motor housing diameter, between the chuck and the trigger, is between 38 and 68 mm.
+- [ ] There are at least 60 mm of free length on top for the saddle and 24 mm underneath for the lower jaw, in front of
+      the trigger (clear of the torque collar and the LED light).
+- [ ] The forward/reverse and speed selectors stay reachable with the saddle in place.
 
-Si algo no entra, cambiá los parámetros en `dock.py` (por ejemplo `SAD_X`, `SAD_BOT`, `PHONE_LEN_MAX`) y regenerá.
+If something doesn't fit, change the parameters in `dock.py` (for example `SAD_X`, `SAD_BOT`, `PHONE_LEN_MAX`) and
+regenerate.
 
-## Regenerar los STL
+## Regenerating the STLs
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install manifold3d numpy matplotlib
 .venv/bin/python dock.py
 ```
 
-El script también verifica que las piezas no se interfieran (inclinación de 0° y ±15°, abrazadera de Ø38 a Ø68 mm), calcula el largo de tornillo necesario y genera `preview.png`.
+The script also checks that the parts don't interfere (0° and ±15° tilt, clamp from Ø38 to Ø68 mm), computes the bolt
+length needed and writes `preview.png`.
 
-## Limitaciones conocidas (v0.1)
+## Known limitations (v0.2)
 
-- **No está probado físicamente.** Es la primera iteración: imprimí una y probala antes de hacer más.
-- El software supone que la cámara queda paralela a la mecha. La traba de inclinación permite ajustarlo a ojo; la calibración automática del eje es el próximo paso.
-- Las vibraciones pueden aflojar las mariposas: usá arandelas de presión y revisá el ajuste antes de cada sesión. En la app, apoyá la punta en A2 para verificar la calibración: si el dock se movió, recalibrá.
+- **Not physically tested yet.** This is the first iteration: print one and test it before making more.
+- The software assumes the camera is parallel to the bit. The tilt lock lets you set this by eye; automatic axis
+  calibration is the next step.
+- Vibration can loosen wing nuts: use lock washers and check the clamp before each session. In the app, rest the tip on
+  A2 to check the calibration: if the dock moved, recalibrate.
+
+## License
+
+Apache License 2.0, like the rest of the repository. See [LICENSE](../../LICENSE).
