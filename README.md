@@ -1,5 +1,13 @@
 # SmartTools
 
+> [!IMPORTANT]
+> ## This repository is the website only
+> What is published here is the **SmartTools website**: the landing page, the simulated HUD demo, the printable
+> markers and the first dock design.
+>
+> **The real SmartTools application is not in this repository yet.** I will publish it over the coming weeks, within
+> the next month.
+
 **A bicycle for humans in the real world.**
 
 SmartTools turns everyday power tools into precision tools. A phone in a 3D-printed dock on a cordless drill/driver
