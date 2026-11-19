@@ -20,10 +20,13 @@ your hands.
 | Page | What it is |
 |---|---|
 | [`/`](https://smarttools-nav.vercel.app) | Landing page with a three.js line scene of the drill, wall, markers and docked phone, plus the 2D HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid) or live with the rear camera (**Cam**) |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only, for demos. Simulated (wall, wood, grid) or with an experimental rear-camera preview (**Cam**) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet with 6 ArUco markers and 3 targets (A1–A3) |
 
-## How it works
+## How the demo works
+
+The website includes a browser prototype of the optical tracking, built to illustrate the idea in the demo. It is
+not the SmartTools application, which will be published separately.
 
 1. **Markers.** Print `/markers` at 100 % and tape it where you'll drill. Six ArUco markers (ARUCO_MIP_36h12, 40 mm)
    surround three targets.
@@ -36,17 +39,19 @@ your hands.
 4. **HUD.** Two rings, tip and chuck: when they are concentric on the mark, you're on target and square. One short
    instruction at a time (*Tip to the mark → Line up the rings → Ready · drill → Stop · 35 mm*).
 
-Everything runs on the device at camera rate. No IMU, no server, and no LLM tokens in the real-time loop.
+In the prototype, everything runs in the browser at camera rate: no IMU, no server, and no LLM tokens in the real-time
+loop.
 
-### Accuracy (synthetic)
+### Prototype accuracy (synthetic)
 
 `scripts/pose-selftest.mts` renders the marker sheet with a known perspective, runs the full detection and pose
 pipeline, and compares the result with ground truth. It passes at < 1 mm and < 0.1°, and typically measures
-0.06–0.21 mm and ≤ 0.03°. Real-camera accuracy (lens distortion, vibration) has not been measured yet.
+0.06–0.21 mm and ≤ 0.03°. Real-camera accuracy (lens distortion, vibration) has not been measured, so these figures describe the prototype
+under ideal conditions, not the SmartTools application.
 
 ## Hardware
 
-[`hardware/dock/`](hardware/dock/) holds a parametric, adjustable 3D-printable phone dock for cordless drill/drivers
+[`hardware/dock/`](hardware/dock/) holds a first design (v0.2, not printed yet) of a parametric, adjustable 3D-printable phone dock for cordless drill/drivers
 (split V clamp, Ø38–68 mm; phones 140–175 mm; ±15° tilt). It includes the STLs, the
 [print and assembly guide](hardware/dock/README.md) and the Python generator (`dock.py`, manifold3d).
 
@@ -54,17 +59,18 @@ pipeline, and compares the result with ground truth. It passes at < 1 mm and < 0
 
 ```bash
 npm install
-npm run dev                                   # http://localhost:3000
-node --no-warnings scripts/pose-selftest.mts  # synthetic pose test
+npm run dev                                   # website at http://localhost:3000
+node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
 ```
 
-Camera access needs HTTPS or `localhost`. To test on a phone, deploy (for example to Vercel) or use an HTTPS tunnel.
+The camera preview in `/hud` needs HTTPS or `localhost`. To try it on a phone, deploy (for example to Vercel) or use
+an HTTPS tunnel.
 
-## Code map
+## Code map (website)
 
 | Path | Contents |
 |---|---|
-| `lib/tracker.ts` | Optical tracker: markers → pose → drill state + overlay |
+| `lib/tracker.ts` | Tracking prototype: markers → pose → drill state + overlay |
 | `lib/pose.ts` | Homography, pose from homography, Gauss-Newton refinement, focal estimate |
 | `lib/subpix.ts` | Sub-pixel corner refinement |
 | `lib/board.ts` | Marker sheet geometry and targets |
@@ -81,9 +87,10 @@ Camera access needs HTTPS or `localhost`. To test on a phone, deploy (for exampl
 
 ## Status
 
-v0: early and experimental. The optical pipeline is verified synthetically and with a simulated camera feed; the dock
-has not been printed yet. **Do not rely on it where a mistake can hurt someone** (hidden wires, pipes, structural
-elements).
+This repository is the website and its demo, v0. The SmartTools application will be published separately over the
+coming weeks, within the next month. The tracking prototype here is verified only synthetically and with a simulated
+camera feed, and the dock has not been printed yet. **Do not use the demo to drill where a mistake can hurt someone**
+(hidden wires, pipes, structural elements).
 
 ## License
 
