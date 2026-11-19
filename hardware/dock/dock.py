@@ -1,9 +1,10 @@
 """
 SmartTools universal phone dock for cordless drill/drivers (parametric).
 
-Three printed parts + standard hardware:
+Four printed parts + standard hardware:
   1. saddle.stl  - 90-degree V-block that sits on the drill's motor housing (fits ~40-68 mm),
-                   held with two 20 mm hook-and-loop straps; ears with an M5 pivot and a +/-15 deg tilt slot.
+                   clamped by the lower jaw (optional strap tunnels as backup); ears with an M5 pivot and a +/-15 deg tilt slot.
+  1b. lower.stl  - lower V jaw: closes the split clamp with 2 x M5 through-bolts + wing nuts.
   2. arm.stl     - tongue (pivot) + column + U-channel rail that holds the phone in landscape,
                    with a fixed jaw at one end and a slot for the sliding jaw.
   3. jaw.stl     - sliding jaw, locked with an M4 bolt + wing nut. Phones 140-175 mm long, up to 12 mm thick.
@@ -38,6 +39,14 @@ M5 = 2.75  # hole radius for M5
 M4 = 2.25  # hole radius for M4
 LOCK_R = 14.0  # radius of the tilt-lock hole/slot from the pivot
 TILT = 15.0  # +/- degrees
+
+# split clamp: lower V jaw + 2 through-bolts M5 with wing nuts
+BOLT_Y = 41.0  # bolt centre, each side (clear of a 68 mm body)
+WING_X = 11.0  # half length of the bolt wings along X
+WING_T = 10.0  # wing thickness
+LOW_X = 12.0  # half length of the lower jaw along X (narrow, fits ahead of the trigger)
+LOW_SHELL = 6.0  # shell thickness of the lower V
+LOW_TOP = 26.0  # lower jaw top above its V apex
 
 # rail (arm frame: pivot at origin)
 CH_IN = PHONE_THICK_MAX + 0.6  # channel inner width (X)
@@ -104,6 +113,29 @@ def saddle():
         c0 = cyl_y(LOCK_R * math.cos(a0), PIVOT_Z + LOCK_R * math.sin(a0), M5, -SAD_Y, SAD_Y)
         c1 = cyl_y(LOCK_R * math.cos(a1), PIVOT_Z + LOCK_R * math.sin(a1), M5, -SAD_Y, SAD_Y)
         body = body - Manifold.batch_hull([c0, c1])
+    # clamp wings with vertical M5 holes for the through-bolts
+    for sy in (-1, 1):
+        wing = box(-WING_X, WING_X, min(sy * (SAD_Y - 5), sy * (BOLT_Y + 6)), max(sy * (SAD_Y - 5), sy * (BOLT_Y + 6)),
+                   SAD_BOT, SAD_BOT + WING_T)
+        body = body + wing
+        body = body - cyl_z(0, sy * BOLT_Y, M5, SAD_BOT - 1, SAD_BOT + WING_T + 1)
+    return body
+
+
+# ---------------- 1b. lower jaw (V opening upward, apex at z = 0) ----------------
+def lower():
+    a = 120.0
+    # outer V offset by the shell thickness (vertical offset = t * sqrt(2))
+    off = LOW_SHELL * math.sqrt(2)
+    outer = Manifold.cube([2 * LOW_X, a, a], True).rotate([45, 0, 0]).translate([0, 0, a / math.sqrt(2) - off])
+    inner = Manifold.cube([2 * LOW_X + 2, a, a], True).rotate([45, 0, 0]).translate([0, 0, a / math.sqrt(2)])
+    bound = box(-LOW_X, LOW_X, -(BOLT_Y + 6), BOLT_Y + 6, -off, LOW_TOP)
+    body = (outer ^ bound) - inner
+    for sy in (-1, 1):
+        y0, y1 = sy * (BOLT_Y - 12), sy * (BOLT_Y + 6)
+        wing = box(-LOW_X, LOW_X, min(y0, y1), max(y0, y1), LOW_TOP - WING_T, LOW_TOP)
+        body = (body + wing) - inner
+        body = body - cyl_z(0, sy * BOLT_Y, M5, LOW_TOP - WING_T - 1, LOW_TOP + 1)
     return body
 
 
@@ -184,7 +216,7 @@ def render(parts, path):
 
     fig = plt.figure(figsize=(14, 5), dpi=110)
     views = [(20, -60, "3/4 view"), (0, 0, "from the bit (camera side)"), (0, -90, "side")]
-    colors = {"saddle": "#f0a640", "arm": "#5ad8ff", "jaw": "#3ee59b", "phone": "#cccccc"}
+    colors = {"saddle": "#f0a640", "arm": "#5ad8ff", "jaw": "#3ee59b", "lower": "#f0a640", "phone": "#cccccc"}
     for i, (el, az, title) in enumerate(views):
         ax = fig.add_subplot(1, 3, i + 1, projection="3d")
         for name, m in parts:
@@ -194,8 +226,8 @@ def render(parts, path):
             pc = Poly3DCollection(v[f], alpha=0.35 if name == "phone" else 0.9, linewidths=0.05,
                                   edgecolors="#222", facecolors=colors[name])
             ax.add_collection3d(pc)
-        ax.set_xlim(-110, 60); ax.set_ylim(-110, 110); ax.set_zlim(-40, 130)
-        ax.set_box_aspect((170, 220, 170))
+        ax.set_xlim(-110, 60); ax.set_ylim(-110, 110); ax.set_zlim(-90, 130)
+        ax.set_box_aspect((170, 220, 220))
         ax.view_init(el, az)
         ax.set_title(title, fontsize=9)
         ax.set_axis_off()
@@ -205,8 +237,8 @@ def render(parts, path):
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
-    s, a, j = saddle(), arm(), jaw()
-    for name, m in (("saddle", s), ("arm", a), ("jaw", j)):
+    s, a, j, lo = saddle(), arm(), jaw(), lower()
+    for name, m in (("saddle", s), ("arm", a), ("jaw", j), ("lower", lo)):
         report(name, m)
         write_stl(m, os.path.join(here, f"{name}.stl"))
     # assembly preview with a 162 x 75 x 8 mm phone (Redmi Note 13) and a 56 mm drill body
@@ -214,8 +246,20 @@ if __name__ == "__main__":
     a_asm = a.translate([0, 0, PIVOT_Z])
     j_asm = j.translate([0, FIX_FACE - phone_len, PIVOT_Z])
     phone = box(CH_X - 4, CH_X + 4, FIX_FACE - phone_len, FIX_FACE, BASE_Z1, BASE_Z1 + 75).translate([0, 0, PIVOT_Z])
-    drill = Manifold.cylinder(160, 28, 28, SEG, True).rotate([0, 90, 0]).translate([10, 0, -28 * math.sqrt(2)])
-    asm = [("saddle", s), ("arm", a_asm), ("jaw", j_asm), ("phone", phone), ("phone", drill)]
+    R0 = 28.0
+    drill = Manifold.cylinder(160, R0, R0, SEG, True).rotate([0, 90, 0]).translate([10, 0, -R0 * math.sqrt(2)])
+    lo_asm = lo.translate([0, 0, -2 * R0 * math.sqrt(2)])
+    asm = [("saddle", s), ("arm", a_asm), ("jaw", j_asm), ("lower", lo_asm), ("phone", phone), ("phone", drill)]
+    # clamp range: body radius -> clearance between the two jaws and the bolt length needed
+    print("clamp range (body Ø, gap between jaws, overlap jaws, overlap jaws/body, bolt length):")
+    for r in (19.0, 22.0, 28.0, 34.0):
+        cyl = Manifold.cylinder(160, r - 0.05, r - 0.05, SEG, True).rotate([0, 90, 0]).translate([0, 0, -r * math.sqrt(2)])
+        l_r = lo.translate([0, 0, -2 * r * math.sqrt(2)])
+        gap = SAD_BOT - (LOW_TOP - 2 * r * math.sqrt(2))
+        bolt = WING_T + gap + WING_T + 8  # + washer and wing nut
+        ov = (l_r ^ s).volume() / 1000
+        ovb = ((l_r + s) ^ cyl).volume() / 1000
+        print(f"  Ø{2 * r:4.0f} mm  gap {gap:5.1f} mm  overlap {ov:.3f} cm3  body {ovb:.3f} cm3  bolt >= {bolt:4.0f} mm")
     # interference check (should be ~0)
     print("overlap arm/saddle  cm3:", round((a_asm ^ s).volume() / 1000, 3))
     print("overlap jaw/arm     cm3:", round((j_asm ^ a_asm).volume() / 1000, 3))
@@ -223,4 +267,4 @@ if __name__ == "__main__":
         tilted = a.rotate([0, deg, 0]).translate([0, 0, PIVOT_Z])
         print(f"overlap at tilt {deg:+.0f}° cm3:", round((tilted ^ s).volume() / 1000, 3))
     render(asm, os.path.join(here, "preview.png"))
-    print("wrote saddle.stl arm.stl jaw.stl preview.png")
+    print("wrote saddle.stl arm.stl jaw.stl lower.stl preview.png")
