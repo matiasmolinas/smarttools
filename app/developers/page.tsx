@@ -47,7 +47,7 @@ const NUMBERS = [
   { k: "< 0.3°", v: "angle error while driving, 95th percentile" },
   { k: "120 Hz", v: "the engine's clock, on the phone" },
   { k: "0", v: "language-model tokens in the real-time loop" },
-  { k: "178", v: "automated checks: 64 Rust, 61 TypeScript, 53 end-to-end" },
+  { k: "191", v: "automated checks: 64 Rust, 74 TypeScript, 53 end-to-end" },
 ];
 
 type Project = {
@@ -137,7 +137,10 @@ export default function Developers() {
           A deterministic navigation engine makes every real-time call. Around it, three open-source projects: one to
           plan, one to evolve the code safely, one to learn from the field. Apache 2.0.
         </p>
-        <ol className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <a href="/architecture" className="mt-6 inline-block text-sm text-[var(--cyan)] hover:underline">
+          How it splits between the phone and the cloud: the architecture in 3D →
+        </a>
+        <ol className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {FOUR.map((f) => (
             <li key={f.k}>
               <a href={f.href} className="group flex h-full flex-col rounded-2xl border border-white/10 p-5 transition hover:border-white/35">

@@ -1,0 +1,11 @@
+{
+ "id": "hash-013-lone-surrogate",
+ "description": "a lone surrogate cannot be canonicalized",
+ "input": "{\"a\":\"\\ud800\"}",
+ "expect": {
+  "exit": 3,
+  "json": {
+   "ok": false
+  }
+ }
+}

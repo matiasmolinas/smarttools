@@ -44,7 +44,7 @@ const STEPS: Step[] = [
       { t: "Register your work area", d: "The phone finds the sheet and knows where the wall, the bench or the jig is." },
       { t: "Register your parts", d: "Touch four points with the bit tip, or let the markers do it: the part's model snaps onto the real part.", demos: [["assembly-register", "Touch four points"], ["assembly-factory", "Parts with their own markers"]] },
       { t: "Register your tool", d: "After calibration it knows where the tip is, which way the bit points and how deep it went." },
-      { t: "Plan with your tool as a pointer", d: "Touch where each hole goes and set its depth. The bit tip is the pen.", soon: true },
+      { t: "Plan with your tool as a pointer", d: "Touch where each hole goes and tap Mark: the bit tip is the pen. Plans and jobs stay on your phone, offline.", link: { href: "/memory", label: "Your plans and jobs →" } },
       {
         t: "Operate, with your plan or an expert's",
         d: "The next hole glows on the part, a tone tells you when you are square, and the gate stops you before a mistake. Or follow an expert's plan, step by step, with their ghost to copy.",

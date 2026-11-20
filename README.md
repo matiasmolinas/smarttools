@@ -21,6 +21,8 @@ your hands.
 |---|---|
 | [`/`](https://smarttools-nav.vercel.app) | For makers: print (dock, sheet, markers), mount it on your screwdriver, then register, plan and operate. The whole 3D-assembly job, and the assembly and drilling demos running the real engine in 3D + 2D |
 | [`/developers`](https://smarttools-nav.vercel.app/developers) | For developers: the navigation engine with its 3D, 2D and AR views, the numbers, athos, contract-gatekeeper and agentvcs with how each should be integrated ([docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)), and every demo |
+| [`/architecture`](https://smarttools-nav.vercel.app/architecture) | The architecture in 3D: the phone runs the work (offline), the cloud keeps the knowledge, and only three files cross ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) |
+| [`/memory`](https://smarttools-nav.vercel.app/memory) | What this phone keeps: plans (made with the tool as a pointer, or imported) and jobs, with the report and the agentvcs ledger to download. Works offline |
 | [`/engine`](https://smarttools-nav.vercel.app/engine) | The engine lab: one engine drawn in 3D, as a 2D plan and as the HUD |
 | [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Phone**, **Lens**, **Calibrate**, export / import) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
@@ -239,7 +241,7 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 64 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 61 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery)
+npm run test:unit     # TypeScript: 74 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
 npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 

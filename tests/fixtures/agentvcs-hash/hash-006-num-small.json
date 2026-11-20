@@ -1,0 +1,12 @@
+{
+ "id": "hash-006-num-small",
+ "description": "ECMAScript Number serialization",
+ "input": "[0.000001, 1e-7, 0.002, 5e-324]\n",
+ "expect": {
+  "exit": 0,
+  "json": {
+   "ok": true,
+   "canonical": "[0.000001,1e-7,0.002,5e-324]"
+  }
+ }
+}
