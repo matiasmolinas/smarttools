@@ -60,21 +60,47 @@ What it asked for:
 - **Each of the three things links straight to the demos that prove it** (`#scenario-<id>`).
 - **Safety as a first-class idea:** Protect, "it says no before you get it wrong".
 
-## The page, in the order a visitor asks
+## Two audiences, two pages (November 2026)
 
-| Section | The visitor's question | Lens that drove it |
-|---|---|---|
-| Hero | What is it? | Focus |
-| One job, start to finish | Show me | Focus |
-| What it does: Locate, Guide, Protect | What does it do for me? | Focus, workshop |
-| Get started: phone, dock, sheet | Can I try it? | Builder, workshop |
-| Demos (3 groups) | Does it really work? | Workshop |
-| How it works: the engine, the numbers, open source | How? Can I trust it? | Builder |
-| Honest status | Where is it going? | Builder |
+The one-story home page still served two readers at once: someone who wants to put a phone on a drill tonight, and
+someone who wants to build on the engine. Now each one gets a page and a menu, with a switch between them in the top
+bar (`components/site/SiteNav.tsx`, `audience`).
+
+### `/`, for makers: print, mount, work
+
+| Section | The visitor's question |
+|---|---|
+| Hero | What is it? |
+| How it works: 1 Print (dock, sheet, markers for parts) · 2 Mount it on your screwdriver (more tools coming) · 3 Work (register the area, the parts and the tool, plan with the tool as a pointer, operate with your plan or an expert's) | What do I do? |
+| One job, start to finish | Show me |
+| Demos: 3D assembly, drilling & safety | Does it really work? |
+| Honest status, and a way to the developer page | Can I trust it? |
+
+What is not built yet is marked "coming with the app" in place, not hidden:
+- the printable part stickers;
+- planning with the tool as a pointer;
+- tools other than the drill.
+
+### `/developers`: four things
+
+| Section | Contents |
+|---|---|
+| 1 · The engine | Navigation (Rust → WebAssembly), the 3D and 2D views, augmented reality on the camera view, the numbers, links to the code, the lab and the spec |
+| 2 · athos | What it is, what it does in SmartTools, and how it should be integrated |
+| 3 · contract-gatekeeper | Same |
+| 4 · agentvcs | Same |
+| All demos | Including the platform illustrations |
+| Honest status | |
+
+For each project, the integration (used from its repository, or migrated here) is decided in
+[INTEGRATIONS.md](INTEGRATIONS.md).
 
 ## Rules for future changes
 
-- **One headline idea per section.** A new feature goes under Locate, Guide or Protect, not in a new list.
+- **One headline idea per section.** For makers, a new feature goes under Print, Mount or Work; for developers, under one of the four things. Not in a new list.
 - **Every number on the page comes from a test,** and says whether it is simulated.
 - **Every section ends in something to do:** watch, open, print, read.
-- **The top bar is the same on every page except the phone app (`/hud`):** `components/site/SiteNav.tsx`.
+- **The top bar is the same on every page except the phone app (`/hud`):** `components/site/SiteNav.tsx`. Its
+  menu follows the audience: makers or developers.
+- **Makers never need to read about the engine or the projects to get started;** developers find everything on
+  `/developers`.

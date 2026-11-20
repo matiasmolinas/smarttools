@@ -14,17 +14,18 @@ export default function SiteFooter() {
         </p>
       </div>
       <div className={col}>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-white/35">Try</span>
+        <span className="font-mono text-[11px] uppercase tracking-wider text-white/35">Makers</span>
         <a className={a} href="/hud">The phone app (/hud)</a>
         <a className={a} href="/markers">Print the marker sheet</a>
-        <a className={a} href="/engine">Engine lab</a>
-        <a className={a} href="/#scenarios">All demos</a>
+        <a className={a} href="https://github.com/matiasmolinas/smarttools/tree/main/hardware/dock">Print the dock (STL) ↗</a>
+        <a className={a} href="/#scenarios">Demos</a>
       </div>
       <div className={col}>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-white/35">Build</span>
-        <a className={a} href="https://github.com/matiasmolinas/smarttools">Source code ↗</a>
-        <a className={a} href="https://github.com/matiasmolinas/smarttools/tree/main/hardware/dock">Print the dock (STL) ↗</a>
+        <span className="font-mono text-[11px] uppercase tracking-wider text-white/35">Developers</span>
+        <a className={a} href="/developers">The engine and the stack</a>
+        <a className={a} href="/engine">Engine lab</a>
         <a className={a} href="https://github.com/matiasmolinas/smarttools/blob/main/docs/ENGINE_SPEC.md">Engine spec ↗</a>
+        <a className={a} href="https://github.com/matiasmolinas/smarttools">Source code ↗</a>
       </div>
     </footer>
   );

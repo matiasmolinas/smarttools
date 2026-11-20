@@ -233,8 +233,8 @@ export default function EngineLab() {
           </p>
         </div>
         <span className="flex gap-4 font-mono text-xs text-white/50">
-          <a href="/" className="hover:text-white">
-            ← SmartTools
+          <a href="/developers" className="hover:text-white">
+            ← SmartTools for developers
           </a>
           <a href="/hud" className="hover:text-white">
             the phone app →
