@@ -20,9 +20,9 @@ export default function AssemblyHero() {
     <div ref={ref}>
       <ScenarioPlayer scenario={HERO} playing={playing} onEnd={() => {}} variant="hero" />
       <p className="mt-3 font-mono text-[11px] text-white/40">
-        Simulated: the real navigation engine (Rust/WASM, 120 Hz) runs every decision on scripted motion. Drag to orbit.{" "}
-        <a href="#scenarios" className="text-white/60 underline decoration-white/20 hover:text-white">
-          More scenarios ↓
+        A simulation on the real navigation engine: scripted motion, real decisions. Drag to orbit.{" "}
+        <a href="#what" className="text-white/60 underline decoration-white/20 hover:text-white">
+          What it does ↓
         </a>
       </p>
     </div>

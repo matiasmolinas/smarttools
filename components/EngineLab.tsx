@@ -232,9 +232,14 @@ export default function EngineLab() {
             One engine (Rust/WASM, 120 Hz) fed by the scene simulator. Three renderers read its snapshots at their own pace, or not at all.
           </p>
         </div>
-        <a href="/hud" className="font-mono text-xs text-white/50 hover:text-white">
-          /hud →
-        </a>
+        <span className="flex gap-4 font-mono text-xs text-white/50">
+          <a href="/" className="hover:text-white">
+            ← SmartTools
+          </a>
+          <a href="/hud" className="hover:text-white">
+            the phone app →
+          </a>
+        </span>
       </header>
       {error && <p className="font-mono text-sm text-red-400">{error}</p>}
       <div className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">

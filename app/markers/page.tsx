@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AR } from "@/lib/aruco";
 import { BOARD_MARKERS, BOARD_TARGETS, DICTIONARY, MARKER_SIZE, SHEET } from "@/lib/board";
 import PrintButton from "./PrintButton";
+import SiteNav from "@/components/site/SiteNav";
 
 export const metadata: Metadata = {
   title: "SmartTools markers: printable A4 sheet",
@@ -67,12 +68,13 @@ function Sheet() {
 
 export default function MarkersPage() {
   return (
-    <main className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-10 sm:px-6 lg:flex-row">
+    <>
+    <div className="no-print mx-auto w-full max-w-5xl px-4 sm:px-6">
+      <SiteNav compact />
+    </div>
+    <main className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-6 sm:px-6 lg:flex-row">
       <style>{`@media print { @page { size: A4; margin: 0 } body { background: #fff !important } .no-print { display: none !important } main { padding: 0 !important; max-width: none !important; display: block !important } .sheet-wrap { box-shadow: none !important; border: 0 !important; width: 210mm !important } .sheet { width: 210mm !important; height: 297mm !important } }`}</style>
       <section className="no-print flex max-w-sm flex-col gap-5">
-        <a href="/hud" className="font-mono text-xs text-white/50 hover:text-white">
-          ← HUD
-        </a>
         <h1 className="text-3xl font-semibold tracking-tight">Marker sheet</h1>
         <p className="text-white/65">
           The phone on the drill finds these printed markers and computes its own position and angle relative to the
@@ -106,5 +108,6 @@ export default function MarkersPage() {
         <Sheet />
       </div>
     </main>
+    </>
   );
 }

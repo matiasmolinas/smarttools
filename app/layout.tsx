@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SmartTools: a bicycle for humans in the real world",
+  title: "SmartTools: every hole in its place, every screw square",
   description:
-    "Clip your phone to your drill. AI plans the job; deterministic 6-DoF math guides your hands to ±0.5°.",
+    "Clip your phone to the drill you already own. It sees the part, knows where every hole goes, and guides your hands to half a degree.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
