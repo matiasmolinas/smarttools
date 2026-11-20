@@ -5,15 +5,17 @@
 // Run: node --no-warnings scripts/e2e.mts [--quick] [--only name,name] [--tilt 12]
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { NavCore, cameraFromHfov, type Camera, type EngineSnapshot, type ToolCalib } from "../lib/engine.ts";
+import { NavCore, cameraFromHfov, type Camera, type EngineSnapshot, type RenderOptions, type ToolCalib } from "../lib/engine.ts";
+import type { TrackerFrame } from "../lib/markertracker.ts";
+import { StickerLearner, stickerSpecs, type MarkerBody } from "../lib/anchors.ts";
 import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, IDEAL_RIG, RUN_TIME, V02_RIG, disturb, dockRigAt, markerCodes, navInTarget, renderTool, tiltedRig, toolWorldFromHold, truthAt, type Disturbance, type Hold, type Rig } from "../lib/scene.ts";
 import { tipInView } from "../lib/dockrig.ts";
 import { NavSession, REQUIREMENT } from "../lib/session.ts";
 import { smartToolsScene, toXf, INTO_SHEET } from "../lib/scenedef.ts";
 import { BOARD_TARGETS } from "../lib/board.ts";
-import { applyDir, compose, qaxis, qmul, xf, type Xf } from "../lib/xform.ts";
+import { applyDir, compose, fromPose, inverse, qaxis, qmul, xf, xlerp, type Xf } from "../lib/xform.ts";
 import type { V3 } from "../lib/pose.ts";
-import { BASE_ON_BENCH, CHECKPOINTS, FIDUCIALS, SCREWS, SCREW_DEPTHS, assemblyScene, probeError, registerPart, toolAt as toolPose } from "../lib/assembly.ts";
+import { BASE_BODY, BASE_STICKERS, baseSolids, BASE_ON_BENCH, CHECKPOINTS, FIDUCIALS, SCREWS, SCREW_DEPTHS, assemblyScene, probeError, registerPart, toolAt as toolPose } from "../lib/assembly.ts";
 
 const args = process.argv.slice(2);
 const QUICK = args.includes("--quick");
@@ -26,7 +28,10 @@ const CAM_FPS = QUICK ? 8 : 15;
 const require = createRequire(import.meta.url);
 const { AR } = require("js-aruco2");
 const core = await NavCore.load(readFileSync(new URL("../public/engine/nav_core.wasm", import.meta.url)));
-const codes = markerCodes(new AR.Dictionary("ARUCO_MIP_36h12").codeList);
+const codeList: string[] = new AR.Dictionary("ARUCO_MIP_36h12").codeList;
+const codes = markerCodes(codeList);
+/** the sheet covered (a cloth over it, or no sheet at all): its markers cannot be read */
+const COVERED = new Uint8Array(codes.length);
 const detector = () => new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" });
 // dock: the real dock v0.3 (hardware/dock/dock.py), tilted on its hinge with --tilt
 // ideal: the idealised rig of the first simulations; v02: dock v0.2 as it was designed
@@ -79,6 +84,10 @@ interface DriveOptions {
   stalls?: [number, number][];
   /** called after each engine advance, with the tool truth at the snapshot time */
   onTick?: (s: EngineSnapshot, truthToolW: Xf, sessionIndex: number) => void;
+  /** after each tracked frame */
+  onFrame?: (f: TrackerFrame, sessionIndex: number) => void;
+  /** what else is in the scene at time t (parts, stickers), or a covered sheet */
+  world?: (t: number) => Partial<RenderOptions>;
   seed?: number;
 }
 
@@ -97,7 +106,7 @@ function drive(o: DriveOptions) {
     if (o.stalls?.some(([s, dur]) => wall > s && wall < s + dur)) continue;
     while (nextFrame <= wall + 1e-9) {
       const { toolW, blur } = o.toolAt(nextFrame);
-      const img = renderTool(core, rig, codes, blur ?? [toolW], d, 17 + k++);
+      const img = renderTool(core, rig, codes, blur ?? [toolW], d, 17 + k++, o.world?.(nextFrame));
       const jit = o.jitter ? rand() * o.jitter : 0;
       pending.push({ deliverAt: nextFrame + (o.latency ?? 0) + jit, tCapture: nextFrame, img });
       nextFrame += 1 / fps;
@@ -105,7 +114,10 @@ function drive(o: DriveOptions) {
     pending.sort((a, b) => a.deliverAt - b.deliverAt);
     while (pending.length && pending[0].deliverAt <= wall + 1e-9) {
       const f = pending.shift()!;
-      for (const s of sessions) s.frame(f.img, f.tCapture);
+      sessions.forEach((s, i) => {
+        const tf = s.frame(f.img, f.tCapture);
+        o.onFrame?.(tf, i);
+      });
     }
     sessions.forEach((s, i) => {
       const n = s.advance(wall);
@@ -524,6 +536,211 @@ await scenario("assembly", "3D assembly: register a part by touching it with the
     const face = SCREWS.find((x) => x.name === name)!.face;
     check(`${name} (${face}): ready, seated at ${depth * 1000} mm, tip p95 < 1 mm`, ready > 0 && seated && pct(tips, 95) < 1 && falseReady === 0, `ready ${ready} ticks, seated ${seated}, tip p95 ${f2(pct(tips, 95))} mm, angle p95 ${f3(pct(angles, 95))}°, false ready ${falseReady}`);
   }
+  s.dispose();
+});
+
+// ---------------- markers on the part: learned stickers and factory markers ----------------
+
+/** Drive one screw on a part whose true pose is `partW(t)`; returns the accuracy and the events seen. */
+function driveScrew(s: NavSession, name: string, start: number, partW: (t: number) => Xf, world: (t: number) => Partial<RenderOptions>, d: Disturbance, opts: { slipAt?: number } = {}) {
+  const spec = SCREWS.find((x) => x.name === name)!;
+  const depth = spec.depthMm / 1000;
+  const toward = (p: V3): V3 => [-p[0], -p[1], 0];
+  const tips: number[] = [], angles: number[] = [];
+  let ready = 0, falseReady = 0, seated = false, alarmAt = NaN, alarmBefore = 0;
+  drive({
+    session: s,
+    from: start,
+    to: start + 6,
+    latency: 0.04,
+    disturbance: d,
+    world,
+    toolAt: (t) => {
+      const tw = compose(partW(t), spec.frame);
+      const k = Math.min(1, (t - start) / 2);
+      const z = t - start < 2 ? -0.03 * (1 - k) : t - start < 3.6 ? 0 : Math.min(depth, ((t - start - 3.6) / 1.8) * depth);
+      const tilt = t - start < 2 ? 3 - 2.85 * k : 0.12;
+      const w = compose(tw, xf([0.00015, -0.0001, z], qaxis([1, 0.4, 0], (tilt * Math.PI) / 180)));
+      return { toolW: toolPose(w.p, applyDir(w, [0, 0, 1]), toward(tw.p)) };
+    },
+    onTick: (snap, truthToolW) => {
+      const tw = compose(partW(snap.t), spec.frame);
+      if (snap.alarms & 8) {
+        if (opts.slipAt != null && snap.t >= opts.slipAt) alarmAt = Number.isNaN(alarmAt) ? snap.t : alarmAt;
+        else alarmBefore++;
+      }
+      if (snap.active < 0 || s.name(snap.targets[snap.active].id) !== name) return;
+      const est = snap.targets[snap.active];
+      const tr = navInTarget(tw, truthToolW);
+      if (snap.t - start > 2.2 && (opts.slipAt == null || snap.t < opts.slipAt)) {
+        tips.push(dist(est.tip, tr.tip) * 1000);
+        angles.push(ang(est.axis, tr.axis));
+      }
+      if (snap.ready) {
+        ready++;
+        if (tr.angleErrDeg >= REQUIREMENT.angleDeg || tr.offsetMm >= REQUIREMENT.offsetMm || tr.gapMm > 1) falseReady++;
+      }
+      if (snap.events.some((e) => e.kind === "depth-reached" && s.name(e.node) === name)) seated = true;
+    },
+  });
+  return { tips, angles, ready, falseReady, seated, alarmAt, alarmBefore, face: spec.face, depthMm: spec.depthMm };
+}
+
+const holeErrMm = (s: NavSession, truthPart: Xf) =>
+  Math.max(...SCREWS.filter((x) => x.part === "base").map((x) => dist(compose(s.world("base")!, x.frame).p, compose(truthPart, x.frame).p) * 1000));
+
+await scenario("anchors", "Stickers on the part: register by touch, learn the stickers, then move the part, cover the sheet, catch a slip", () => {
+  // where the user actually stuck the stickers: near the planned spots, a few mm and degrees off
+  const stuck: MarkerBody = {
+    name: BASE_BODY.name,
+    stickers: BASE_STICKERS.map((st, i) => ({ ...st, pose: compose(st.pose, xf([0.003 * Math.sin(i * 2.1), 0.0025 * Math.cos(i * 1.7), 0], qaxis([0, 0, 1], ((7 * Math.sin(i * 1.3)) * Math.PI) / 180))) })),
+  };
+  // one body per sticker while learning: the tracker reports each sticker's own pose
+  const single: MarkerBody[] = BASE_STICKERS.map((st) => ({ name: st.name, stickers: [{ ...st, pose: xf() }] }));
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool, scene: assemblyScene({ tool, anchors: "learned" }), targetDepths: SCREW_DEPTHS, bodies: single });
+  const d: Disturbance = { ...DEFAULT_DISTURBANCE, tremorMm: 0.08, tremorDeg: 0.04, vibrationMm: 0.05, vibrationDeg: 0.03 };
+  const toward = (p: V3): V3 => [-p[0], -p[1], 0];
+  let partTrue: Xf = BASE_ON_BENCH;
+  let partAt = (_t: number) => partTrue;
+  let sheetCovered = false;
+  const world = (t: number): Partial<RenderOptions> => ({ solids: baseSolids(partAt(t)), stickers: stickerSpecs(stuck, partAt(t), codeList), ...(sheetCovered ? { codes: COVERED } : {}) });
+  let t0 = 0;
+  const touch = (p: V3) => {
+    const tips: V3[] = [];
+    const ax: V3 = [0.03, -0.02, -1].map((v) => v / Math.hypot(0.03, 0.02, 1)) as V3;
+    drive({ session: s, from: t0, to: t0 + 1.2, latency: 0.04, world, disturbance: { ...d, vibrationMm: 0, vibrationDeg: 0 }, toolAt: () => ({ toolW: toolPose(p, ax, toward(p)) }), onTick: (snap) => snap.t > t0 + 0.6 && tips.push(s.world("tool")!.p) });
+    t0 += 1.3;
+    return [0, 1, 2].map((k) => tips.reduce((a, v) => a + v[k], 0) / tips.length) as V3;
+  };
+  // 1. register by touch, with the part (and its stickers) in the camera's view
+  const touches = FIDUCIALS.map((f) => touch(compose(BASE_ON_BENCH, xf(f.p)).p));
+  const reg = registerPart(core, s.engine, s.id("base"), xf(), FIDUCIALS.map((f) => f.p), touches)!;
+  const regHole = Math.max(...SCREWS.filter((x) => x.part === "base").map((x) => dist(compose(reg.world, x.frame).p, compose(BASE_ON_BENCH, x.frame).p) * 1000));
+  check("registered by touch (stickers in view do not disturb it)", reg.freMm < 0.6 && regHole < 0.8, `FRE ${f2(reg.freMm)} mm, worst hole ${f2(regHole)} mm`);
+
+  // 2. learn the stickers: hover over two screws so every sticker is seen from a few views
+  const learner = new StickerLearner(BASE_STICKERS);
+  for (const name of ["S1", "C1", "S2"]) {
+    const tw = compose(BASE_ON_BENCH, SCREWS.find((x) => x.name === name)!.frame);
+    const ax = applyDir(tw, [0, 0, 1]);
+    drive({
+      session: s, from: t0, to: t0 + 1.5, latency: 0.04, world, disturbance: CALM,
+      toolAt: (t) => ({ toolW: toolPose(applyDir(tw, [0.01 * Math.sin(t * 2), 0.01 * Math.cos(t * 2), -0.03]).map((v, k) => v + tw.p[k]) as V3, ax, toward(tw.p)) }),
+      onFrame: (f) => {
+        if (!f.pose || f.markers < 6) return;
+        // the camera at capture time, from the sheet in the same frame; the part where it was registered
+        const seen = new Map(f.bodies.filter((b) => b.markers >= 2).map((b) => [b.name, b.pose]));
+        learner.add(inverse(fromPose(f.pose)), reg.world, seen);
+      },
+    });
+    t0 += 1.6;
+  }
+  const { body, spreadMm } = learner.body(BASE_BODY.name, 4);
+  const errs = body.stickers.map((st) => dist(st.pose.p, stuck.stickers.find((x) => x.name === st.name)!.pose.p) * 1000);
+  check("stickers learned where they were stuck (< 0.6 mm)", body.stickers.length >= 4 && Math.max(...errs) < 0.6, `${body.stickers.length}/${BASE_STICKERS.length} stickers (${body.stickers.map((x, i) => `${x.name} ${f2(errs[i])}`).join(", ")} mm), spread ≤ ${f2(Math.max(...Object.values(spreadMm)))} mm`);
+  s.tracker.setBodies([body]);
+  s.engine.setCalibrated(s.id(BASE_BODY.name), true);
+
+  // 3. the user turns the part 25° and slides it 4 cm while the camera watches: no touching again
+  const moved = compose(xf([0.03, 0.025, 0], qaxis([0, 0, 1], (25 * Math.PI) / 180)), BASE_ON_BENCH);
+  const m0 = t0;
+  partAt = (t) => (t < m0 + 0.3 ? BASE_ON_BENCH : t > m0 + 1.8 ? moved : xlerp(BASE_ON_BENCH, moved, (t - m0 - 0.3) / 1.5));
+  const hover = compose(BASE_ON_BENCH, SCREWS[2].frame);
+  drive({ session: s, from: t0, to: t0 + 3, latency: 0.04, world, disturbance: CALM, toolAt: () => ({ toolW: toolPose(applyDir(hover, [0, 0, -0.06]).map((v, k) => v + hover.p[k]) as V3, applyDir(hover, [0, 0, 1]), toward(hover.p)) }) });
+  t0 += 3.1;
+  partTrue = moved;
+  partAt = () => moved;
+  check("the part moved 4 cm and 25°: the engine follows it (holes < 0.8 mm)", holeErrMm(s, moved) < 0.8, `worst hole ${f2(holeErrMm(s, moved))} mm after the move`);
+
+  // 4. drive a top screw on the moved part
+  const r1 = driveScrew(s, "S3", t0, partAt, world, d);
+  t0 += 6.2;
+  check(`S3 on the moved part: seated, tip p95 < 1 mm`, r1.ready > 0 && r1.seated && pct(r1.tips, 95) < 1 && r1.falseReady === 0 && r1.alarmBefore === 0, `ready ${r1.ready}, seated ${r1.seated}, tip p95 ${f2(pct(r1.tips, 95))} mm, angle p95 ${f3(pct(r1.angles, 95))}°, false ready ${r1.falseReady}, false slip alarms ${r1.alarmBefore}`);
+
+  // 5. the sheet covered: the part's stickers are the only reference
+  sheetCovered = true;
+  const r2 = driveScrew(s, "C1", t0, partAt, world, d);
+  t0 += 6.2;
+  check(`C1 (35° chamfer) with the sheet covered: seated, tip p95 < 1 mm`, r2.ready > 0 && r2.seated && pct(r2.tips, 95) < 1 && r2.falseReady === 0, `ready ${r2.ready}, seated ${r2.seated}, tip p95 ${f2(pct(r2.tips, 95))} mm, angle p95 ${f3(pct(r2.angles, 95))}°`);
+  sheetCovered = false;
+
+  // 6. the part slips 1.2 mm in the vise halfway down
+  const slipAt = t0 + 4.4;
+  const before = partAt(0);
+  partAt = (t) => (t < slipAt ? before : compose(xf([0.0012 * Math.min(1, (t - slipAt) / 0.15), 0, 0]), before));
+  const r3 = driveScrew(s, "S4", t0, partAt, world, d, { slipAt });
+  t0 += 6.2;
+  check("a slip while driving raises the part-moved alarm within 0.3 s", !Number.isNaN(r3.alarmAt) && r3.alarmAt - slipAt < 0.3 && r3.alarmBefore === 0, `alarm ${Number.isNaN(r3.alarmAt) ? "none" : `${f2((r3.alarmAt - slipAt) * 1000 / 1000)} s after the slip`}, false alarms before ${r3.alarmBefore}`);
+  s.dispose();
+});
+
+await scenario("factory", "Factory markers: the part locates itself, no touching", () => {
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool, scene: assemblyScene({ tool, anchors: "factory" }), targetDepths: SCREW_DEPTHS, bodies: [BASE_BODY] });
+  const d: Disturbance = { ...DEFAULT_DISTURBANCE, tremorMm: 0.08, tremorDeg: 0.04, vibrationMm: 0.05, vibrationDeg: 0.03 };
+  const part = compose(xf([-0.02, 0.03, 0], qaxis([0, 0, 1], (-12 * Math.PI) / 180)), BASE_ON_BENCH);
+  const world = (): Partial<RenderOptions> => ({ solids: baseSolids(part), stickers: stickerSpecs(BASE_BODY, part, codeList) });
+  let locatedAt = NaN;
+  const hover = compose(part, SCREWS[0].frame);
+  drive({
+    session: s, from: 0, to: 1.5, latency: 0.04, world, disturbance: CALM,
+    toolAt: () => ({ toolW: toolPose(applyDir(hover, [0, 0, -0.06]).map((v, k) => v + hover.p[k]) as V3, applyDir(hover, [0, 0, 1]), [-hover.p[0], -hover.p[1], 0]) }),
+    onTick: (snap) => {
+      if (Number.isNaN(locatedAt) && snap.events.some((e) => e.kind === "part-located")) locatedAt = snap.t;
+    },
+  });
+  check("located from its own markers on sight (< 0.5 s), holes < 0.8 mm", locatedAt < 0.5 && holeErrMm(s, part) < 0.8, `located at ${f2(locatedAt)} s, worst hole ${f2(holeErrMm(s, part))} mm, no touch`);
+  let t0 = 1.6;
+  for (const name of ["S4", "C2"]) {
+    const r = driveScrew(s, name, t0, () => part, world, d);
+    t0 += 6.2;
+    check(`${name} (${r.face}): seated at ${r.depthMm} mm, tip p95 < 1 mm`, r.ready > 0 && r.seated && pct(r.tips, 95) < 1 && r.falseReady === 0, `ready ${r.ready}, seated ${r.seated}, tip p95 ${f2(pct(r.tips, 95))} mm, angle p95 ${f3(pct(r.angles, 95))}°`);
+  }
+  s.dispose();
+});
+
+await scenario("gestures", "Gestures with the tool on real camera frames: two taps confirm, a twist moves on, nothing else fires", () => {
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool });
+  const a2 = BOARD_TARGETS[1];
+  const d: Disturbance = { ...DEFAULT_DISTURBANCE, vibrationMm: 0, vibrationDeg: 0 };
+  // tip height (mm above the sheet) and roll (deg) over time
+  const script = (t: number): { z: number; roll: number } => {
+    if (t < 1.5) return { z: 30 * (1 - t / 1.5), roll: 0 }; // approach
+    if (t < 3) return { z: 0, roll: 0 }; // rest on the mark (not a tap)
+    if (t < 3.6) return { z: 4, roll: 0 };
+    const tap = (t0: number) => t >= t0 && t < t0 + 0.14;
+    if (tap(3.6) || tap(4.05)) return { z: 0, roll: 0 };
+    if (t < 5.4) return { z: 4, roll: 0 };
+    if (t < 6.2) return { z: 4, roll: 72 * (1 - Math.abs((t - 5.8) / 0.4)) }; // twist out and back
+    if (t < 7) return { z: 4, roll: 0 };
+    return { z: 4, roll: Math.min(80, (t - 7) * 40) }; // a slow turn that stays: not a twist
+  };
+  const toolAt = (t: number) => {
+    const sc = script(t);
+    const h = disturb({ tipWorld: [a2.x + 0.0002, a2.y, sc.z / 1000], yawDeg: 0.2, pitchDeg: -0.1, twistDeg: sc.roll }, t, "align", d);
+    return { toolW: toolWorldFromHold(core, rig, h) };
+  };
+  const seen: { kind: string; t: number }[] = [];
+  drive({ session: s, from: 0, to: 10, latency: 0.04, disturbance: d, toolAt, onTick: (snap) => snap.events.forEach((e) => e.kind.startsWith("gesture") && seen.push({ kind: e.kind, t: snap.t })) });
+  const taps = seen.filter((x) => x.kind === "gesture-tap"), twists = seen.filter((x) => x.kind === "gesture-twist");
+  check("two taps of the tip: one confirm, right after the second tap", taps.length === 1 && taps[0].t > 4.1 && taps[0].t < 4.7, taps.map((x) => `${f2(x.t)} s`).join(", ") || "none");
+  check("a twist out and back: one next; the slow turn is not one", twists.length === 1 && twists[0].t > 5.9 && twists[0].t < 6.6, twists.map((x) => `${f2(x.t)} s`).join(", ") || "none");
+  s.dispose();
+});
+
+await scenario("nogo", "No-go zones on real camera frames: a pipe behind A2 blocks it, A3 is free", () => {
+  const def = smartToolsScene({ tool });
+  def.nodes.push({ name: "pipe", parent: "sheet", kind: "display", local: { p: [0, -0.02, -0.018] } });
+  def.navigation.keepouts = [{ node: "pipe", half: [0.2, 0.01, 0.01], marginMm: 6 }];
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool, scene: def });
+  const on = (i: number) => {
+    const t = BOARD_TARGETS[i];
+    return (tt: number) => ({ toolW: toolWorldFromHold(core, rig, disturb({ tipWorld: [t.x + 0.0002, t.y, 0], yawDeg: 0.1, pitchDeg: -0.05, twistDeg: 0 }, tt, "align", DEFAULT_DISTURBANCE)) });
+  };
+  let readyA2 = 0, readyA3 = 0, gateA2 = 0;
+  drive({ session: s, from: 0, to: 3, latency: 0.04, toolAt: on(1), onTick: (x) => { readyA2 += x.ready ? 1 : 0; gateA2 |= x.gate; } });
+  drive({ session: s, from: 3, to: 6, latency: 0.04, toolAt: on(2), onTick: (x) => (readyA3 += x.ready ? 1 : 0) });
+  check("A2 (pipe 8 mm behind it) never ready: no-go zone", readyA2 === 0 && (gateA2 & 256) === 256, `${readyA2} ready ticks, gate ${gateA2}`);
+  check("A3 (clear of the pipe) is ready", readyA3 > 0, `${readyA3} ready ticks`);
   s.dispose();
 });
 

@@ -120,6 +120,11 @@ function material(m: Material): THREE.Material {
     opacity: m.opacity ?? 1,
   });
   mat.userData.baseOpacity = m.opacity ?? 1;
+  if (m.xray) {
+    mat.depthTest = false;
+    mat.depthWrite = false;
+    mat.transparent = true;
+  }
   return mat;
 }
 
@@ -190,6 +195,32 @@ function buildVisual(v: Visual3D, o: Scene3DOptions, into: THREE.Object3D, brigh
           into.add(c);
         }
       }
+      return null;
+    }
+    case "markerPatch": {
+      // paper + markers drawn into a texture (crisp at any zoom, one mesh)
+      const ppm = 2400; // pixels per metre
+      const c = document.createElement("canvas");
+      c.width = Math.max(8, Math.round(v.half[0] * 2 * ppm));
+      c.height = Math.max(8, Math.round(v.half[1] * 2 * ppm));
+      const g = c.getContext("2d")!;
+      g.fillStyle = "#f4f6f8";
+      g.fillRect(0, 0, c.width, c.height);
+      const cell = (v.size / 8) * ppm;
+      for (const m of v.markers) {
+        const x0 = (m.x - v.size / 2 + v.half[0]) * ppm, y0 = (v.half[1] - m.y - v.size / 2) * ppm;
+        g.fillStyle = "#111418";
+        g.fillRect(x0, y0, v.size * ppm, v.size * ppm);
+        if (!o.markerCodes) continue;
+        g.fillStyle = "#f4f6f8";
+        for (let i = 0; i < 36; i++) if (o.markerCodes[m.id * 36 + i] === 1) g.fillRect(x0 + cell * (1 + (i % 6)), y0 + cell * (1 + Math.floor(i / 6)), cell + 0.5, cell + 0.5);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 });
+      mat.userData.baseOpacity = 1;
+      into.add(new THREE.Mesh(new THREE.PlaneGeometry(v.half[0] * 2, v.half[1] * 2), mat));
       return null;
     }
     case "mesh": {

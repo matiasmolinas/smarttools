@@ -440,7 +440,7 @@ Each phase ends with the scene test passing 17/17 (plus its new checks), so noth
 
 ---
 
-## 16. Implementation status (v0.2)
+## 16. Implementation status (v0.3)
 
 ### 16.1 Where each part lives
 
@@ -487,6 +487,27 @@ whole job is navigated headless.
 | `reorder` | Frames arrive out of order (up to 2.5 frame intervals): merged, none dropped, accuracy kept, no false "ready" |
 | `angled` | A hole planned 15° off the normal: chosen, "ready", depth and angle measured along its own axis |
 | `safety` | Camera covered, uncalibrated dock, shaking hand: never "ready"; tilting 1.2° while drilling raises the angle alarm |
+| `assembly` | A 3D part registered by four touches of the tip (paired-point registration in Rust), verified on two unused points, screws driven on the top and a 35° chamfer |
+| `anchors` | Stickers stuck on the registered part are learned from images; the part is turned 25° and slid 4 cm and still followed; a screw driven on it, another with the sheet covered (the part is the reference); a 1.2 mm slip while driving raises the part-moved alarm |
+| `factory` | A part with markers at known CAD positions is located on sight (no touch); two screws driven |
+| `gestures` | Two taps of the tip = one confirm; a twist out and back = one next; resting on a mark and a slow turn are not gestures |
+| `nogo` | A pipe behind A2: never "ready" there (gate reason KEEP_OUT); A3 is ready |
+
+### 16.4 Parts, safety and gestures (v0.3 of the engine, ABI 5)
+
+| Feature | Where | Rule |
+|---|---|---|
+| Paired-point registration | `calib::register_points` (Horn, quaternion), `st_register_points` | ≥ 3 non-collinear points; returns the transform, FRE and the largest residual |
+| Located parts | `NOT_LOCATED` (128) | A target whose part (a calibrated node above it) is not calibrated never opens the gate; depth only counts inside the hole (lateral < `engage_offset`) and on a located part |
+| Per-target depth | `set_target_depths` | Each screw seats at its own depth |
+| Decisions on measured poses | `measured_tool_world` | Phases, the gate, depth events, alarms and gestures use the last measured pose; the latency prediction is for display only (it overshoots when the tool stops against a part) |
+| Movable parts (anchors, factory markers) | `set_movable`, `ingest_part` | A measurement of the camera against markers on a part (a calibrated node under a movable one) updates the part when the camera was placed by a fixed reference in the same frame; otherwise a located part is itself the reference. The first such measurement of a part whose markers are known locates it (`PartLocated`). Markers not known on the part are ignored |
+| Part slip | `PART_MOVED` alarm (8), `PartMoved` event | While drilling, the active hole moving more than 0.5 mm or 1° from where it was over the first 0.2 s of drilling, for at least 0.1 s, raises the alarm (a single noisy reading of a part's small markers under motor vibration gave false alarms). It needs a fixed reference in view (with only the part's markers, a slip cannot be told from the camera moving) |
+| No-go zones | `add_keepout`, `KEEP_OUT` gate reason (256), `KEEP_OUT` alarm (16), `KeepOut` event | Boxes in a node's frame with a margin. A hole whose path (surface to 3 mm past its depth) comes within the margin is refused; a tip within it while drilling raises the alarm |
+| Feed advice | `FeedFast`, `Stalled` events; `set_feed_limit` (12 mm/s default) | Faster than the limit over 0.3 s; less than 0.2 mm of progress in 1.5 s while drilling |
+| Gestures | `gesture.rs`, `GestureTap`, `GestureTwist` events | Double tap: two touches (gap < 0.6 mm, lifted > 1.5 mm) shorter than 0.45 s, 1 s apart. Twist: > 50° about the bit and back within 15°, inside 1.2 s. Never while drilling or before the tool is calibrated |
+| Camera simulator | `sim.rs`: convex solids and marker stickers, nearest-hit ray casting | Parts hide the sheet; stickers are drawn on faces; the bit is drawn in front of the nearest surface only |
+| 3D pose refinement | `pose::refine_pose3`, `st_refine_pose3` | Markers on several faces of a part, refined together (`lib/anchors.ts` solves on the best sticker, then refines on all) |
 
 ## 17. Visual representations (render-agnostic elements)
 

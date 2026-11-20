@@ -102,10 +102,16 @@ export class ScenarioRun {
       this.lastPush = this.lastPush === -Infinity ? t : this.lastPush + 1 / MEASURE_HZ;
       if (!seen) continue;
       const tc = Math.max(this.lastPush - LATENCY_S, 0);
-      const toolW = this.scenario.tool(this.ctx(tc, seg)).toolW;
+      const ctc = this.ctx(tc, seg);
+      const toolW = this.scenario.tool(ctc).toolW;
       const camW = compose(toolW, inverse(toolLocal(seg.rig.tool)));
       // the sheet is the world origin: the tracker would see T_camera_sheet = camW⁻¹
-      e.push(built.ids[nav.tracked], built.ids[nav.reference], inverse(camW), tc, ts.markers ?? 9, 0.3);
+      if (this.scenario.sheetSeen?.(ctc) !== false) e.push(built.ids[nav.tracked], built.ids[nav.reference], inverse(camW), tc, ts.markers ?? 9, 0.3);
+      // markers on parts: T_camera_body
+      for (const b of this.scenario.bodies?.(ctc) ?? []) {
+        const id = built.ids[b.node];
+        if (id != null) e.push(built.ids[nav.tracked], id, compose(inverse(camW), b.world), tc, 10, 0.35);
+      }
     }
     if (e.advance(t) > 0 || !this.snap) {
       this.snap = e.snapshot();

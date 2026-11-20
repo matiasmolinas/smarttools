@@ -200,6 +200,8 @@ pub mod reason {
     pub const UNSTEADY: u32 = 64;
     /** the target's part has not been located (registered) yet */
     pub const NOT_LOCATED: u32 = 128;
+    /** the screw's path passes too close to a no-go zone (a pipe, a cable, another screw) */
+    pub const KEEP_OUT: u32 = 256;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -232,6 +234,8 @@ pub struct GateInput {
     pub calibrated: bool,
     /// the active target's part is located (registered); true for fixed targets
     pub located: bool,
+    /// the active target's path passes through a no-go zone
+    pub keep_out: bool,
     pub pose_age_s: f64,
     pub rms_px: f64,
     pub markers: u32,
@@ -249,6 +253,9 @@ pub fn gate(i: &GateInput, l: &GateLimits) -> u32 {
     let mut r = 0;
     if !i.calibrated {
         r |= NOT_CALIBRATED;
+    }
+    if i.keep_out {
+        r |= KEEP_OUT;
     }
     if !i.located {
         r |= NOT_LOCATED;
@@ -331,12 +338,13 @@ mod tests {
     #[test]
     fn gate_reasons() {
         use reason::*;
-        let ok = GateInput { calibrated: true, located: true, pose_age_s: 0.03, rms_px: 0.4, markers: 4, angle_err_deg: 0.2, offset_mm: 0.4, jitter_mm: 0.1, jitter_deg: 0.05 };
+        let ok = GateInput { calibrated: true, located: true, keep_out: false, pose_age_s: 0.03, rms_px: 0.4, markers: 4, angle_err_deg: 0.2, offset_mm: 0.4, jitter_mm: 0.1, jitter_deg: 0.05 };
         let l = GateLimits::default();
         assert_eq!(gate(&ok, &l), 0);
         assert_eq!(gate(&GateInput { angle_err_deg: 0.5, ..ok }, &l), TILTED);
         assert_eq!(gate(&GateInput { offset_mm: f64::NAN, calibrated: false, ..ok }, &l), OFF_TARGET | NOT_CALIBRATED);
         assert_eq!(gate(&GateInput { pose_age_s: 1.0, markers: 1, rms_px: 3.0, jitter_mm: f64::INFINITY, ..ok }, &l), STALE | FEW_MARKERS | POOR_FIT | UNSTEADY);
         assert_eq!(gate(&GateInput { located: false, ..ok }, &l), NOT_LOCATED);
+        assert_eq!(gate(&GateInput { keep_out: true, ..ok }, &l), KEEP_OUT);
     }
 }

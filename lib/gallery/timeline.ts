@@ -10,6 +10,8 @@ export interface Key {
   t: number;
   tip: V3;
   axis: V3;
+  /** the drill turned about its bit (deg), for twist gestures */
+  roll?: number;
 }
 
 export interface Chapter {
@@ -58,6 +60,23 @@ export class Timeline {
     const k = this.keys[this.keys.length - 1];
     return this.to(k.tip, k.axis, dur);
   }
+  /** two quick taps of the tip on a surface point (a "confirm" gesture), starting 4 mm above it */
+  doubleTap(p: V3, axis: V3 = [0, 0, -1]) {
+    const a = unit(axis);
+    const up: V3 = [p[0] - a[0] * 0.004, p[1] - a[1] * 0.004, p[2] - a[2] * 0.004];
+    this.to(up, a, 0.5).hold(0.3);
+    for (let i = 0; i < 2; i++) this.to(p, a, 0.09).hold(0.08).to(up, a, 0.1).hold(0.15);
+    return this.hold(0.4);
+  }
+  /** turn the drill about its bit by `deg` and back (a "next" gesture) */
+  twist(deg = 70, dur = 0.8) {
+    const k = this.keys[this.keys.length - 1];
+    this.t += dur / 2;
+    this.keys.push({ t: this.t, tip: k.tip, axis: k.axis, roll: deg });
+    this.t += dur / 2;
+    this.keys.push({ t: this.t, tip: k.tip, axis: k.axis, roll: 0 });
+    return this;
+  }
   action(id: string, delay = 0) {
     this.actions.push({ at: this.t + delay, id });
     return this;
@@ -73,7 +92,9 @@ export class Timeline {
     return this;
   }
   /** a full screw cycle at a (true) hole frame: approach tilted, align, lock, drive, seat, back out */
-  screw(name: string, hole: Xf, depthMm: number, speed = 1) {
+  screw(name: string, hole: Xf, depthMm: number, speed = 1, o: { driveTiltDeg?: number; offsetMm?: number } = {}) {
+    const tilt = o.driveTiltDeg ?? 0.1;
+    const off = (o.offsetMm ?? 0.1) / 1000;
     const at = (p: V3, tiltDeg: number) => {
       const w = compose(hole, xf(p, qaxis([1, 0.5, 0], (tiltDeg * Math.PI) / 180)));
       return { tip: w.p, axis: applyDir(w, [0, 0, 1]) };
@@ -82,12 +103,12 @@ export class Timeline {
     const start = this.t;
     go(at([0.005, -0.004, -0.026], 4), 0.7);
     go(at([0.0004, 0.0002, 0], 1.6), 0.6);
-    go(at([0.0001, 0, 0], 0.1), 0.5);
+    go(at([off, 0, 0], tilt), 0.5);
     this.hold(0.5 / speed);
-    go(at([0.0001, 0, (depthMm / 1000) * 1.004], 0.1), 1.0);
+    go(at([off, 0, (depthMm / 1000) * 1.004], tilt), 1.0);
     const seated = this.t;
     this.hold(0.25 / speed);
-    go(at([0.0001, 0, -0.02], 0.1), 0.45);
+    go(at([off, 0, -0.02], tilt), 0.45);
     this.screws[name] = [start, seated];
     return this;
   }
@@ -109,7 +130,8 @@ export class Timeline {
     const axis = unit(lerp3(a.axis, b.axis, u));
     const tr = 0.00012 * tremor;
     const jitter: V3 = [tr * Math.sin(t * 2 * Math.PI * 9.3), tr * Math.sin(t * 2 * Math.PI * 11.1 + 1), 0];
-    return compose(toolAt(tip, axis, towardSheet(tip)), xf(jitter));
+    const roll = (a.roll ?? 0) + ((b.roll ?? 0) - (a.roll ?? 0)) * u;
+    return compose(toolAt(tip, axis, towardSheet(tip)), xf(jitter, qaxis([0, 0, 1], (roll * Math.PI) / 180)));
   }
 
   chapterAt(t: number): Chapter | null {

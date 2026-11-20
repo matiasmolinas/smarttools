@@ -7,9 +7,10 @@
 // hole is a target frame (+Z = driving direction) that is a child of its part, so registering the part
 // moves all its holes with it (docs/ENGINE_SPEC.md §4, §9).
 
-import type { NavCore, NavEngine, ToolCalib } from "./engine.ts";
+import type { NavCore, NavEngine, SolidSpec, ToolCalib } from "./engine.ts";
+import { boxPlanes, gridSticker, type MarkerBody, type StickerDef } from "./anchors.ts";
 import { smartToolsScene, type NodeDef, type SceneDef, type Visual3D } from "./scenedef.ts";
-import { applyPoint, compose, inverse, qaxis, qfromTo, qmul, xf, type Q, type Xf } from "./xform.ts";
+import { applyPoint, compose, inverse, qaxis, qfromM3, qfromTo, qmul, xf, type Q, type Xf } from "./xform.ts";
 import type { V3 } from "./pose.ts";
 
 const MM = 0.001;
@@ -81,6 +82,52 @@ export const BASE_ON_BENCH: Xf = xf([0.232, -0.082, 0], qaxis([0, 0, 1], (96 * M
 /** Where the CAD places the base before registering (a rough guess: ~2 cm and 7° off). */
 export const BASE_NOMINAL: Xf = xf([0.25, -0.07, 0], qaxis([0, 0, 1], (89 * Math.PI) / 180));
 
+// ---------------- markers on the part (anchors) ----------------
+
+/** A sticker frame on a face: centre `c`, outward normal `n`, in-plane x direction `x` (part frame). */
+function faceFrame(c: V3, n: V3, x: V3): Xf {
+  const y: V3 = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+  // columns x, y, n → row-major M3
+  return xf(c, qfromM3([x[0], y[0], n[0], x[1], y[1], n[1], x[2], y[2], n[2]]));
+}
+
+/** Where marker stickers go on the base (ids 40+, not on the sheet): faces the camera sees from behind
+ * the bit while driving, away from holes and touch points. Also the base's factory markers. */
+export const BASE_STICKERS: StickerDef[] = [
+  // on the top, in front of the tower and beside it (between the screws)
+  gridSticker("top", faceFrame([0.08, 0.045, BASE.z], [0, 0, 1], [1, 0, 0]), 40, 3, 1, 0.014),
+  gridSticker("top-left", faceFrame([0.0275, 0.0725, BASE.z], [0, 0, 1], [1, 0, 0]), 43, 2, 1, 0.014),
+  gridSticker("top-right", faceFrame([0.1325, 0.0725, BASE.z], [0, 0, 1], [1, 0, 0]), 45, 2, 1, 0.014),
+  // the tower's faces
+  gridSticker("tower-back", faceFrame([0.08, TOWER.y1, 0.068], [0, 1, 0], [-1, 0, 0]), 47, 2, 2, 0.016),
+  gridSticker("tower-front", faceFrame([0.08, TOWER.y0, 0.068], [0, -1, 0], [1, 0, 0]), 51, 2, 2, 0.016),
+  gridSticker("tower-left", faceFrame([TOWER.x0, 0.085, 0.068], [-1, 0, 0], [0, -1, 0]), 55, 2, 2, 0.016),
+  // the block's back and sides
+  gridSticker("back", faceFrame([0.03, BASE.y, 0.015], [0, 1, 0], [-1, 0, 0]), 59, 2, 1, 0.016),
+  gridSticker("back-right", faceFrame([0.132, BASE.y, 0.015], [0, 1, 0], [-1, 0, 0]), 61, 2, 1, 0.016),
+  gridSticker("left", faceFrame([0, 0.075, 0.015], [-1, 0, 0], [0, -1, 0]), 63, 3, 1, 0.016),
+];
+/** The base's markers as the engine body (a calibrated node "base-markers" under "base"). */
+export const BASE_BODY: MarkerBody = { name: "base-markers", stickers: BASE_STICKERS };
+
+/** The base and the bracket as convex solids for the camera simulator (part frames). */
+export function baseSolids(partW: Xf): SolidSpec[] {
+  const a = (CHAMFER.deg * Math.PI) / 180;
+  const n = CHAMFER_N;
+  const block = [...boxPlanes([0, 0, 0], [BASE.x, BASE.y, BASE.z]), [n[0], n[1], n[2], n[1] * CHAMFER.depthY + n[2] * BASE.z] as [number, number, number, number]];
+  void a;
+  return [
+    { pose: partW, planes: block, shade: 168 },
+    { pose: partW, planes: boxPlanes([TOWER.x0, TOWER.y0, BASE.z - 0.0005], [TOWER.x1, TOWER.y1, TOWER.top]), shade: 168 },
+  ];
+}
+export function bracketSolids(bracketW: Xf): SolidSpec[] {
+  return [
+    { pose: bracketW, planes: boxPlanes([-0.035, -0.035, -0.006], [0.035, 0.035, 0]), shade: 190 },
+    { pose: bracketW, planes: boxPlanes([-0.035, 0.029, 0], [0.035, 0.035, 0.05]), shade: 190 },
+  ];
+}
+
 const C = { metal: "#9fb3c8", dark: "#1f2a36", cyan: "#5ad8ff", amber: "#ffb547", green: "#3dffa8", white: "#e8eef5" };
 const alu = (opacity = 0.92) => ({ color: C.metal, metalness: 0.55, roughness: 0.45, opacity, edges: true });
 
@@ -124,6 +171,13 @@ export interface AssemblyOptions {
   /** the bracket's pose relative to the base (default: as designed) */
   bracketPose?: Xf;
   phone?: string;
+  /** markers on the base: "factory" (known from the CAD, they locate it) or "learned" (stuck on it, learned
+   * after registering by touch). The base becomes a movable part followed through them. */
+  anchors?: "factory" | "learned";
+  /** where the stickers are on the base (default: the planned spots) */
+  stickers?: StickerDef[];
+  /** holes added later (by a remote expert): in the scene, not yet in the job */
+  extraHoles?: ScrewSpec[];
 }
 
 /**
@@ -138,6 +192,15 @@ export function assemblyScene(o: AssemblyOptions): SceneDef {
   const nodes: NodeDef[] = [...keep.filter((n) => n.name === "sheet")];
   const local = (t: Xf) => ({ p: t.p, q: t.q as Q });
   nodes.push({ name: "base", kind: "calibrated", local: local(o.basePose ?? BASE_NOMINAL), visual3d: baseVisuals(), meta: { part: "robot-arm base", material: "aluminium" } });
+  if (o.anchors) {
+    nodes.push({
+      name: BASE_BODY.name,
+      parent: "base",
+      kind: "calibrated",
+      visual3d: (o.stickers ?? BASE_STICKERS).map((st) => ({ kind: "markerPatch" as const, half: st.half, size: st.size, markers: st.markers, offset: { p: applyPoint(st.pose, [0, 0, 0.0004]), q: st.pose.q as Q } })),
+      meta: { markers: o.anchors },
+    });
+  }
   for (const f of FIDUCIALS) nodes.push({ name: f.name, parent: "base", kind: "display", local: { p: f.p }, visual3d: dimple(C.amber), visual2d: [{ kind: "dot", radius: 0.002, color: C.amber }, { kind: "label", text: f.name, color: C.amber }] });
   for (const k of CHECKPOINTS) nodes.push({ name: k.name, parent: "base", kind: "display", local: { p: k.p }, visual3d: dimple(C.white), visual2d: [{ kind: "dot", radius: 0.002, color: C.white }] });
   nodes.push({
@@ -164,6 +227,10 @@ export function assemblyScene(o: AssemblyOptions): SceneDef {
     });
     nodes.push({ name: `${s.name}-screw`, parent: s.name, kind: "display", visual3d: screwVisuals(s.depthMm) });
   }
+  for (const s of o.extraHoles ?? []) {
+    nodes.push({ name: s.name, parent: s.part, kind: "planned", local: local(s.frame), visual3d: holeVisuals(s.depthMm, "#ffb547"), visual2d: [{ kind: "crosshair", size: 0.004, label: s.name }], meta: { depthMm: s.depthMm, size: s.size, face: s.face } });
+    nodes.push({ name: `${s.name}-screw`, parent: s.name, kind: "display", visual3d: screwVisuals(s.depthMm) });
+  }
   nodes.push(...keep.filter((n) => n.name !== "sheet"));
   // the hex bit on its own node, so a camera view can hide the drill body but still show the bit
   nodes.push({
@@ -175,11 +242,25 @@ export function assemblyScene(o: AssemblyOptions): SceneDef {
       { kind: "cylinder", radius: 0.0055, length: 0.065, axis: "z", offset: { p: [0, 0, -0.0775] }, material: { color: "#9aa6b2", metalness: 0.9, roughness: 0.3 } },
     ],
   });
-  return { name: "robot-arm-base", nodes, navigation: { tool: "tool", targets: SCREWS.map((s) => s.name), tracked: "camera", reference: "sheet" } };
+  return {
+    name: "robot-arm-base",
+    nodes,
+    navigation: {
+      tool: "tool",
+      targets: SCREWS.map((s) => s.name),
+      tracked: "camera",
+      reference: "sheet",
+      // screws are pulled in by their thread: no "pushing too hard" advice
+      feedLimitMmS: 40,
+      ...(o.anchors ? { movable: ["base"], known: o.anchors === "factory" ? [BASE_BODY.name] : [] } : {}),
+    },
+  };
 }
 
 /** Depths per target, in the scene's navigation order. */
 export const SCREW_DEPTHS = SCREWS.map((s) => s.depthMm);
+/** A hole a remote expert adds on the top, between S3 and the tower. */
+export const REMOTE_HOLE: ScrewSpec = { name: "R1", part: "base", frame: holeFrame([0.118, 0.072, BASE.z], UP), depthMm: 12, size: "M4×12", face: "top" };
 
 // ---------------- registration and probing with the bit tip ----------------
 

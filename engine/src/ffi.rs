@@ -15,7 +15,7 @@ use crate::subpix::{self, Rgba};
 use std::alloc::{alloc, dealloc, Layout};
 use std::slice;
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 #[no_mangle]
 pub extern "C" fn st_abi_version() -> u32 {
@@ -117,6 +117,23 @@ pub unsafe extern "C" fn st_refine_pose(
         return -1;
     }
     let p = pose::refine_pose(&read_pose(pose_in), &w, &i, &Intrinsics { f, cx, cy }, iters as usize);
+    write_pose(out, &p);
+    1
+}
+
+/// Gauss-Newton refinement for 3D points (markers on several faces of a part).
+///
+/// # Safety
+/// `pose_in`, `out`: 13 `f64`; `world`: `3n`; `img`: `2n`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn st_refine_pose3(pose_in: *const f64, world: *const f64, img: *const f64, n: usize, f: f64, cx: f64, cy: f64, iters: u32, out: *mut f64) -> i32 {
+    let Some(i) = points(img, n) else { return -1 };
+    if pose_in.is_null() || out.is_null() || world.is_null() {
+        return -1;
+    }
+    let w: Vec<[f64; 3]> = slice::from_raw_parts(world, 3 * n).chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let p = pose::refine_pose3(&read_pose(pose_in), &w, &i, &Intrinsics { f, cx, cy }, iters as usize);
     write_pose(out, &p);
     1
 }
@@ -379,7 +396,7 @@ pub unsafe extern "C" fn st_gate(input: *const f64, limits: *const f64) -> u32 {
     let i = slice::from_raw_parts(input, 8);
     let gi = GateInput {
         calibrated: i[0] != 0.0,
-        located: true,
+        located: true, keep_out: false,
         pose_age_s: i[1],
         rms_px: i[2],
         markers: i[3].max(0.0) as u32,
@@ -512,9 +529,70 @@ pub unsafe extern "C" fn st_render(
     cfg: *const f64,
     out: *mut u8,
 ) -> i32 {
+    st_render_scene(cam, poses, n, width, height, ss, codes, cfg, std::ptr::null(), 0, out)
+}
+
+/// Parse solids and stickers: `[n_solids, (o 3, q 4, shade, n_planes, (n 3, d) * n_planes) * n_solids,
+/// n_stickers, (o 3, q 4, half 2, n_markers, (x, y, size, code) * n_markers) * n_stickers]`.
+fn parse_scene(v: &[f64]) -> Option<(Vec<sim::Solid>, Vec<sim::Sticker>)> {
+    let mut i = 0usize;
+    let mut next = |k: usize| -> Option<&[f64]> {
+        let r = v.get(i..i + k)?;
+        i += k;
+        Some(r)
+    };
+    let frame = |a: &[f64]| ([a[0], a[1], a[2]], crate::scene::Quat::new(a[3], a[4], a[5], a[6]).normalize().to_matrix());
+    let ns = next(1)?[0] as usize;
+    let mut solids = Vec::with_capacity(ns.min(64));
+    for _ in 0..ns.min(64) {
+        let h = next(9)?;
+        let (o, r) = frame(h);
+        let (shade, np) = (h[7], h[8] as usize);
+        let planes = (0..np.min(32)).map(|_| next(4).map(|p| ([p[0], p[1], p[2]], p[3]))).collect::<Option<Vec<_>>>()?;
+        solids.push(sim::Solid { r, o, planes, shade });
+    }
+    let nt = next(1).map_or(0, |x| x[0] as usize);
+    let mut stickers = Vec::with_capacity(nt.min(64));
+    for _ in 0..nt.min(64) {
+        let h = next(10)?;
+        let (o, r) = frame(h);
+        let (half, nm) = ([h[7], h[8]], h[9] as usize);
+        let markers = (0..nm.min(64)).map(|_| next(4).map(|m| ([m[0], m[1]], m[2], m[3] as u64))).collect::<Option<Vec<_>>>()?;
+        stickers.push(sim::Sticker { r, o, half, markers });
+    }
+    Some((solids, stickers))
+}
+
+/// [`st_render`] with parts in the scene: convex solids and marker stickers (see `parse_scene`).
+///
+/// # Safety
+/// As [`st_render`]; `scene`: `scene_len` `f64` (may be null when 0).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn st_render_scene(
+    cam: *const f64,
+    poses: *const f64,
+    n: usize,
+    width: usize,
+    height: usize,
+    ss: usize,
+    codes: *const u8,
+    cfg: *const f64,
+    scene: *const f64,
+    scene_len: usize,
+    out: *mut u8,
+) -> i32 {
     if cam.is_null() || poses.is_null() || codes.is_null() || cfg.is_null() || out.is_null() || n == 0 || width == 0 || height == 0 {
         return -1;
     }
+    let (solids, stickers) = if scene.is_null() || scene_len == 0 {
+        (Vec::new(), Vec::new())
+    } else {
+        match parse_scene(slice::from_raw_parts(scene, scene_len)) {
+            Some(x) => x,
+            None => return -2,
+        }
+    };
     let c = slice::from_raw_parts(cfg, 64);
     let occ: Vec<Occluder> = (0..(c[18] as usize).min(14)).map(|k| Occluder { cx: c[19 + k * 3], cy: c[20 + k * 3], r: c[21 + k * 3] }).collect();
     let ps = read_poses(poses, n);
@@ -529,6 +607,8 @@ pub unsafe extern "C" fn st_render(
         light: Lighting { gain: c[4], vignette: c[5], gradient: c[6], noise: c[7], seed: c[8] as u32 },
         bit: (c[9] != 0.0).then(|| Bit { tip_cam: [c[10], c[11], c[12]], axis_cam: [c[13], c[14], c[15]], length: c[16], radius: c[17] }),
         occluders: &occ,
+        solids: &solids,
+        stickers: &stickers,
     };
     sim::render(&spec, slice::from_raw_parts_mut(out, width * height * 4));
     1
@@ -892,6 +972,40 @@ pub unsafe extern "C" fn st_engine_set_target_depths(h: *mut Engine, depths: *co
         return;
     }
     (*h).set_target_depths(slice::from_raw_parts(depths, n));
+}
+
+/// Mark a located part as movable: measurements of the camera against markers on it (its anchors)
+/// update its pose instead of only the camera's.
+///
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_movable(h: *mut Engine, node: u32, on: i32) {
+    if !h.is_null() {
+        (*h).set_movable(node, on != 0);
+    }
+}
+
+/// Feed limit for the "pushing too hard" advice (mm/s).
+///
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_feed_limit(h: *mut Engine, mm_s: f64) {
+    if !h.is_null() {
+        (*h).set_feed_limit(mm_s);
+    }
+}
+
+/// Add a no-go zone: a box of half sizes (m) in `node`'s frame, kept clear by `margin_mm`.
+///
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_add_keepout(h: *mut Engine, node: u32, hx: f64, hy: f64, hz: f64, margin_mm: f64) {
+    if !h.is_null() {
+        (*h).add_keepout(crate::engine::KeepOut { node, half: [hx, hy, hz], margin_mm });
+    }
 }
 
 /// Paired-point registration: the rigid transform mapping `model` points onto `measured` points.

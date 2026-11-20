@@ -52,7 +52,7 @@ under ideal conditions, not the SmartTools application.
 
 ## Scenario gallery
 
-The home page opens with a 3D-assembly job (below) and has a gallery of thirteen scenarios. Each one runs the real
+The home page opens with a 3D-assembly job (below) and has a gallery of nineteen scenarios. Each one runs the real
 engine (WASM) on scripted tool motion and is drawn three ways from the same snapshots:
 
 - a 3D scene (the scene definition's `visual3d`: STL dock, drill, sheet);
@@ -62,6 +62,12 @@ engine (WASM) on scripted tool motion and is drawn three ways from the same snap
 | Scenario | What it shows |
 |---|---|
 | 3D assembly (main animation) | A robot-arm base: located by touch, verified, 10 screws on three faces, a bracket placed, probed and screwed |
+| Markers on the part | Stickers learned, the part moved and followed, the sheet covered, a slip caught |
+| Factory markers | A part that locates itself on sight |
+| Hands-free | Tap twice to confirm, twist to skip, sound guidance |
+| Learn from an expert | A ghost to follow and a score per screw |
+| Remote expert | A hole marked from afar lights up on the part |
+| No-go zones | A pipe behind a mark: refused; pushing too hard: flagged |
 | Locate by touch | Four touches with the bit tip register the part; its CAD model snaps onto it |
 | Screws on every face | Top and 35° chamfer, each screw along its own axis and to its own depth |
 | Verify a mount | A bracket 2 mm off is caught by probing before the first screw |
@@ -128,6 +134,51 @@ if they differ by more than 15 mm, which usually means the phone is the wrong wa
 is wrong. The Redmi 15 profile is provisional until measured. To check a phone's rig before printing, run
 `npm run test:e2e -- --phone redmi-15 --only rig`.
 
+## On the part: anchors, guidance, safety, hands-free
+
+The camera sees the job and the engine knows where every hole is, so the job can talk back. Each item is a scenario
+in the gallery, running on the real engine.
+
+- **Markers on the part (anchors).** After registering a part by touch, stick a few marker stickers on it anywhere.
+  The camera sees them once and learns where they are (`lib/anchors.ts`). From then on the part is a moving
+  reference: the engine follows it when it is moved or flipped, and it can replace the sheet. A part that slips in
+  the vise while driving raises an alarm.
+- **Factory markers.** A part with markers at known CAD positions is located and identified on sight. No touching.
+- **Guidance on the part** (`lib/guidance.ts`, drawn by `lib/render/guidance3d.ts` in the 3D view and in the
+  phone's view):
+  - the next hole glows, done screws turn green, and going out of order is flagged;
+  - an approach tunnel rises from the active hole, coloured by the error;
+  - x-ray shows the screw inside the part and the material left beyond its tip, and warns when it would break
+    through;
+  - the next part appears as a hologram where it goes, and turns green when the real one matches.
+- **No-go zones.** Pipes and cables are boxes in the scene. A hole whose path comes too close is refused (gate
+  reason `KEEP_OUT`), and a tip that comes too close while drilling raises an alarm.
+- **Feed advice.** The engine flags pushing too hard and a bit that has stopped advancing.
+- **Hands-free.** The drill is the remote: two taps of the tip confirm, a twist of the drill and back moves on (both
+  detected by the engine, `engine/src/gesture.rs`). A tone guides alignment and depth (`lib/audio.ts`; Sound
+  button in the HUD), and the phone vibrates when a screw seats.
+- **Learn from an expert.** An expert's run is replayed as a ghost tool one step ahead, and each screw gets a score
+  from what the engine measured (`lib/coach.ts`).
+- **Remote expert.** The engine streams poses, not video: a few kB/s. A remote expert sees the 3D scene live, marks a
+  hole, and it lights up on the operator's phone.
+- **Report.** Depth, angle and flags per screw, a heat map on the part, and an HTML or JSON report to download
+  (`lib/report.ts`).
+
+End-to-end with simulated camera images (`npm run test:e2e -- --only lens,dock,anchors,factory,gestures,nogo`):
+
+| | Result |
+|---|---|
+| Stickers learned from images | 7 of 9, each within 0.4 mm of where it was stuck (0.54 mm with the Redmi 15 profile) |
+| Part turned 25° and slid 4 cm | followed without touching it again: every hole within 0.2 mm |
+| Screw on the moved part / with the sheet covered | seated; tip p95 0.45 / 0.24 mm |
+| Part slips 1.2 mm while driving | part-moved alarm 0.21 s later (0.28 s with the Redmi 15), no false alarm before |
+| Factory markers | located 0.04 s after it was seen; holes within 0.13 mm; screws seated with tip p95 ≤ 0.5 mm |
+| Gestures | one confirm for two taps, one next for a twist; resting on a mark and a slow turn are not gestures |
+| No-go zone | never "ready" on a hole with a pipe behind it |
+
+A limit found on the way: a slip can only be told apart from the camera moving while a fixed reference (the sheet)
+is in view. With only the part's own markers in view, the part is the reference and a slip goes unnoticed.
+
 ## Hardware
 
 [`hardware/dock/`](hardware/dock/) holds the parametric, adjustable 3D-printable phone dock for cordless drill/drivers
@@ -185,9 +236,9 @@ the engine keeps 120 Hz.
 ### Tests
 
 ```bash
-npm run engine:test   # Rust: 50 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 39 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, session, renderers, gallery)
-npm run test:e2e      # 10 end-to-end scenarios, 40 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
+npm run engine:test   # Rust: 64 tests + TypeScript/Rust parity
+npm run test:unit     # TypeScript: 61 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery)
+npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 
 The end-to-end scenarios render camera frames with the simulator (lens distortion, the bit in view, hand tremor,
@@ -218,7 +269,10 @@ shutter, compression, autofocus, a real hand).
 | `components/HudScreen.tsx` | Full-screen phone HUD (`/hud`): camera, simulated camera, calibration flows |
 | `components/EngineLab.tsx` | `/engine`: the engine drawn in 3D, as a 2D plan and as the HUD |
 | `components/gallery/` | The home-page main animation (3D assembly) and the scenario gallery |
-| `lib/assembly.ts` | The 3D-assembly job: parts, screw holes as frames, registration and probing |
+| `lib/assembly.ts` | The 3D-assembly job: parts, screw holes as frames, registration and probing, stickers, solids |
+| `lib/anchors.ts` | Markers on parts: solving a part's pose from several faces, learning stickers |
+| `lib/guidance.ts`, `lib/render/guidance3d.ts` | Glow, approach tunnel, x-ray, order, heat map, ghost tool |
+| `lib/audio.ts`, `lib/coach.ts`, `lib/report.ts` | Sound guidance, scores against an expert, the job report |
 | `lib/sim.ts` | Scripted drilling animation for the landing page |
 | `lib/board.ts` | Marker sheet geometry and targets |
 

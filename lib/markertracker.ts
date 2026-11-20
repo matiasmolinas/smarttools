@@ -4,6 +4,7 @@
 // calibrations, which are computed from what it measured.
 
 import { markerCorners } from "./board.ts";
+import { bodyIds, solveBodies, type BodyPose, type MarkerBody } from "./anchors.ts";
 import type { Camera, NavCore, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
 
@@ -26,6 +27,8 @@ export interface TrackerFrame {
   focalLocked: boolean;
   /** the camera model used for this frame (for projecting overlays) */
   camera: Camera;
+  /** markers on parts (anchors): T_camera_body per body seen */
+  bodies: BodyPose[];
 }
 
 export type CaptureResult =
@@ -42,6 +45,10 @@ export class MarkerTracker {
   private fSamples: number[] = [];
   private fAuto: number | null = null;
   private cap: { kind: CaptureKind; poses: Pose[]; views: { world: P[]; img: P[]; pose: Pose }[] } | null = null;
+  private bodies: MarkerBody[] = [];
+  private bodyIds = new Set<number>();
+  /** markers on parts seen in the last frame, by id: undistorted corners (for learning stickers) */
+  lastBodyMarkers = new Map<number, P[]>();
 
   constructor(core: NavCore, detector: Detector, camera: Camera, cameraCalibrated: boolean) {
     this.core = core;
@@ -53,6 +60,12 @@ export class MarkerTracker {
   /** The camera model in use (with the self-calibrated focal length until the lens is calibrated). */
   get effectiveCamera(): Camera {
     return this.fAuto && !this.cameraCalibrated ? { ...this.camera, f: this.fAuto } : this.camera;
+  }
+
+  /** Markers on parts to track besides the sheet (their ids must not be the sheet's). */
+  setBodies(bodies: MarkerBody[]) {
+    this.bodies = bodies;
+    this.bodyIds = bodyIds(bodies);
   }
 
   setCamera(camera: Camera, calibrated: boolean) {
@@ -100,7 +113,9 @@ export class MarkerTracker {
 
   /** Process one frame captured at tCapture (seconds). */
   frame(img: Rgba, tCapture: number): TrackerFrame {
-    const known = this.det.detect(img).filter((m) => markerCorners(m.id));
+    const all = this.det.detect(img);
+    const known = all.filter((m) => markerCorners(m.id));
+    const onParts = all.filter((m) => this.bodyIds.has(m.id));
     const quads = this.core.refineMany(img, known.map((m) => m.corners));
     const world: P[] = [];
     const raw: P[] = [];
@@ -127,7 +142,16 @@ export class MarkerTracker {
       }
     }
     if (pose && this.cap) this.capture(world.filter((_, i) => keep[i >> 2]), raw.filter((_, i) => keep[i >> 2]), pose);
-    return { tCapture, pose, markers: kept, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam };
+    let bodies: BodyPose[] = [];
+    this.lastBodyMarkers = new Map();
+    if (onParts.length) {
+      const pq = this.core.refineMany(img, onParts.map((m) => m.corners));
+      const und = this.core.undistortPoints(cam, pq.flat());
+      onParts.forEach((m, i) => this.lastBodyMarkers.set(m.id, und.slice(i * 4, i * 4 + 4)));
+      bodies = solveBodies(this.core, this.bodies, this.lastBodyMarkers, { f: cam.f, cx: cam.cx, cy: cam.cy });
+      quads.push(...pq);
+    }
+    return { tCapture, pose, markers: kept, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam, bodies };
   }
 
   private sampleFocal(world: P[], und: P[], cam: Camera) {
