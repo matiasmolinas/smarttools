@@ -3,7 +3,8 @@
 // (scripts/engine-parity.mts); the rest (lens model, calibration, navigation, gate, simulator) is
 // tested end to end by scripts/scene-test.mts.
 
-import type { Intrinsics, M3, Pose, V3 } from "./pose";
+import type { Intrinsics, M3, Pose, V3 } from "./pose.ts";
+import { fromArray, toArray, type Xf } from "./xform.ts";
 
 type P = { x: number; y: number };
 
@@ -145,10 +146,143 @@ interface Exports {
   st_rig_pose(yaw: number, pitch: number, twist: number, tipWorld: number, tipCam: number, axisCam: number, out: number): number;
   st_render(cam: number, poses: number, n: number, w: number, h: number, ss: number, codes: number, cfg: number, out: number): number;
   st_board_info(out: number, cap: number): number;
+  st_engine_new(): number;
+  st_engine_free(h: number): void;
+  st_engine_configure(h: number, c: number): number;
+  st_engine_add_node(h: number, name: number, len: number, parent: number, kind: number, local: number): number;
+  st_engine_set_local(h: number, node: number, local: number): number;
+  st_engine_reparent(h: number, node: number, parent: number, keep: number): number;
+  st_engine_set_calibrated(h: number, node: number, ok: number): void;
+  st_engine_set_nav(h: number, tool: number, targets: number, n: number): void;
+  st_engine_start(h: number, t0: number): void;
+  st_engine_reset_job(h: number): void;
+  st_engine_push(h: number, from: number, to: number, t: number, tCapture: number, markers: number, rms: number): void;
+  st_engine_advance(h: number, tWall: number): number;
+  st_engine_now(h: number): number;
+  st_engine_snapshot(h: number, out: number, cap: number): number;
   st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
-export const ENGINE_ABI = 2;
+export const ENGINE_ABI = 3;
+
+// ---------------- engine (scene graph + clock) ----------------
+
+export type NodeKindName = "reference" | "tracked" | "calibrated" | "planned" | "derived" | "display";
+export const NODE_KINDS: NodeKindName[] = ["reference", "tracked", "calibrated", "planned", "derived", "display"];
+export type NodeStatus = "static" | "valid" | "predicted" | "stale" | "lost" | "uncalibrated";
+export const NODE_STATUS: NodeStatus[] = ["static", "valid", "predicted", "stale", "lost", "uncalibrated"];
+export type EnginePhase = "approach" | "align" | "drill" | "hold" | "retract";
+export const ENGINE_PHASES: EnginePhase[] = ["approach", "align", "drill", "hold", "retract"];
+export const EVENT_KINDS = ["", "target", "ready", "not-ready", "depth-reached", "drilled", "lost", "found", "angle-alarm", "overrun", "job-reset"] as const;
+export type EngineEventKind = (typeof EVENT_KINDS)[number];
+export const ALARMS = { DEPTH: 1, ANGLE: 2, LOST: 4 } as const;
+
+export interface EngineConfig {
+  tickHz: number;
+  maxCatchup: number;
+  predictMaxS: number;
+  predict: boolean;
+  staleAfterS: number;
+  lostAfterS: number;
+  historyS: number;
+  lockTimeS: number;
+  steadyWindowS: number;
+  depthTargetMm: number;
+  engageGapMm: number;
+  engageOffsetMm: number;
+  requirementAngleDeg: number;
+  limits: GateLimits;
+  posMinCutoff: number;
+  posBeta: number;
+  rotMinCutoff: number;
+  rotBeta: number;
+  dCutoff: number;
+}
+export const ENGINE_DEFAULTS: EngineConfig = {
+  tickHz: 120,
+  maxCatchup: 4,
+  predictMaxS: 0.12,
+  predict: true,
+  staleAfterS: 0.25,
+  lostAfterS: 0.6,
+  historyS: 0.25,
+  lockTimeS: 0.4,
+  steadyWindowS: 0.5,
+  depthTargetMm: 35,
+  engageGapMm: 3,
+  engageOffsetMm: 6,
+  requirementAngleDeg: 0.5,
+  limits: { maxAngleDeg: 0.4, maxOffsetMm: 0.75, maxRmsPx: 1.5, minMarkers: 2, maxPoseAgeS: 0.25, maxJitterMm: 0.4, maxJitterDeg: 0.25 },
+  posMinCutoff: 2,
+  posBeta: 3000,
+  rotMinCutoff: 2,
+  rotBeta: 300,
+  dCutoff: 1,
+};
+
+export interface TargetNav {
+  id: number;
+  drilled: boolean;
+  /** tip and bit axis in the target frame (+Z = planned drilling direction) */
+  tip: V3;
+  axis: V3;
+  aim: [number, number];
+  yawDeg: number;
+  pitchDeg: number;
+  angleErrDeg: number;
+  offsetMm: number;
+  gapMm: number;
+  depthMm: number;
+}
+export interface EngineEvent {
+  tick: number;
+  t: number;
+  kind: EngineEventKind;
+  node: number;
+  value: number;
+}
+export interface EngineSnapshot {
+  tick: number;
+  t: number;
+  nodes: { id: number; status: NodeStatus; age: number; world: Xf }[];
+  targets: TargetNav[];
+  /** index into targets, or -1 */
+  active: number;
+  phase: EnginePhase;
+  gate: number;
+  ready: boolean;
+  locking: boolean;
+  alarms: number;
+  jitterMm: number;
+  jitterDeg: number;
+  markers: number;
+  rmsPx: number;
+  poseAgeS: number;
+  events: EngineEvent[];
+  stats: { ticks: number; overruns: number; measurements: number; lateMerged: number; lateDropped: number; latencyS: number };
+}
+
+export interface NavEngine {
+  readonly handle: number;
+  configure(c: Partial<EngineConfig>): void;
+  addNode(name: string, parent: number, kind: NodeKindName, local: Xf): number;
+  setLocal(node: number, local: Xf): void;
+  reparent(node: number, parent: number, keepWorld?: boolean): void;
+  setCalibrated(node: number, ok: boolean): void;
+  setNavigation(tool: number, targets: number[]): void;
+  start(t0: number): void;
+  resetJob(): void;
+  /** a relation T_from_to seen by a tracker at tCapture */
+  push(from: number, to: number, t: Xf, tCapture: number, markers: number, rmsPx: number): void;
+  /** run the ticks due up to tWall; returns how many ran */
+  advance(tWall: number): number;
+  now(): number;
+  /** latest snapshot; its events are handed over once */
+  snapshot(): EngineSnapshot;
+  free(): void;
+}
+
+const SCENE_ERR: Record<number, string> = { [-1]: "bad arguments", [-2]: "unknown node", [-3]: "name taken", [-4]: "cycle", [-5]: "scale on a rigid node", [-6]: "the root is fixed" };
 export const ENGINE_URL = "/engine/nav_core.wasm";
 
 export class NavCore {
@@ -481,4 +615,117 @@ export class NavCore {
       return { markerSize: a[1], markers: pts(2, count), targets: pts(2 + count * 2, (n - 2 - count * 2) / 2) };
     });
   }
+
+  /** A navigation engine (scene graph + clock + checks), see docs/ENGINE_SPEC.md. */
+  createEngine(): NavEngine {
+    const x = this.x;
+    const h = x.st_engine_new();
+    let snapCap = 4096;
+    let snapPtr = x.st_alloc(snapCap * 8);
+    const xfIn = (ptr: number, t: Xf) => this.f64(ptr, 10).set(toArray(t));
+    const check = (r: number, what: string) => {
+      if (r < 0) throw new Error(`${what}: ${SCENE_ERR[r] ?? r}`);
+      return r;
+    };
+    return {
+      handle: h,
+      configure: (c) => {
+        const k = { ...ENGINE_DEFAULTS, ...c, limits: { ...ENGINE_DEFAULTS.limits, ...(c.limits ?? {}) } };
+        const l = k.limits;
+        this.with([26 * 8], ([p]) => {
+          this.f64(p, 26).set([k.tickHz, k.maxCatchup, k.predictMaxS, k.predict ? 1 : 0, k.staleAfterS, k.lostAfterS, k.historyS, k.lockTimeS, k.steadyWindowS, k.depthTargetMm, k.engageGapMm, k.engageOffsetMm, k.requirementAngleDeg, l.maxAngleDeg, l.maxOffsetMm, l.maxRmsPx, l.minMarkers, l.maxPoseAgeS, l.maxJitterMm, l.maxJitterDeg, k.posMinCutoff, k.posBeta, k.rotMinCutoff, k.rotBeta, k.dCutoff, 0]);
+          x.st_engine_configure(h, p);
+        });
+      },
+      addNode: (name, parent, kind, local) => {
+        const bytes = new TextEncoder().encode(name);
+        return this.with([Math.max(1, bytes.length), 80], ([n, l]) => {
+          new Uint8Array(x.memory.buffer, n, bytes.length).set(bytes);
+          xfIn(l, local);
+          return check(x.st_engine_add_node(h, n, bytes.length, parent, NODE_KINDS.indexOf(kind), l), `add node "${name}"`);
+        });
+      },
+      setLocal: (node, local) =>
+        this.with([80], ([l]) => {
+          xfIn(l, local);
+          check(x.st_engine_set_local(h, node, l), `set local of node ${node}`);
+        }),
+      reparent: (node, parent, keep = true) => {
+        check(x.st_engine_reparent(h, node, parent, keep ? 1 : 0), `reparent node ${node}`);
+      },
+      setCalibrated: (node, ok) => x.st_engine_set_calibrated(h, node, ok ? 1 : 0),
+      setNavigation: (tool, targets) =>
+        this.with([Math.max(4, targets.length * 4)], ([p]) => {
+          new Uint32Array(x.memory.buffer, p, targets.length).set(targets);
+          x.st_engine_set_nav(h, tool, p, targets.length);
+        }),
+      start: (t0) => x.st_engine_start(h, t0),
+      resetJob: () => x.st_engine_reset_job(h),
+      push: (from, to, t, tc, markers, rms) =>
+        this.with([80], ([p]) => {
+          xfIn(p, t);
+          x.st_engine_push(h, from, to, p, tc, markers, rms);
+        }),
+      advance: (tw) => x.st_engine_advance(h, tw),
+      now: () => x.st_engine_now(h),
+      snapshot: () => {
+        let n = x.st_engine_snapshot(h, snapPtr, snapCap);
+        if (n < 0) {
+          x.st_free(snapPtr, snapCap * 8);
+          snapCap = -n * 2;
+          snapPtr = x.st_alloc(snapCap * 8);
+          n = x.st_engine_snapshot(h, snapPtr, snapCap);
+        }
+        return parseSnapshot(this.f64(snapPtr, n));
+      },
+      free: () => {
+        x.st_free(snapPtr, snapCap * 8);
+        x.st_engine_free(h);
+      },
+    };
+  }
+}
+
+function parseSnapshot(a: Float64Array): EngineSnapshot {
+  const H = 24, N = 13, T = 16, E = 5;
+  const nNodes = a[2], nTargets = a[3], nEvents = a[15];
+  const nodes: EngineSnapshot["nodes"] = [];
+  let k = H;
+  for (let i = 0; i < nNodes; i++, k += N) nodes.push({ id: a[k], status: NODE_STATUS[a[k + 1]] ?? "lost", age: a[k + 2], world: fromArray(a, k + 3) });
+  const targets: TargetNav[] = [];
+  for (let i = 0; i < nTargets; i++, k += T)
+    targets.push({
+      id: a[k],
+      drilled: a[k + 1] === 1,
+      tip: [a[k + 2], a[k + 3], a[k + 4]],
+      axis: [a[k + 5], a[k + 6], a[k + 7]],
+      aim: [a[k + 8], a[k + 9]],
+      yawDeg: a[k + 10],
+      pitchDeg: a[k + 11],
+      angleErrDeg: a[k + 12],
+      offsetMm: a[k + 13],
+      gapMm: a[k + 14],
+      depthMm: a[k + 15],
+    });
+  const events: EngineEvent[] = [];
+  for (let i = 0; i < nEvents; i++, k += E) events.push({ tick: a[k], t: a[k + 1], kind: EVENT_KINDS[a[k + 2]] ?? "", node: a[k + 3], value: a[k + 4] });
+  return {
+    tick: a[0],
+    t: a[1],
+    nodes,
+    targets,
+    active: a[4],
+    phase: ENGINE_PHASES[a[5]] ?? "approach",
+    gate: a[6],
+    ready: a[7] === 1,
+    locking: a[8] === 1,
+    alarms: a[9],
+    jitterMm: a[10],
+    jitterDeg: a[11],
+    markers: a[12],
+    rmsPx: a[13],
+    poseAgeS: a[14],
+    events,
+    stats: { ticks: a[16], overruns: a[17], measurements: a[18], lateMerged: a[19], lateDropped: a[20], latencyS: a[21] },
+  };
 }

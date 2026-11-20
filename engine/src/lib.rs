@@ -17,11 +17,13 @@
 
 pub mod board;
 pub mod calib;
+pub mod engine;
 pub mod camera;
 pub mod ffi;
 pub mod geom;
 pub mod nav;
 pub mod pose;
+pub mod scene;
 pub mod sim;
 pub mod subpix;
 
