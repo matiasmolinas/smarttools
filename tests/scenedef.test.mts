@@ -53,3 +53,19 @@ test("the tool's local transform puts +Z on the calibrated bit axis", () => {
   assert.ok(z.every((v, i) => Math.abs(v - tool.axisCam[i] / n) < 1e-12));
   assert.deepEqual(l.p, tool.tipCam);
 });
+
+test("the dock and the drill are placed from one geometry (hardware/dock/dock.py)", async () => {
+  const { dockRig, DOCK } = await import("../lib/dockrig.ts");
+  const { compose, applyPoint } = await import("../lib/xform.ts");
+  for (const tiltDeg of [0, 10, 20]) {
+    const rig = dockRig({ tiltDeg });
+    const def = smartToolsScene({ tool: rig.tool, dockTiltDeg: tiltDeg });
+    const local = (n: string) => def.nodes.find((x) => x.name === n)!.local!;
+    // the bit tip through the tool node vs through the dock's saddle frame
+    const viaTool = local("tool").p!;
+    const d = local("dock");
+    const saddleToCam = { p: d.p!, q: d.q!, s: d.s! };
+    const viaDock = applyPoint(compose(saddleToCam, { p: [0, 0, 0], q: [1, 0, 0, 0], s: [1, 1, 1] }), [...DOCK.drill.tipX ? [DOCK.drill.tipX, 0, DOCK.drill.axisZ] : [0, 0, 0]] as [number, number, number]);
+    assert.ok(viaTool.every((v, i) => Math.abs(v - viaDock[i]) < 1e-9), `tilt ${tiltDeg}: ${viaTool} vs ${viaDock}`);
+  }
+});

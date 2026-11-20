@@ -9,6 +9,7 @@ import type { Camera, NavCore, RenderOptions, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
 import { applyDir, compose, fromPose, inverse, relative, toPose, type Xf } from "./xform.ts";
 import { toolLocal } from "./scenedef.ts";
+import { dockRig } from "./dockrig.ts";
 
 
 export type Phase = "approach" | "align" | "drill" | "hold" | "retract";
@@ -25,22 +26,33 @@ export interface Rig {
   bitRadius: number;
 }
 
-/** A Redmi-class main camera at 960x540 with mild barrel distortion, and a dock ~1.4° off. */
+const CAMERA_960: Camera = { f: 760, cx: 486, cy: 266, k1: -0.08, k2: 0.03, p1: 0, p2: 0 };
+
+/** The real dock v0.3 (hardware/dock/dock.py -> lib/dockgeom.ts) at 0° tilt, with a Redmi-class main
+ * camera at 960x540 and mild barrel distortion. */
 export const DEFAULT_RIG: Rig = {
-  camera: { f: 760, cx: 486, cy: 266, k1: -0.08, k2: 0.03, p1: 0, p2: 0 },
+  camera: CAMERA_960,
   width: 960,
   height: 540,
-  tool: { tipCam: [0.003, 0.058, 0.172], axisCam: norm([0.018, -0.016, 1]) },
+  tool: dockRig().tool,
   bitLength: 0.11,
   bitRadius: 0.003,
 };
 
-/** The same rig with the camera tilted down on the dock hinge (degrees), so the bit tip moves from the
- * bottom edge of the image toward its centre. The bit is no longer parallel to the optical axis; the
- * twist calibration measures the new axis. */
-export function tiltedRig(deg: number, base: Rig = DEFAULT_RIG): Rig {
+/** The idealised rig the first simulations used (camera 58 mm above the bit, 3 mm aside, 1.4° off). */
+export const IDEAL_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.003, 0.058, 0.172], axisCam: norm([0.018, -0.016, 1]) } };
+
+/** Dock v0.2 as designed (camera at the fixed-jaw end, top edge): 78 mm aside and 170 mm above the bit. */
+export const V02_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.078, 0.1696, 0.209], axisCam: [0, 0, 1] } };
+
+/** The dock v0.3 at a given hinge tilt (the camera moves with the arm about the pivot). */
+export function dockRigAt(tiltDeg: number, base: Rig = DEFAULT_RIG): Rig {
+  return { ...base, tool: dockRig({ tiltDeg }).tool };
+}
+
+/** A rig with the camera rotated down by `deg` about its own centre (used with the ideal rig). */
+export function tiltedRig(deg: number, base: Rig = IDEAL_RIG): Rig {
   const a = (deg * Math.PI) / 180;
-  // camera pitched down by a = points in the camera frame rotate up by a about the camera x axis
   const rot = (v: V3): V3 => [v[0], v[1] * Math.cos(a) - v[2] * Math.sin(a), v[1] * Math.sin(a) + v[2] * Math.cos(a)];
   return { ...base, tool: { tipCam: rot(base.tool.tipCam), axisCam: norm(rot(base.tool.axisCam)) } };
 }

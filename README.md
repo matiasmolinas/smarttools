@@ -52,9 +52,15 @@ under ideal conditions, not the SmartTools application.
 
 ## Hardware
 
-[`hardware/dock/`](hardware/dock/) holds a first design (v0.2, not printed yet) of a parametric, adjustable 3D-printable phone dock for cordless drill/drivers
-(split V clamp, Ø38–68 mm; phones 140–175 mm; ±15° tilt). It includes the STLs, the
+[`hardware/dock/`](hardware/dock/) holds the parametric, adjustable 3D-printable phone dock for cordless drill/drivers
+(v0.3, not printed yet): split V clamp for Ø38–68 mm bodies, phones 140–175 mm, 0–20° tilt. It includes the STLs, the
 [print and assembly guide](hardware/dock/README.md) and the Python generator (`dock.py`, manifold3d).
+
+`dock.py` also exports the dock's geometry (`hardware/dock/rig.json`, `lib/dockgeom.ts`). The scene simulator, the 3D
+view and the end-to-end tests place the camera, the bit and the dock parts from it, so the software is tested against
+the dock as designed. The simulator also caught a design error this way: v0.2 left the bit tip out of the camera's
+image and no marker in view on A1 (`npm run test:e2e -- --rig v02 --only rig`). v0.3 puts the camera right above the
+bit, with the tip 14° below the image centre.
 
 ## Run locally
 
@@ -100,8 +106,8 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 43 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 19 tests (transforms, engine wrapper, scene definitions, session, renderers)
-npm run test:e2e      # 8 end-to-end scenarios, 32 checks (add -- --tilt 12, -- --quick, -- --only drill)
+npm run test:unit     # TypeScript: 20 tests (transforms, engine wrapper, scene definitions, dock geometry, session, renderers)
+npm run test:e2e      # 9 end-to-end scenarios, 34 checks on the dock v0.3 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 
 The end-to-end scenarios render camera frames with the simulator (lens distortion, the bit in view, hand tremor,
@@ -110,13 +116,14 @@ feed the engine with capture timestamps and compare every snapshot with the grou
 
 | Scenario | Result (15 fps camera, 50 ms latency) |
 |---|---|
+| Rig (dock v0.3) | bit tip 14° below the image centre; 9–23 markers in view on every mark |
 | Lens calibration | focal length within 0.01 %, k1 within 0.001 |
-| Dock calibration | tip within 0.05 mm, axis within 0.03° |
-| Three holes with tremor and vibration (p95, aligning and drilling) | tip 0.23 mm, angle 0.15°, aim 0.30 mm, depth 0.20 mm |
+| Dock calibration | tip within 0.05 mm, axis within 0.003° |
+| Three holes with tremor and vibration (p95, aligning and drilling) | tip 0.24 mm, angle 0.13°, aim 0.30 mm, depth 0.19 mm |
 | Latency compensation (80 ms) | moving-tip error p95 10.4 mm → 3.7 mm |
 | Renderer at 20 Hz, a 300 ms stall | ~6 ticks skipped per frame; the stall reported as an overrun; no "ready" on old data |
 | Frames out of order | merged, none dropped |
-| A hole planned 15° off the normal | "ready" and drilled along its own axis (angle p95 0.03°) |
+| A hole planned 15° off the normal | "ready" and drilled along its own axis (angle p95 0.07°) |
 | Safety | no false "ready" in any scenario; never "ready" when covered, uncalibrated or shaking; angle alarm while drilling |
 
 These are simulated results. They show that the method and the software work, not how a real phone performs (rolling
