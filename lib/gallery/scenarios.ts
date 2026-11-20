@@ -4,7 +4,7 @@
 // planned integrations: their panels illustrate how each project plugs in.
 
 import { BOARD_TARGETS } from "../board.ts";
-import { GATE_REASONS, gateReasonNames, type EngineEvent, type EngineSnapshot, type NavCore } from "../engine.ts";
+import { GATE_REASONS, gateReasonNames, type EngineEvent, type EngineSnapshot, type NavCore, type NavEngine } from "../engine.ts";
 import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, V02_RIG, disturb, dockRigAt, toolWorldFromHold, truthAt, type Hold, type Rig } from "../scene.ts";
 import { smartToolsScene, toXf, type SceneDef } from "../scenedef.ts";
 import { compose, qaxis, xf, type Xf } from "../xform.ts";
@@ -63,6 +63,22 @@ export interface ToolState {
   markers?: number;
 }
 
+export interface EngineHooks {
+  core: NavCore;
+  engine: NavEngine;
+  ids: Record<string, number>;
+}
+
+/** The real world, drawn next to the engine's model: parts where they truly are. */
+export interface RealWorld {
+  /** scene definition holding the real parts (rendered solid) */
+  def: SceneDef;
+  /** nodes of `def` to draw */
+  nodes: string[];
+  /** live local transforms (relative to the parent) for some real nodes; null hides the node */
+  pose?: (ctx: Ctx) => Record<string, Xf | null>;
+}
+
 export interface Scenario {
   id: string;
   title: string;
@@ -72,7 +88,7 @@ export interface Scenario {
   /** a planned integration, illustrated (not implemented yet) */
   concept?: boolean;
   duration: number;
-  view2d: "hud" | "plan";
+  view2d: "hud" | "plan" | "phone";
   segments: Segment[];
   scene: (seg: Segment) => SceneDef;
   tool: (ctx: Ctx) => ToolState;
@@ -82,7 +98,21 @@ export interface Scenario {
   hidden?: (ctx: Ctx) => string[];
   panel: (ctx: Ctx) => PanelModel;
   /** 3D camera position and target (metres, world: the sheet is the wall z = 0, Y up) */
-  view3d?: { pos: V3; target: V3 };
+  view3d?: { pos: V3; target: V3; up?: V3 };
+  /** depth to reach per target (mm), in navigation order */
+  depths?: number[];
+  /** "drive" for screws: the HUD says Drive / Seated */
+  action?: "drill" | "drive";
+  /** called every step before the engine advances: register parts, change calibrations… */
+  onStep?: (ctx: Ctx, h: EngineHooks) => void;
+  /** a big line over the 3D view */
+  headline?: (ctx: Ctx) => string;
+  /** chapter chips (hero) */
+  chapters?: { from: number; label: string }[];
+  /** nodes of the engine's scene drawn as the CAD "ghost", and nodes hidden from the phone's own camera */
+  ghost?: string[];
+  phoneHidden?: string[];
+  real?: RealWorld;
 }
 
 // ---------------- helpers ----------------
@@ -95,7 +125,7 @@ const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 const fmt = (x: number, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : "–");
 const DOCK_NODES = ["dock", "dock-lower", "dock-arm", "dock-jaw"];
 const reference = DEFAULT_RIG;
-const v03 = (phone?: string, tilt = 0): Segment => ({ from: 0, rig: dockRigAt(tilt, reference, phone), phone, label: "dock v0.3" });
+const v03 = (phone?: string, tilt?: number): Segment => ({ from: 0, rig: dockRigAt(tilt, reference, phone), phone, label: "dock v0.4" });
 
 function active(ctx: Ctx) {
   const s = ctx.snap;
@@ -188,8 +218,8 @@ const calibrate: Scenario = {
   summary: "The phone does not need to be aligned with the bit. Two short motions measure where the tip and the bit axis really are.",
   duration: 13,
   view2d: "plan",
-  segments: [v03(undefined, 6)],
-  scene: (seg) => smartToolsScene({ tool: seg.rig.tool, dockTiltDeg: 6 }),
+  segments: [v03()],
+  scene: (seg) => smartToolsScene({ tool: seg.rig.tool }),
   calibratedAt: 10.5,
   tool: (ctx) => {
     const a2 = BOARD_TARGETS[1];
@@ -300,13 +330,13 @@ const safety: Scenario = {
 const cameraView: Scenario = {
   id: "camera-view",
   kicker: "Found by the simulator",
-  title: "What the camera can see: dock v0.2 vs v0.3",
-  summary: "v0.2 put the camera 17 cm above the bit: the tip left the image and A1 had no marker in view. v0.3 puts the lens right above the bit.",
+  title: "What the camera can see: dock v0.2 vs v0.4",
+  summary: "v0.2 put the camera 17 cm above the bit: the tip left the image and A1 had no marker in view. v0.4 puts the lens right above the bit, high enough to see over the saddle, tilted 15° toward the tip.",
   duration: 14,
   view2d: "hud",
   segments: [
     { from: 0, rig: V02_RIG, hideDock: true, label: "dock v0.2: tip out of view" },
-    { from: 7, rig: reference, label: "dock v0.3: tip 14° below the centre" },
+    { from: 7, rig: reference, label: "dock v0.4: tip 15° below the centre" },
   ],
   scene: (seg) => smartToolsScene({ tool: seg.rig.tool }),
   hidden: (ctx) => (ctx.t < 7 ? DOCK_NODES : []),
@@ -322,11 +352,11 @@ const cameraView: Scenario = {
     return {
       caption: v02
         ? "Dock v0.2: the lens sits 17 cm above the bit and 8 cm to the side. The bit tip is 39° below the optical axis; the camera sees ±19.6°."
-        : "Dock v0.3: the lens is right above the bit. The tip is 14° below the image centre, and 9-23 markers are in view on every mark.",
+        : "Dock v0.4: the lens is right above the bit and clear of the saddle and the hinge (checked by intersecting its view with the parts). The tip is 15° below the image centre, and 9-19 markers are in view on every mark.",
       lines: [
-        { label: "tip in the image", value: v02 ? "no (39° below)" : "yes (14° below)", state: v02 ? "bad" : "ok" },
+        { label: "tip in the image", value: v02 ? "no (39° below)" : "yes (15° below)", state: v02 ? "bad" : "ok" },
         { label: "markers in view on A1", value: v02 ? "0" : "9-12", state: v02 ? "bad" : "ok" },
-        { label: "end-to-end tests", value: v02 ? "rig check fails" : "34/34 pass", state: v02 ? "bad" : "ok" },
+        { label: "end-to-end tests", value: v02 ? "rig check fails" : "40/40 pass", state: v02 ? "bad" : "ok" },
       ],
       note: "From npm run test:e2e -- --only rig (v0.2: --rig v02).",
     };
@@ -341,8 +371,8 @@ const phones: Scenario = {
   duration: 14,
   view2d: "hud",
   segments: [
-    { from: 0, rig: dockRigAt(0, reference, "redmi-note-13"), phone: "redmi-note-13", label: "Redmi Note 13" },
-    { from: 7, rig: dockRigAt(0, reference, "redmi-15"), phone: "redmi-15", label: "Redmi 15 (provisional profile)" },
+    { from: 0, rig: dockRigAt(undefined, reference, "redmi-note-13"), phone: "redmi-note-13", label: "Redmi Note 13" },
+    { from: 7, rig: dockRigAt(undefined, reference, "redmi-15"), phone: "redmi-15", label: "Redmi 15 (provisional profile)" },
   ],
   scene: (seg) => smartToolsScene({ tool: seg.rig.tool, phone: seg.phone }),
   tool: (ctx) => {
@@ -489,7 +519,7 @@ const agentvcs: Scenario = {
   },
 };
 
-export const SCENARIOS: Scenario[] = [drillThree, calibrate, angled, safety, cameraView, phones, athos, gatekeeper, agentvcs];
+export const SCENARIOS_FLAT: Scenario[] = [drillThree, calibrate, angled, safety, cameraView, phones, athos, gatekeeper, agentvcs];
 
 export const PROJECT_INFO: Record<Project, { url: string; role: string }> = {
   athos: { url: "https://github.com/athos-agent/athos", role: "Plan & guide" },

@@ -52,20 +52,24 @@ under ideal conditions, not the SmartTools application.
 
 ## Scenario gallery
 
-The home page has a gallery of nine scenarios. Each one runs the real engine (WASM) on scripted tool motion and is
-drawn three ways from the same snapshots:
+The home page opens with a 3D-assembly job (below) and has a gallery of thirteen scenarios. Each one runs the real
+engine (WASM) on scripted tool motion and is drawn three ways from the same snapshots:
 
 - a 3D scene (the scene definition's `visual3d`: STL dock, drill, sheet);
-- a 2D view (the phone HUD over the simulated camera image, or a plan from `visual2d`);
+- a 2D view (the phone HUD over what the camera sees, or a plan from `visual2d`);
 - a panel with the numbers the engine decides with.
 
 | Scenario | What it shows |
 |---|---|
+| 3D assembly (main animation) | A robot-arm base: located by touch, verified, 10 screws on three faces, a bracket placed, probed and screwed |
+| Locate by touch | Four touches with the bit tip register the part; its CAD model snaps onto it |
+| Screws on every face | Top and 35° chamfer, each screw along its own axis and to its own depth |
+| Verify a mount | A bracket 2 mm off is caught by probing before the first screw |
 | The core loop | Three holes, square and to depth |
 | Calibrate | Circle around the tip, then twist: the gate opens only after |
 | Angled hole | A mark planned 15° off the normal, no special case |
 | The gate says no | Covered markers, a shaking hand, a tilted bit while drilling |
-| What the camera sees | Dock v0.2 (tip out of view, no markers) vs v0.3 |
+| What the camera sees | Dock v0.2 (tip out of view, no markers) vs v0.4 |
 | One dock, any phone | Redmi Note 13 vs Redmi 15 profiles in the same dock |
 | athos (planned) | The recipe as When / Do / Check / Because steps, each Check passed by the engine |
 | contract-gatekeeper (planned) | An agent-written tool plugin fast-tracked, another rejected for touching the geometry core |
@@ -74,7 +78,45 @@ drawn three ways from the same snapshots:
 The code is in `lib/gallery/` (scenarios and a headless runner) and `components/gallery/`. `tests/gallery.test.mts`
 runs every scenario on the engine and checks what each one claims.
 
-## Phone profiles
+## 3D assembly: the bit tip as a probe
+
+Real jobs are not flat. `lib/assembly.ts` defines a robot-arm base:
+
+- a block with a 35° chamfer, a tower, and a bracket that mounts on the tower;
+- 10 screws on three faces, each with its own depth: M5 × 14 mm on the top, M4 × 10 mm on the chamfer, M4 × 12 mm
+  through the bracket;
+- four registration dimples, and checkpoints for verification.
+
+Every screw hole is a frame that is a child of its part in the engine's scene graph. The job goes like this:
+
+1. **Locate:** touch the four dimples with the bit tip. The engine registers the part by paired-point registration
+   (Horn), in Rust, using the tip positions it measured. The part's CAD model, every hole included, snaps onto the
+   real part.
+2. **Verify:** touch points the registration did not use, and compare them with the CAD.
+3. **Drive:** for each screw, the rings, the go / no-go gate and the depth stop follow that hole's own axis.
+4. **Mount and probe:** a placed part is probed. If it is off, it is caught; once re-seated, three touches locate it
+   too.
+
+Safety rules in the engine:
+
+- **No screw on a part that is not located:** a new gate reason, `NOT_LOCATED`.
+- **Depth only counts inside the hole.** In 3D the tip can be "below" a far-away hole's plane.
+- **Decisions use measured poses.** The prediction that compensates latency is only for display; it overshoots for a
+  moment when the tool stops against a part.
+
+End-to-end, with simulated camera images (`npm run test:e2e -- --only lens,dock,assembly`):
+
+| | Result |
+|---|---|
+| Before registering | never "ready" (gate: not located) |
+| Registration from 4 touches | FRE 0.04 mm; every base hole within 0.10 mm of the true part |
+| Verification on 2 unused points | 0.07 mm and 0.05 mm |
+| M5 on the top / M4 on the 35° chamfer | seated at 14 / 10 mm; tip p95 0.27 / 0.15 mm; angle p95 0.09° / 0.04° |
+
+The marker sheet lies on the bench beside the part. The camera is turned about the bit to face it, which keeps 6–29
+markers in view on every touch and screw.
+
+
 
 The printed dock is the same for every phone. A profile (`lib/phones.ts`) gives the phone's size and the position of
 its main lens. With it, the simulator, the 3D view and the rig check place the camera correctly. On the phone,
@@ -89,14 +131,16 @@ is wrong. The Redmi 15 profile is provisional until measured. To check a phone's
 ## Hardware
 
 [`hardware/dock/`](hardware/dock/) holds the parametric, adjustable 3D-printable phone dock for cordless drill/drivers
-(v0.3, not printed yet): split V clamp for Ø38–68 mm bodies, phones 140–175 mm, 0–20° tilt. It includes the STLs, the
+(v0.4, not printed yet): split V clamp for Ø38–68 mm bodies, phones 140–175 mm, 0–25° tilt (15° by default). It includes the STLs, the
 [print and assembly guide](hardware/dock/README.md) and the Python generator (`dock.py`, manifold3d).
 
 `dock.py` also exports the dock's geometry (`hardware/dock/rig.json`, `lib/dockgeom.ts`). The scene simulator, the 3D
 view and the end-to-end tests place the camera, the bit and the dock parts from it, so the software is tested against
 the dock as designed. The simulator also caught a design error this way: v0.2 left the bit tip out of the camera's
-image and no marker in view on A1 (`npm run test:e2e -- --rig v02 --only rig`). v0.3 puts the camera right above the
-bit, with the tip 14° below the image centre.
+image and no marker in view on A1 (`npm run test:e2e -- --rig v02 --only rig`). v0.3 put the lens right above the bit
+but low: a check that intersects the camera's view with the parts showed the arm's leg in front of the lens and the
+saddle hiding the tip. v0.4 puts the lens above the bit and above the hinge, tilted 15°, with the arm's post beside
+the phone: the view to the tip is clear (`dock.py` fails the build if it is not).
 
 ## Run locally
 
@@ -141,9 +185,9 @@ the engine keeps 120 Hz.
 ### Tests
 
 ```bash
-npm run engine:test   # Rust: 43 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 31 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, session, renderers, gallery)
-npm run test:e2e      # 9 end-to-end scenarios, 34 checks on the dock v0.3 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
+npm run engine:test   # Rust: 50 tests + TypeScript/Rust parity
+npm run test:unit     # TypeScript: 39 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, session, renderers, gallery)
+npm run test:e2e      # 10 end-to-end scenarios, 40 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 
 The end-to-end scenarios render camera frames with the simulator (lens distortion, the bit in view, hand tremor,
@@ -152,7 +196,7 @@ feed the engine with capture timestamps and compare every snapshot with the grou
 
 | Scenario | Result (15 fps camera, 50 ms latency) |
 |---|---|
-| Rig (dock v0.3) | bit tip 14° below the image centre; 9–23 markers in view on every mark |
+| Rig (dock v0.4) | bit tip 15° below the image centre; 9–19 markers in view on every mark |
 | Lens calibration | focal length within 0.01 %, k1 within 0.001 |
 | Dock calibration | tip within 0.05 mm, axis within 0.003° |
 | Three holes with tremor and vibration (p95, aligning and drilling) | tip 0.24 mm, angle 0.13°, aim 0.30 mm, depth 0.19 mm |
@@ -160,6 +204,7 @@ feed the engine with capture timestamps and compare every snapshot with the grou
 | Renderer at 20 Hz, a 300 ms stall | ~6 ticks skipped per frame; the stall reported as an overrun; no "ready" on old data |
 | Frames out of order | merged, none dropped |
 | A hole planned 15° off the normal | "ready" and drilled along its own axis (angle p95 0.07°) |
+| 3D assembly | located by 4 touches (FRE 0.04 mm), verified (≤ 0.07 mm), screws seated on the top and a 35° chamfer |
 | Safety | no false "ready" in any scenario; never "ready" when covered, uncalibrated or shaking; angle alarm while drilling |
 
 These are simulated results. They show that the method and the software work, not how a real phone performs (rolling
@@ -172,7 +217,8 @@ shutter, compression, autofocus, a real hand).
 | `components/NavDemo.tsx` | three.js line scene on the landing page |
 | `components/HudScreen.tsx` | Full-screen phone HUD (`/hud`): camera, simulated camera, calibration flows |
 | `components/EngineLab.tsx` | `/engine`: the engine drawn in 3D, as a 2D plan and as the HUD |
-| `components/gallery/` | The home-page scenario gallery (player + cards) |
+| `components/gallery/` | The home-page main animation (3D assembly) and the scenario gallery |
+| `lib/assembly.ts` | The 3D-assembly job: parts, screw holes as frames, registration and probing |
 | `lib/sim.ts` | Scripted drilling animation for the landing page |
 | `lib/board.ts` | Marker sheet geometry and targets |
 

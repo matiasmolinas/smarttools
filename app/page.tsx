@@ -1,4 +1,4 @@
-import NavDemo from "@/components/NavDemo";
+import AssemblyHero from "@/components/gallery/AssemblyHero";
 import ScenarioGallery from "@/components/gallery/ScenarioGallery";
 
 const REPOS = [
@@ -84,11 +84,11 @@ export default function Home() {
       </header>
 
       <section aria-label="Live navigation demo" className="pb-6">
-        <NavDemo />
+        <AssemblyHero />
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Legend color="#f5f8fc" title="Mark" body="Where the hole or screw goes, seen through the phone's rear camera." />
-          <Legend color="var(--amber)" title="Tip & chuck rings" body="The small ring is the bit tip, the large one the chuck. Centre both on the mark: on target and square to ±0.5°." />
-          <Legend color="var(--green)" title="One Athos step at a time" body="The card shows only the current step and its check. Green means the check passed; the depth arc stops you at 35 mm." />
+          <Legend color="var(--amber)" title="The tip is a probe" body="Touch four points of a part and its CAD model snaps onto it, every hole with it. Touch any other point to verify it." />
+          <Legend color="var(--cyan)" title="Every hole, its own axis" body="Top, chamfer or bracket: the rings, the go / no-go gate and the depth stop follow each hole's own frame." />
+          <Legend color="var(--green)" title="Checked, not trusted" body="A part 2 mm off is caught before the first screw. Each screw is logged with its depth and angle." />
         </div>
       </section>
 

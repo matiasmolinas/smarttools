@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { core } from "./helpers.mts";
-import { SCENARIOS } from "../lib/gallery/scenarios.ts";
+import { SCENARIOS } from "../lib/gallery/index.ts";
 import { ScenarioRun } from "../lib/gallery/runner.ts";
 
 const run = (id: string, until: number, dt = 1 / 60) => {
@@ -70,5 +70,43 @@ test("agentvcs: one record per hole, from live engine events", () => {
 test("angled: ready on B1, the hole planned 15° off the normal", () => {
   const { r } = run("angled", 6);
   assert.ok(r.events.some((e) => e.kind === "ready"));
+  r.dispose();
+});
+
+const runAll = (id: string) => {
+  const sc = SCENARIOS.find((s) => s.id === id)!;
+  const r = new ScenarioRun(core, sc);
+  for (let t = 0; t <= sc.duration; t += 1 / 60) r.step(t);
+  return { r, st: r.store as any, sc };
+};
+
+test("assembly hero: located by touch, verified, 10 screws seated on three faces, bracket located", () => {
+  const { r, st } = runAll("assembly-hero");
+  assert.ok(st.reg?.applied && st.reg.freMm < 0.5, `FRE ${st.reg?.freMm}`);
+  assert.ok(st.verify.K1 < 1, `K1 ${st.verify.K1} mm`);
+  assert.ok(st.bracketReg?.applied && st.bracketReg.freMm < 0.5, "bracket located");
+  assert.equal(Object.keys(st.seated).length, 10, `seated: ${Object.keys(st.seated).join(",")}`);
+  for (const [n, v] of Object.entries(st.seated) as [string, { angle: number }][]) assert.ok(v.angle < 0.5, `${n} angle ${v.angle}`);
+  r.dispose();
+});
+
+test("assembly register: the CAD snaps onto the part, checkpoints within 1 mm", () => {
+  const { r, st } = runAll("assembly-register");
+  assert.ok(st.reg.applied);
+  assert.ok(st.verify.K1 < 1 && st.verify.K2 < 1, JSON.stringify(st.verify));
+  r.dispose();
+});
+
+test("assembly faces: six screws seated (top and 35° chamfer)", () => {
+  const { r, st } = runAll("assembly-faces");
+  assert.deepEqual(Object.keys(st.seated).sort(), ["C1", "C2", "S1", "S2", "S3", "S4"]);
+  r.dispose();
+});
+
+test("assembly verify: a bracket 2 mm off is caught, then located and screwed", () => {
+  const { r, st } = runAll("assembly-verify");
+  assert.ok(st.bracketCheck > 1.5, `caught: ${st.bracketCheck} mm`);
+  assert.ok(st.bracketReg.applied);
+  assert.ok(st.seated.B1 && st.seated.B2, "two bracket screws seated");
   r.dispose();
 });

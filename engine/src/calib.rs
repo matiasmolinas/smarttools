@@ -444,3 +444,182 @@ mod tests {
         assert!(axis_from_roll(&[p, p, p]).is_none());
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Paired-point registration: touch known points of a part with the bit tip, find the part's pose.
+// ---------------------------------------------------------------------------------------------
+
+/// Result of a paired-point registration.
+#[derive(Clone, Copy, Debug)]
+pub struct Registration {
+    /// Pose of the part in the measurement frame: `measured ≈ transform · model`.
+    pub transform: crate::scene::Transform,
+    /// Fiducial registration error: RMS distance between the moved model points and the touches, metres.
+    pub fre: f64,
+    /// Largest single residual, metres.
+    pub max_residual: f64,
+}
+
+/// Eigen-decomposition of a symmetric 4x4 matrix (Jacobi). Returns (values, vectors as columns).
+fn sym_eigen4(m: &[f64; 16]) -> ([f64; 4], [f64; 16]) {
+    let mut a = *m;
+    let mut v = [0.0; 16];
+    for i in 0..4 {
+        v[i * 5] = 1.0;
+    }
+    for _ in 0..100 {
+        let (mut p, mut q, mut big) = (0, 1, 0.0);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                if a[i * 4 + j].abs() > big {
+                    big = a[i * 4 + j].abs();
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if big < 1e-18 {
+            break;
+        }
+        let theta = 0.5 * (2.0 * a[p * 4 + q]).atan2(a[q * 4 + q] - a[p * 4 + p]);
+        let (s, c) = theta.sin_cos();
+        for k in 0..4 {
+            let (akp, akq) = (a[k * 4 + p], a[k * 4 + q]);
+            a[k * 4 + p] = c * akp - s * akq;
+            a[k * 4 + q] = s * akp + c * akq;
+        }
+        for k in 0..4 {
+            let (apk, aqk) = (a[p * 4 + k], a[q * 4 + k]);
+            a[p * 4 + k] = c * apk - s * aqk;
+            a[q * 4 + k] = s * apk + c * aqk;
+        }
+        for k in 0..4 {
+            let (vkp, vkq) = (v[k * 4 + p], v[k * 4 + q]);
+            v[k * 4 + p] = c * vkp - s * vkq;
+            v[k * 4 + q] = s * vkp + c * vkq;
+        }
+    }
+    ([a[0], a[5], a[10], a[15]], v)
+}
+
+/// Rigid transform that best maps `model` points onto `measured` points (Horn's closed-form
+/// quaternion method). Needs >= 3 non-collinear pairs.
+pub fn register_points(model: &[V3], measured: &[V3]) -> Option<Registration> {
+    let n = model.len();
+    if n < 3 || measured.len() != n {
+        return None;
+    }
+    let centroid = |p: &[V3]| {
+        let mut c = [0.0; 3];
+        for v in p {
+            for k in 0..3 {
+                c[k] += v[k] / n as f64;
+            }
+        }
+        c
+    };
+    let (cm, cd) = (centroid(model), centroid(measured));
+    // cross-covariance S = Σ (m - cm)(d - cd)^T
+    let mut s = [0.0; 9];
+    let mut spread = 0.0;
+    for (m, d) in model.iter().zip(measured) {
+        let a = sub3(*m, cm);
+        let b = sub3(*d, cd);
+        spread += len(a);
+        for i in 0..3 {
+            for j in 0..3 {
+                s[i * 3 + j] += a[i] * b[j];
+            }
+        }
+    }
+    // reject collinear sets: the second-largest spread direction must be meaningful
+    let cov = {
+        let mut c = [0.0; 9];
+        for m in model {
+            let a = sub3(*m, cm);
+            for i in 0..3 {
+                for j in 0..3 {
+                    c[i * 3 + j] += a[i] * a[j];
+                }
+            }
+        }
+        c
+    };
+    let (ev, _) = sym_eigen(&cov);
+    let mut ev = ev;
+    ev.sort_by(|a, b| b.total_cmp(a));
+    if spread < 1e-9 || ev[1] < 1e-10 * ev[0].max(1e-30) || ev[1] < 1e-12 {
+        return None;
+    }
+    let (sxx, sxy, sxz, syx, syy, syz, szx, szy, szz) = (s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8]);
+    let nmat = [
+        sxx + syy + szz, syz - szy, szx - sxz, sxy - syx,
+        syz - szy, sxx - syy - szz, sxy + syx, szx + sxz,
+        szx - sxz, sxy + syx, -sxx + syy - szz, syz + szy,
+        sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz,
+    ];
+    let (vals, vecs) = sym_eigen4(&nmat);
+    let i = (0..4).max_by(|&a, &b| vals[a].total_cmp(&vals[b]))?;
+    let q = crate::scene::Quat::new(vecs[i], vecs[4 + i], vecs[8 + i], vecs[12 + i]).normalize();
+    let rc = q.rotate(cm);
+    let t = [cd[0] - rc[0], cd[1] - rc[1], cd[2] - rc[2]];
+    let transform = crate::scene::Transform::rigid(t, q);
+    let mut sum = 0.0;
+    let mut worst: f64 = 0.0;
+    for (m, d) in model.iter().zip(measured) {
+        let e = len(sub3(transform.apply_point(*m), *d));
+        sum += e * e;
+        worst = worst.max(e);
+    }
+    Some(Registration { transform, fre: (sum / n as f64).sqrt(), max_residual: worst })
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use crate::scene::{Quat, Transform};
+
+    fn part_points() -> Vec<V3> {
+        // fiducial dimples on a 120 x 80 x 40 mm block (metres)
+        vec![[0.0, 0.0, 0.04], [0.12, 0.0, 0.04], [0.12, 0.08, 0.04], [0.0, 0.08, 0.02], [0.06, -0.01, 0.0]]
+    }
+
+    #[test]
+    fn exact_touches_recover_the_pose() {
+        let truth = Transform::rigid([0.18, -0.03, 0.002], Quat::from_axis_angle([0.2, 0.1, 1.0], 0.7));
+        let model = part_points();
+        let touched: Vec<V3> = model.iter().map(|p| truth.apply_point(*p)).collect();
+        let r = register_points(&model, &touched).unwrap();
+        assert!(r.fre < 1e-12, "fre {}", r.fre);
+        assert!(r.transform.q.angle_to(&truth.q) < 1e-9);
+        assert!(len(sub3(r.transform.p, truth.p)) < 1e-12);
+    }
+
+    #[test]
+    fn noisy_touches_stay_sub_millimetre_and_report_their_error() {
+        let truth = Transform::rigid([0.2, 0.0, 0.0], Quat::from_axis_angle([0.0, 0.0, 1.0], 1.2));
+        let model = part_points();
+        let touched: Vec<V3> = model
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let w = truth.apply_point(*p);
+                let n = 0.0003 * ((i as f64 * 7.3).sin());
+                [w[0] + n, w[1] - n * 0.6, w[2] + n * 0.4]
+            })
+            .collect();
+        let r = register_points(&model, &touched).unwrap();
+        assert!(r.fre > 1e-5 && r.fre < 4e-4, "fre {}", r.fre);
+        // a point not used for registration (target registration error)
+        let check = [0.06, 0.04, 0.04];
+        let tre = len(sub3(r.transform.apply_point(check), truth.apply_point(check)));
+        assert!(tre < 5e-4, "tre {tre}");
+    }
+
+    #[test]
+    fn degenerate_touch_sets_are_rejected() {
+        let line = vec![[0.0, 0.0, 0.0], [0.05, 0.0, 0.0], [0.1, 0.0, 0.0]];
+        assert!(register_points(&line, &line).is_none());
+        assert!(register_points(&line[..2], &line[..2]).is_none());
+    }
+}

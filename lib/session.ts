@@ -28,6 +28,8 @@ export interface SessionOptions {
   engine?: Partial<EngineConfig>;
   /** defaults to the SmartTools A4 job */
   scene?: SceneDef;
+  /** depth to reach per target (mm), in the scene's navigation order (screws seat at their own depth) */
+  targetDepths?: number[];
   t0?: number;
 }
 
@@ -50,6 +52,7 @@ export class NavSession {
     const engine = core.createEngine();
     if (o.engine) engine.configure(o.engine);
     this.scene = buildEngine(engine, o.scene ?? smartToolsScene({ tool: o.tool }));
+    if (o.targetDepths) engine.setTargetDepths(o.targetDepths);
     engine.setCalibrated(this.id(this.scene.def.navigation.tool), o.toolCalibrated);
     engine.start(o.t0 ?? 0);
   }
@@ -159,6 +162,7 @@ export class NavSession {
 export function gateMessage(bits: number): string | null {
   if (!bits) return null;
   if (bits & GATE_REASONS.NOT_CALIBRATED) return "Calibrate first";
+  if (bits & GATE_REASONS.NOT_LOCATED) return "Locate the part first";
   if (bits & (GATE_REASONS.STALE | GATE_REASONS.FEW_MARKERS)) return "Show more markers";
   if (bits & GATE_REASONS.POOR_FIT) return "Markers unclear";
   if (bits & GATE_REASONS.UNSTEADY) return "Hold steady";

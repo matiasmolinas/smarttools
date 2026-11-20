@@ -68,6 +68,7 @@ export class ScenarioRun {
     const seg = this.scenario.segments[i];
     const e = this.core.createEngine();
     this.built = buildEngine(e, this.scenario.scene(seg));
+    if (this.scenario.depths) e.setTargetDepths(this.scenario.depths);
     this.calibrated = this.scenario.calibratedAt == null || t >= this.scenario.calibratedAt;
     e.setCalibrated(this.built.ids[this.built.def.navigation.tool], this.calibrated);
     e.start(t);
@@ -93,6 +94,7 @@ export class ScenarioRun {
       e.setCalibrated(built.ids[nav.tool], true);
     }
     const ctx = this.ctx(t, seg);
+    this.scenario.onStep?.(ctx, { core: this.core, engine: e, ids: built.ids });
     const ts = this.scenario.tool(ctx);
     const seen = ts.seen !== false;
     // measurements at 30 Hz, captured LATENCY_S before they reach the engine

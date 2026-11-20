@@ -123,3 +123,11 @@ function unit(v: V3): V3 {
   const l = Math.hypot(...v) || 1;
   return [v[0] / l, v[1] / l, v[2] / l];
 }
+
+/** Interpolate two rigid transforms (position linear, rotation normalised-lerp in the same hemisphere). */
+export function xlerp(a: Xf, b: Xf, k: number): Xf {
+  const d = a.q[0] * b.q[0] + a.q[1] * b.q[1] + a.q[2] * b.q[2] + a.q[3] * b.q[3];
+  const s = d < 0 ? -1 : 1;
+  const q = qnorm([a.q[0] + (s * b.q[0] - a.q[0]) * k, a.q[1] + (s * b.q[1] - a.q[1]) * k, a.q[2] + (s * b.q[2] - a.q[2]) * k, a.q[3] + (s * b.q[3] - a.q[3]) * k]);
+  return { p: [a.p[0] + (b.p[0] - a.p[0]) * k, a.p[1] + (b.p[1] - a.p[1]) * k, a.p[2] + (b.p[2] - a.p[2]) * k], q, s: [1, 1, 1] };
+}

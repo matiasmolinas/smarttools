@@ -76,6 +76,7 @@ export const GATE_REASONS = {
   TILTED: 16,
   OFF_TARGET: 32,
   UNSTEADY: 64,
+  NOT_LOCATED: 128,
 } as const;
 export function gateReasonNames(bits: number): string[] {
   return Object.entries(GATE_REASONS)
@@ -160,10 +161,12 @@ interface Exports {
   st_engine_advance(h: number, tWall: number): number;
   st_engine_now(h: number): number;
   st_engine_snapshot(h: number, out: number, cap: number): number;
+  st_engine_set_target_depths(h: number, depths: number, n: number): void;
+  st_register_points(model: number, measured: number, n: number, out: number): number;
   st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
-export const ENGINE_ABI = 3;
+export const ENGINE_ABI = 4;
 
 // ---------------- engine (scene graph + clock) ----------------
 
@@ -270,6 +273,8 @@ export interface NavEngine {
   reparent(node: number, parent: number, keepWorld?: boolean): void;
   setCalibrated(node: number, ok: boolean): void;
   setNavigation(tool: number, targets: number[]): void;
+  /** depth to reach per target (mm), in setNavigation's order */
+  setTargetDepths(depths: number[]): void;
   start(t0: number): void;
   resetJob(): void;
   /** a relation T_from_to seen by a tracker at tCapture */
@@ -616,6 +621,20 @@ export class NavCore {
     });
   }
 
+  /** Paired-point registration: the pose that maps `model` points onto `measured` ones (Horn).
+   * FRE = RMS residual, in mm. Null for fewer than 3 points or a collinear set. */
+  registerPoints(model: V3[], measured: V3[]): { transform: Xf; freMm: number; maxMm: number } | null {
+    const n = model.length;
+    if (n < 3 || measured.length !== n) return null;
+    return this.with([n * 24, n * 24, 96], ([m, d, o]) => {
+      this.f64(m, n * 3).set(model.flat());
+      this.f64(d, n * 3).set(measured.flat());
+      if (this.x.st_register_points(m, d, n, o) !== 1) return null;
+      const a = this.f64(o, 12);
+      return { transform: fromArray(a, 0), freMm: a[10] * 1000, maxMm: a[11] * 1000 };
+    });
+  }
+
   /** A navigation engine (scene graph + clock + checks), see docs/ENGINE_SPEC.md. */
   createEngine(): NavEngine {
     const x = this.x;
@@ -658,6 +677,11 @@ export class NavCore {
         this.with([Math.max(4, targets.length * 4)], ([p]) => {
           new Uint32Array(x.memory.buffer, p, targets.length).set(targets);
           x.st_engine_set_nav(h, tool, p, targets.length);
+        }),
+      setTargetDepths: (depths) =>
+        this.with([Math.max(8, depths.length * 8)], ([p]) => {
+          this.f64(p, depths.length).set(depths);
+          x.st_engine_set_target_depths(h, p, depths.length);
         }),
       start: (t0) => x.st_engine_start(h, t0),
       resetJob: () => x.st_engine_reset_job(h),

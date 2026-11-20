@@ -15,7 +15,7 @@ use crate::subpix::{self, Rgba};
 use std::alloc::{alloc, dealloc, Layout};
 use std::slice;
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 #[no_mangle]
 pub extern "C" fn st_abi_version() -> u32 {
@@ -379,6 +379,7 @@ pub unsafe extern "C" fn st_gate(input: *const f64, limits: *const f64) -> u32 {
     let i = slice::from_raw_parts(input, 8);
     let gi = GateInput {
         calibrated: i[0] != 0.0,
+        located: true,
         pose_age_s: i[1],
         rms_px: i[2],
         markers: i[3].max(0.0) as u32,
@@ -879,6 +880,42 @@ pub unsafe extern "C" fn st_engine_snapshot(h: *mut Engine, out: *mut f64, cap: 
     }
     e.take_events();
     need as i32
+}
+
+/// Per-target depths (mm), in the order of `st_engine_set_nav`'s targets.
+///
+/// # Safety
+/// `h` valid; `depths`: `n` `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_target_depths(h: *mut Engine, depths: *const f64, n: usize) {
+    if h.is_null() || depths.is_null() {
+        return;
+    }
+    (*h).set_target_depths(slice::from_raw_parts(depths, n));
+}
+
+/// Paired-point registration: the rigid transform mapping `model` points onto `measured` points.
+/// `out`: 12 `f64` = transform (10: p, q, s), FRE (m), max residual (m). Returns 1, or 0 if
+/// degenerate (fewer than 3 points, collinear).
+///
+/// # Safety
+/// `model`, `measured`: `3n` `f64`; `out`: 12.
+#[no_mangle]
+pub unsafe extern "C" fn st_register_points(model: *const f64, measured: *const f64, n: usize, out: *mut f64) -> i32 {
+    if model.is_null() || measured.is_null() || out.is_null() {
+        return -1;
+    }
+    let pts = |p: *const f64| -> Vec<[f64; 3]> { slice::from_raw_parts(p, n * 3).chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect() };
+    match calib::register_points(&pts(model), &pts(measured)) {
+        Some(r) => {
+            let o = slice::from_raw_parts_mut(out, 12);
+            o[..10].copy_from_slice(&r.transform.to_array());
+            o[10] = r.fre;
+            o[11] = r.max_residual;
+            1
+        }
+        None => 0,
+    }
 }
 
 #[cfg(test)]
