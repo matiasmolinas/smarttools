@@ -16,6 +16,9 @@ import { DICTIONARY } from "@/lib/board";
 import { NavCore, type EngineSnapshot } from "@/lib/engine";
 import { cameraPoseForTool, markerCodes } from "@/lib/scene";
 import { Scene3D } from "@/lib/render/render3d";
+import { GuidanceLayer } from "@/lib/render/guidance3d";
+import { guidance, locatedFrom, type Guidance } from "@/lib/guidance";
+import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { drawPlan } from "@/lib/render/render2d";
 import { hudView } from "@/lib/render/hudview";
 import { drawHud } from "@/lib/hud";
@@ -50,6 +53,11 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
   const [segment, setSegment] = useState("");
   const [headline, setHeadline] = useState("");
   const [chapter, setChapter] = useState(-1);
+  // sound guidance: off until the viewer turns it on (browsers need a click to start audio)
+  const sound = useRef<SoundGuide | null>(null);
+  const [soundOn, setSoundOn] = useState(false);
+  const [says, setSays] = useState("");
+  useEffect(() => () => sound.current?.close(), []);
   const playingRef = useRef(playing);
   playingRef.current = playing;
   const onEndRef = useRef(onEnd);
@@ -95,8 +103,16 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
       let s3: Scene3D | null = null;
       let s3Version = -1;
       // the real parts (solid), placed statically
-      const real = scenario.real ? new Scene3D(scenario.real.def, { only: scenario.real.nodes }) : null;
+      const real = scenario.real ? new Scene3D(scenario.real.def, { only: scenario.real.nodes, markerCodes: codes }) : null;
       if (real) scene.add(real.root);
+      // guidance on the part: next hole glowing, approach tunnel, x-ray (seen by the phone too)
+      const guide = scenario.guidance ? new GuidanceLayer() : null;
+      if (guide) scene.add(guide.root);
+      // the next part as a hologram where it goes (cyan; green when the real part matches, red when off)
+      const holoNode = scenario.hologram && scenario.real ? (scenario.hologram(run.ctx(0, scenario.segments[0]) as Ctx)?.node ?? "bracket") : null;
+      const holo = holoNode && scenario.real ? new Scene3D(scenario.real.def, { only: [holoNode], ghost: [holoNode] }) : null;
+      if (holo) scene.add(holo.root);
+      let model: Guidance | null = null;
 
       // ---- the phone's view (3D jobs): the same scene seen from the docked camera ----
       const phoneR = scenario.view2d === "phone" ? new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }) : null;
@@ -106,6 +122,7 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
       phoneR?.setSize(PW, PH, false);
 
       const resize = () => {
+        if (disposed || !view2d.current) return;
         const w = el.clientWidth, h = el.clientHeight;
         renderer.setSize(w, h, false);
         renderer.domElement.style.width = "100%";
@@ -125,6 +142,8 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
         controls.dispose();
         s3?.dispose();
         real?.dispose();
+        guide?.dispose();
+        holo?.dispose();
         renderer.dispose();
         phoneR?.dispose();
         el.removeChild(renderer.domElement);
@@ -140,8 +159,10 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
       let t = 0;
       let last = performance.now();
       let lastPanel = -1;
+      let toneSays = "";
       let raf = 0;
       const frame = (now: number) => {
+        if (disposed || !view2d.current) return;
         raf = requestAnimationFrame(frame);
         const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
         last = now;
@@ -167,6 +188,34 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
           for (const n of f.hidden) {
             const o = s3.objects.get(n);
             if (o) o.visible = false;
+          }
+        }
+        if (guide && scenario.guidance && f.snap) {
+          const snap0 = f.snap;
+          const worldOf = (n: string) => snap0.nodes.find((x) => x.id === ids[n])?.world ?? null;
+          const located = locatedFrom(def, snap0, ids);
+          const gctx = run.ctx(t, f.segment) as Ctx;
+          const order = scenario.order?.(gctx) ?? def.navigation.targets;
+          const depths = order.map((n) => (def.nodes.find((x) => x.name === n)?.meta?.depthMm as number | undefined) ?? scenario.depths?.[def.navigation.targets.indexOf(n)] ?? 0);
+          model = guidance({ snap: snap0, order, ids, depths, solids: scenario.guidance(gctx, worldOf), located, skipped: scenario.skipped?.(gctx), quality: (n) => scenario.quality?.(gctx, n) });
+          guide.update(model, t);
+          guide.setGhostTool(scenario.ghostTool?.(gctx) ?? null);
+        }
+        if (holo && scenario.real && scenario.hologram) {
+          const h = scenario.hologram(run.ctx(t, f.segment) as Ctx);
+          holo.root.visible = !!h;
+          if (h) {
+            const st = staticSnapshot(scenario.real.def, { [h.node]: h.local });
+            holo.update(st.snap, st.ids);
+            const col = h.state === "match" ? 0x3dffa8 : h.state === "off" ? 0xff5a6a : 0x5ad8ff;
+            const pulse = 0.12 + 0.1 * (0.5 + 0.5 * Math.sin(t * 5));
+            holo.root.traverse((c) => {
+              const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial | THREE.LineBasicMaterial | undefined;
+              if (!m || !("color" in m)) return;
+              m.color.setHex(col);
+              if ("emissive" in m) (m as THREE.MeshStandardMaterial).emissive.setHex(col).multiplyScalar(0.25);
+              m.opacity = c.type === "LineSegments" ? 0.9 : pulse;
+            });
           }
         }
         if (real && scenario.real) {
@@ -227,8 +276,19 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
               const tw = snap.nodes.find((n) => n.id === tgt.id)?.world;
               if (tw) [aim, mark] = core.projectPoints(camScaled, toPose(inverse(camNode.world)), [applyPoint(tw, [tgt.aim[0], tgt.aim[1], 0]), applyPoint(tw, [0, 0, 0])]);
             }
-            const hv = hudView({ def, ids, snapshot: snap, image: { aim, mark, quads: [] }, info: `${snap.markers} tags · ${f.segment.label}`, depthTargetMm: depthOf, action: scenario.action });
+            const hint = model?.outOfOrder
+              ? `out of order: ${model.outOfOrder.expected} first`
+              : model?.xray && Number.isFinite(model.xray.materialMm) && snap.phase === "drill"
+                ? model.xray.breakthrough
+                  ? `x-ray: only ${model.xray.materialMm.toFixed(0)} mm of material: it breaks through`
+                  : `x-ray: ${model.xray.leftMm.toFixed(0)} mm of material under the screw`
+                : null;
+            const hv = hudView({ def, ids, snapshot: snap, image: { aim, mark, quads: [] }, info: `${snap.markers} tags · ${f.segment.label}`, depthTargetMm: depthOf, action: scenario.action, hint });
             drawHud(ctx2, hv.state, c.width, c.height, false, { background: "camera", video: source, overlay: hv.overlay });
+            const tone = toneFromHud(hv.state, hv.overlay);
+            if (playingRef.current) sound.current?.play(tone);
+            else sound.current?.play({ ...tone, mode: "silent" });
+            toneSays = tone.says;
           }
         }
         if (t - lastPanel > 0.2 || t < lastPanel) {
@@ -238,6 +298,7 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
           setProgress(t / scenario.duration);
           setSegment(scenario.segments.length > 1 ? f.segment.label : "");
           setHeadline(scenario.headline?.(ctx) ?? "");
+          setSays(toneSays);
           const chs = scenario.chapters ?? [];
           let ci = -1;
           chs.forEach((ch, i) => {
@@ -289,6 +350,25 @@ export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "ga
       <div className="flex flex-col gap-3">
         <div className={`relative overflow-hidden border border-white/10 bg-black ${hero ? "rounded-[1.6rem] p-1.5 shadow-[0_0_60px_-20px_rgba(90,216,255,0.45)]" : "rounded-2xl"}`}>
           <canvas ref={view2d} className={`block aspect-video w-full ${hero ? "rounded-[1.2rem]" : ""}`} />
+          {scenario.action === "drive" && (
+            <button
+              onClick={() => {
+                if (sound.current) {
+                  sound.current.close();
+                  sound.current = null;
+                  setSoundOn(false);
+                } else {
+                  sound.current = new SoundGuide();
+                  setSoundOn(true);
+                }
+              }}
+              className={`absolute left-3 bottom-2 rounded-full border px-2 py-0.5 font-mono text-[10px] ${soundOn ? "border-[var(--green)]/60 bg-[var(--green)]/15 text-[var(--green)]" : "border-white/20 bg-black/60 text-white/70 hover:text-white"}`}
+              aria-label="Sound guidance"
+            >
+              {soundOn ? "♪ sound on" : "♪ sound"}
+              {(soundOn || scenario.sound) && says ? ` · ${says}` : ""}
+            </button>
+          )}
           <div className="pointer-events-none absolute bottom-2 right-3 rounded-full bg-black/60 px-2 py-0.5 font-mono text-[10px] text-white/70">
             {scenario.view2d === "plan" ? "2D plan (visual2d)" : scenario.view2d === "phone" ? "the phone: camera view + HUD (simulated)" : "phone HUD over the simulated camera"}
           </div>
@@ -367,6 +447,26 @@ function PanelView({ panel, compact }: { panel: PanelModel | null; compact?: boo
         </div>
       )}
       {panel.note && <p className="font-mono text-[10px] text-white/40">{panel.note}</p>}
+      {panel.downloads && panel.downloads.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {panel.downloads.map((d) => (
+            <button
+              key={d.filename}
+              onClick={() => {
+                const url = URL.createObjectURL(new Blob([d.content()], { type: d.type }));
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = d.filename;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="rounded-full border border-[var(--green)]/50 px-3 py-1 font-mono text-[11px] text-[var(--green)] hover:bg-[var(--green)]/10"
+            >
+              ↓ {d.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

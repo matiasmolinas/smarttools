@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { simulate } from "@/lib/sim";
-import { drawHud, type HudBackground } from "@/lib/hud";
+import { simulate, type SimState } from "@/lib/sim";
+import { SoundGuide, toneFromHud } from "@/lib/audio";
+import { drawHud, type HudBackground, type Overlay } from "@/lib/hud";
 import { BrowserNav } from "@/lib/tracker";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
@@ -36,6 +37,10 @@ export default function HudScreen() {
   const streamRef = useRef<MediaStream | null>(null);
   const codesRef = useRef<Uint8Array | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // sound guidance (off until the user turns it on: browsers need a tap to start audio)
+  const soundRef = useRef<SoundGuide | null>(null);
+  const [soundOn, setSoundOn] = useState(false);
+  const lastCue = useRef({ phase: "", alarms: 0 });
   const [phoneName, setPhoneName] = useState(phoneById(DEFAULT_PHONE_ID).name);
   const importRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -206,13 +211,29 @@ export default function HudScreen() {
       const w = canvas.width;
       const h = canvas.height;
       if (w <= 0 || h <= 0) return;
+      const listen = (view: { state: SimState; overlay: Overlay }) => {
+        const sg = soundRef.current;
+        if (!sg) return;
+        sg.play(toneFromHud(view.state, view.overlay));
+        // vibrate when a screw seats or an alarm starts
+        const al = view.overlay.alarms ?? 0;
+        if (view.state.phase === "hold" && lastCue.current.phase !== "hold") sg.vibrate("depth-reached");
+        if (al && !lastCue.current.alarms) sg.vibrate("alarm");
+        lastCue.current = { phase: view.state.phase, alarms: al };
+      };
       if (bgRef.current === "camera" && v.readyState >= 2) {
         const view = trackerRef.current?.view();
-        if (view) return drawHud(ctx, view.state, w, h, false, { background: "camera", video: v, overlay: view.overlay });
+        if (view) {
+          listen(view);
+          return drawHud(ctx, view.state, w, h, false, { background: "camera", video: v, overlay: view.overlay });
+        }
       }
       if (bgRef.current === "simcam" && simCanvasRef.current) {
         const view = simTrackerRef.current?.view();
-        if (view) return drawHud(ctx, view.state, w, h, false, { background: "camera", video: simCanvasRef.current, overlay: view.overlay });
+        if (view) {
+          listen(view);
+          return drawHud(ctx, view.state, w, h, false, { background: "camera", video: simCanvasRef.current, overlay: view.overlay });
+        }
       }
       if (bgRef.current !== "simcam" && restartRef.current) {
         restartRef.current = false;
@@ -322,6 +343,23 @@ export default function HudScreen() {
             <RestartIcon />
           </RoundButton>
         )}
+        <RoundButton
+          label={soundOn ? "on" : "off"}
+          caption="Sound"
+          active={soundOn}
+          onClick={() => {
+            if (soundRef.current) {
+              soundRef.current.close();
+              soundRef.current = null;
+              setSoundOn(false);
+            } else {
+              soundRef.current = new SoundGuide();
+              setSoundOn(true);
+            }
+          }}
+        >
+          <SoundIcon />
+        </RoundButton>
         <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
         </RoundButton>
@@ -415,6 +453,15 @@ function RoundButton({
 }
 
 const ico = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+
+function SoundIcon() {
+  return (
+    <svg {...ico}>
+      <path d="M4 10v4h4l5 4V6L8 10H4z" />
+      <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />
+    </svg>
+  );
+}
 
 function SurfIcon() {
   return (

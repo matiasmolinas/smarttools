@@ -24,6 +24,8 @@ export interface HudInputs {
   /** depth per target (mm, by target node id) and whether marks are drilled or screws driven */
   depthTargetMm?: (targetId: number) => number | undefined;
   action?: "drill" | "drive";
+  /** a guidance hint (out of order, material left under the tip) */
+  hint?: string | null;
 }
 
 export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
@@ -78,6 +80,8 @@ export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
     info: i.info ?? (lost ? "searching" : `${s.markers} tags`),
     gate: { ready: s.ready, locking: s.locking, message: gateMessage(s.gate) },
     calibrating: i.calibrating ?? null,
+    alarms: s.alarms,
+    hint: i.hint ?? null,
   };
   return { state, overlay };
 }

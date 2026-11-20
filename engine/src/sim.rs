@@ -95,6 +95,82 @@ pub struct Occluder {
 }
 
 /// Printed-sheet intensity at a world point on the surface. `codes`: 36 bits per marker id (1 = white).
+/// A convex solid (a part, or a convex piece of one): the intersection of half-spaces `n · x <= d` in
+/// its own frame, placed in the world by `r` (local → world) and `o` (its origin in the world).
+#[derive(Clone, Debug)]
+pub struct Solid {
+    pub r: M3,
+    pub o: V3,
+    pub planes: Vec<(V3, f64)>,
+    /// grey level of the material under full light
+    pub shade: f64,
+}
+
+/// A printed sticker of markers on a part (or a part's own printed / engraved markers): white paper,
+/// `half` = half size, in the plane z = 0 of its frame (`r` local → world, `o` origin in the world).
+/// Each marker: centre (x, y), edge (black square) and its 36-bit code (bit 35 = top-left cell).
+#[derive(Clone, Debug)]
+pub struct Sticker {
+    pub r: M3,
+    pub o: V3,
+    pub half: [f64; 2],
+    pub markers: Vec<([f64; 2], f64, u64)>,
+}
+
+/// Grey level of a sticker at (x, y) in its plane, or None outside it.
+pub fn sticker_value(st: &Sticker, x: f64, y: f64, look: &SceneLook) -> Option<f64> {
+    if x.abs() > st.half[0] || y.abs() > st.half[1] {
+        return None;
+    }
+    for &(c, size, code) in &st.markers {
+        let h = size / 2.0;
+        if (x - c[0]).abs() < h && (y - c[1]).abs() < h {
+            let cell = size / 8.0;
+            let col = ((x - (c[0] - h)) / cell).floor() as i64;
+            let row = ((c[1] + h - y) / cell).floor() as i64;
+            if (1..=6).contains(&col) && (1..=6).contains(&row) {
+                let bit = (code >> (35 - ((row - 1) * 6 + (col - 1)))) & 1;
+                return Some(if bit == 1 { look.paper } else { look.ink });
+            }
+            return Some(look.ink);
+        }
+    }
+    Some(look.paper)
+}
+
+/// Ray (origin `c`, direction `dw`, both world) against a convex solid: (k of entry, world normal).
+pub fn hit_solid(s: &Solid, c: V3, dw: V3) -> Option<(f64, V3)> {
+    // into the solid's frame: x_local = Rᵀ (x - o)
+    let rt = transpose(&s.r);
+    let o = mul_v(&rt, sub3(c, s.o));
+    let d = mul_v(&rt, dw);
+    let (mut k0, mut k1) = (1e-9_f64, f64::INFINITY);
+    let mut n_in: V3 = [0.0, 0.0, 1.0];
+    for &(n, dd) in &s.planes {
+        let den = dot(n, d);
+        let num = dd - dot(n, o);
+        if den.abs() < 1e-15 {
+            if num < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let k = num / den;
+        if den < 0.0 {
+            if k > k0 {
+                k0 = k;
+                n_in = n;
+            }
+        } else if k < k1 {
+            k1 = k;
+        }
+        if k0 > k1 {
+            return None;
+        }
+    }
+    (k0 > 1e-9 && k0 < k1).then(|| (k0, mul_v(&s.r, n_in)))
+}
+
 pub fn sheet_value(x: f64, y: f64, codes: &[u8], look: &SceneLook) -> f64 {
     if let Some(id) = marker_at(x, y) {
         let m = marker_center(id).unwrap_or(crate::geom::P2::new(0.0, 0.0));
@@ -201,6 +277,44 @@ pub struct RenderSpec<'a> {
     pub light: Lighting,
     pub bit: Option<Bit>,
     pub occluders: &'a [Occluder],
+    pub solids: &'a [Solid],
+    pub stickers: &'a [Sticker],
+}
+
+/// The nearest surface along a world ray: (k, grey level). Sheet and bench at z = 0, then solids and
+/// stickers in front of it.
+fn surface(spec: &RenderSpec, c: V3, dw: V3) -> (f64, f64) {
+    let mut best = (f64::INFINITY, spec.look.wall);
+    let k = -c[2] / dw[2];
+    if k > 0.0 && dw[2].is_finite() {
+        best = (k, sheet_value(c[0] + k * dw[0], c[1] + k * dw[1], spec.codes, &spec.look));
+    }
+    for s in spec.solids {
+        if let Some((k, n)) = hit_solid(s, c, dw) {
+            if k < best.0 {
+                // light from above and a little from the front-left; faces stay distinguishable
+                let l = normalize([-0.35, -0.45, 1.0]);
+                best = (k, s.shade * (0.45 + 0.55 * dot(n, l).abs()));
+            }
+        }
+    }
+    for st in spec.stickers {
+        let n = [st.r[2], st.r[5], st.r[8]];
+        let den = dot(n, dw);
+        if den.abs() < 1e-12 {
+            continue;
+        }
+        let k = dot(n, sub3(st.o, c)) / den;
+        // a sticker wins against the face it is stuck on (0.3 mm in front of it)
+        if k > 0.0 && k < best.0 + 0.0003 / len(dw) {
+            let p = sub3([c[0] + k * dw[0], c[1] + k * dw[1], c[2] + k * dw[2]], st.o);
+            let (x, y) = (st.r[0] * p[0] + st.r[3] * p[1] + st.r[6] * p[2], st.r[1] * p[0] + st.r[4] * p[1] + st.r[7] * p[2]);
+            if let Some(v) = sticker_value(st, x, y, &spec.look) {
+                best = (k, v);
+            }
+        }
+    }
+    best
 }
 
 /// Render one RGBA frame into `out` (`width * height * 4`).
@@ -234,7 +348,10 @@ pub fn render(spec: &RenderSpec, out: &mut [u8]) {
                         if dist < b.radius {
                             // only the part in front of the surface is visible: check that bit point in world
                             let p = [chuck[0] + (tip[0] - chuck[0]) * s, chuck[1] + (tip[1] - chuck[1]) * s, chuck[2] + (tip[2] - chuck[2]) * s];
-                            let in_front = spec.poses.first().map(|ps| ps.to_world(p)[2] > 0.0).unwrap_or(true);
+                            let in_front = frames.first().is_none_or(|(c, cw)| {
+                                let k_bit = dot(p, ray) / dot(ray, ray);
+                                surface(spec, *c, mul_v(cw, ray)).0 > k_bit
+                            });
                             if in_front {
                                 let shade = 95.0 + 60.0 * (1.0 - dist / b.radius) + 25.0 * ((s * 40.0).sin() > 0.6) as i32 as f64;
                                 acc += shade * n_pose as f64;
@@ -243,13 +360,7 @@ pub fn render(spec: &RenderSpec, out: &mut [u8]) {
                         }
                     }
                     for (c, cw) in &frames {
-                        let dw = mul_v(cw, ray);
-                        let k = -c[2] / dw[2];
-                        acc += if k > 0.0 && dw[2].is_finite() {
-                            sheet_value(c[0] + k * dw[0], c[1] + k * dw[1], spec.codes, &spec.look)
-                        } else {
-                            spec.look.wall
-                        };
+                        acc += surface(spec, *c, mul_v(cw, ray)).1;
                     }
                 }
             }
@@ -292,6 +403,48 @@ mod tests {
     }
 
     #[test]
+    fn a_solid_hides_the_sheet_and_its_sticker_is_drawn_on_it() {
+        let cam = Camera::from_hfov(320.0, 240.0, 66.0);
+        let pose = Pose { r: BASE, t: [0.0, 0.0, 0.30], rms: 0.0 };
+        let c = codes();
+        // a 10 x 10 x 4 cm box on the sheet, at x = -5 cm; a 3 cm sticker on its top with one 2 cm marker
+        let bx = |h: [f64; 3]| vec![([1.0, 0.0, 0.0], h[0]), ([-1.0, 0.0, 0.0], h[0]), ([0.0, 1.0, 0.0], h[1]), ([0.0, -1.0, 0.0], h[1]), ([0.0, 0.0, 1.0], h[2]), ([0.0, 0.0, -1.0], h[2])];
+        let solid = Solid { r: crate::geom::IDENTITY, o: [-0.05, 0.0, 0.02], planes: bx([0.05, 0.05, 0.02]), shade: 180.0 };
+        let code: u64 = 0b1; // only the bottom-right cell white
+        let st = Sticker { r: crate::geom::IDENTITY, o: [-0.05, 0.0, 0.04], half: [0.015, 0.015], markers: vec![([0.0, 0.0], 0.02, code)] };
+        let spec = RenderSpec {
+            camera: cam,
+            poses: &[pose],
+            width: 320,
+            height: 240,
+            ss: 1,
+            codes: &c,
+            look: SceneLook::default(),
+            light: Lighting { noise: 0.0, vignette: 0.0, gradient: 0.0, ..Default::default() },
+            bit: None,
+            occluders: &[],
+            solids: std::slice::from_ref(&solid),
+            stickers: std::slice::from_ref(&st),
+        };
+        let mut img = vec![0u8; 320 * 240 * 4];
+        render(&spec, &mut img);
+        let at = |w: [f64; 3]| {
+            let p = cam.project(w, &pose).unwrap();
+            img[(p.y as usize * 320 + p.x as usize) * 4] as f64
+        };
+        // the top face (lit, not paper-white) where the sheet's marker 13 (x -0.02, y 0) would be
+        let top = at([-0.08, 0.03, 0.04]);
+        assert!(top > 120.0 && top < 200.0, "box top {top}");
+        assert!(at([-0.02, 0.0, 0.04]) > 120.0, "the box hides the sheet marker under it");
+        // the sticker: black marker cell, white bottom-right cell, paper margin
+        assert!(at([-0.05 - 0.005, 0.005, 0.04]) < 30.0, "marker ink");
+        assert!(at([-0.05 + 0.0063, -0.0063, 0.04]) > 220.0, "white cell");
+        assert!(at([-0.05 + 0.013, 0.013, 0.04]) > 220.0, "sticker paper");
+        // the sheet still shows beside the box
+        assert!((at([0.02, 0.06, 0.0]) - 232.0).abs() < 1.0, "paper");
+    }
+
+    #[test]
     fn render_shows_paper_marker_and_wall() {
         let cam = Camera::from_hfov(320.0, 240.0, 66.0);
         // camera 30 cm in front of the sheet centre, looking straight at it
@@ -308,6 +461,8 @@ mod tests {
             light: Lighting { noise: 0.0, vignette: 0.0, gradient: 0.0, ..Default::default() },
             bit: None,
             occluders: &[],
+            solids: &[],
+            stickers: &[],
         };
         let mut img = vec![0u8; 320 * 240 * 4];
         render(&spec, &mut img);

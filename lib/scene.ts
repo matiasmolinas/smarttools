@@ -224,8 +224,10 @@ export interface SimFrame {
 
 /** Marker codes for the renderer from the ArUco dictionary code list ("0101..." per id). */
 export function markerCodes(codeList: string[]): Uint8Array {
-  const out = new Uint8Array(BOARD_MARKERS.length * 36);
-  for (const m of BOARD_MARKERS) for (let b = 0; b < 36; b++) out[m.id * 36 + b] = codeList[m.id][b] === "1" ? 1 : 0;
+  // every id of the dictionary (the sheet's first; markers on parts use higher ids)
+  const n = Math.max(BOARD_MARKERS.length, codeList.length);
+  const out = new Uint8Array(n * 36);
+  for (let id = 0; id < n; id++) for (let b = 0; b < 36; b++) out[id * 36 + b] = codeList[id]?.[b] === "1" ? 1 : 0;
   return out;
 }
 

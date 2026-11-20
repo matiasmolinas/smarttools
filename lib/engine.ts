@@ -77,6 +77,7 @@ export const GATE_REASONS = {
   OFF_TARGET: 32,
   UNSTEADY: 64,
   NOT_LOCATED: 128,
+  KEEP_OUT: 256,
 } as const;
 export function gateReasonNames(bits: number): string[] {
   return Object.entries(GATE_REASONS)
@@ -102,6 +103,35 @@ export interface RenderOptions {
   seed?: number;
   bit?: { tipCam: V3; axisCam: V3; length: number; radius: number } | null;
   occluders?: { cx: number; cy: number; r: number }[];
+  /** parts in the scene: convex solids (half-spaces n·x <= d in their own frame) */
+  solids?: SolidSpec[];
+  /** marker stickers (or printed markers) on parts, in the plane z = 0 of their frame */
+  stickers?: StickerSpec[];
+}
+
+export interface SolidSpec {
+  /** local → world */
+  pose: Xf;
+  planes: [number, number, number, number][];
+  shade: number;
+}
+export interface StickerSpec {
+  pose: Xf;
+  /** half size of the paper, m */
+  half: [number, number];
+  /** marker centre, edge (m) and 36-bit code (first cell = most significant bit) */
+  markers: { x: number; y: number; size: number; code: number }[];
+}
+
+function encodeScene(solids: SolidSpec[] = [], stickers: StickerSpec[] = []): number[] {
+  const v: number[] = [solids.length];
+  for (const s of solids) v.push(...s.pose.p, ...s.pose.q, s.shade, s.planes.length, ...s.planes.flat());
+  v.push(stickers.length);
+  for (const t of stickers) {
+    v.push(...t.pose.p, ...t.pose.q, t.half[0], t.half[1], t.markers.length);
+    for (const m of t.markers) v.push(m.x, m.y, m.size, m.code);
+  }
+  return v;
 }
 
 export interface PoseFilterHandle {
@@ -146,6 +176,11 @@ interface Exports {
   st_steady_free(h: number): void;
   st_rig_pose(yaw: number, pitch: number, twist: number, tipWorld: number, tipCam: number, axisCam: number, out: number): number;
   st_render(cam: number, poses: number, n: number, w: number, h: number, ss: number, codes: number, cfg: number, out: number): number;
+  st_render_scene(cam: number, poses: number, n: number, w: number, h: number, ss: number, codes: number, cfg: number, scene: number, sceneLen: number, out: number): number;
+  st_refine_pose3(pose: number, world: number, img: number, n: number, f: number, cx: number, cy: number, iters: number, out: number): number;
+  st_engine_set_movable(h: number, node: number, on: number): void;
+  st_engine_set_feed_limit(h: number, mmS: number): void;
+  st_engine_add_keepout(h: number, node: number, hx: number, hy: number, hz: number, marginMm: number): void;
   st_board_info(out: number, cap: number): number;
   st_engine_new(): number;
   st_engine_free(h: number): void;
@@ -166,7 +201,7 @@ interface Exports {
   st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
-export const ENGINE_ABI = 4;
+export const ENGINE_ABI = 5;
 
 // ---------------- engine (scene graph + clock) ----------------
 
@@ -176,9 +211,9 @@ export type NodeStatus = "static" | "valid" | "predicted" | "stale" | "lost" | "
 export const NODE_STATUS: NodeStatus[] = ["static", "valid", "predicted", "stale", "lost", "uncalibrated"];
 export type EnginePhase = "approach" | "align" | "drill" | "hold" | "retract";
 export const ENGINE_PHASES: EnginePhase[] = ["approach", "align", "drill", "hold", "retract"];
-export const EVENT_KINDS = ["", "target", "ready", "not-ready", "depth-reached", "drilled", "lost", "found", "angle-alarm", "overrun", "job-reset"] as const;
+export const EVENT_KINDS = ["", "target", "ready", "not-ready", "depth-reached", "drilled", "lost", "found", "angle-alarm", "overrun", "job-reset", "part-located", "part-moved", "gesture-tap", "gesture-twist", "keep-out", "feed-fast", "stalled"] as const;
 export type EngineEventKind = (typeof EVENT_KINDS)[number];
-export const ALARMS = { DEPTH: 1, ANGLE: 2, LOST: 4 } as const;
+export const ALARMS = { DEPTH: 1, ANGLE: 2, LOST: 4, PART_MOVED: 8, KEEP_OUT: 16 } as const;
 
 export interface EngineConfig {
   tickHz: number;
@@ -275,6 +310,12 @@ export interface NavEngine {
   setNavigation(tool: number, targets: number[]): void;
   /** depth to reach per target (mm), in setNavigation's order */
   setTargetDepths(depths: number[]): void;
+  /** a part that moves: measurements against markers on it (calibrated nodes under it) update it, and locate it */
+  setMovable(node: number, on: boolean): void;
+  /** a no-go zone: a box (half sizes, m) in a node's frame, kept clear by a margin (mm) */
+  addKeepout(node: number, half: V3, marginMm: number): void;
+  /** feed above which drilling is "pushing too hard" (mm/s, default 12) */
+  setFeedLimit(mmS: number): void;
   start(t0: number): void;
   resetJob(): void;
   /** a relation T_from_to seen by a tracker at tCapture */
@@ -362,6 +403,18 @@ export class NavCore {
       this.putPts(w, world);
       this.putPts(i, img);
       this.x.st_refine_pose(p, w, i, n, K.f, K.cx, K.cy, iters, p);
+      return this.getPose(p);
+    });
+  }
+
+  /** Gauss-Newton on 3D points (markers on several faces of a part). */
+  refinePose3(pose: Pose, world: V3[], img: P[], K: Intrinsics, iters = 10): Pose {
+    const n = world.length;
+    return this.with([104, n * 24, n * 16], ([p, w, i]) => {
+      this.putPose(p, pose);
+      this.f64(w, n * 3).set(world.flat());
+      this.putPts(i, img);
+      this.x.st_refine_pose3(p, w, i, n, K.f, K.cx, K.cy, iters, p);
       return this.getPose(p);
     });
   }
@@ -593,7 +646,9 @@ export class NavCore {
   /** Render a simulated camera frame (RGBA). Several poses = motion blur over the exposure. */
   render(cam: Camera, poses: Pose[], o: RenderOptions): Uint8ClampedArray {
     const bytes = o.width * o.height * 4;
-    return this.with([56, poses.length * 104, o.codes.length, 512, bytes], ([c, ps, cd, cfg, out]) => {
+    const scene = encodeScene(o.solids, o.stickers);
+    return this.with([56, poses.length * 104, o.codes.length, 512, scene.length * 8, bytes], ([c, ps, cd, cfg, sc, out]) => {
+      this.f64(sc, scene.length).set(scene);
       this.putCam(c, cam);
       this.putPoses(ps, poses);
       new Uint8Array(this.x.memory.buffer, cd, o.codes.length).set(o.codes);
@@ -604,7 +659,8 @@ export class NavCore {
         b ? 1 : 0, ...(b ? b.tipCam : [0, 0, 0]), ...(b ? b.axisCam : [0, 0, 1]), b?.length ?? 0, b?.radius ?? 0, occ.length);
       occ.forEach((q, i) => v.splice(19 + i * 3, 3, q.cx, q.cy, q.r));
       this.f64(cfg, 64).set(v);
-      this.x.st_render(c, ps, poses.length, o.width, o.height, o.ss ?? 2, cd, cfg, out);
+      const r = this.x.st_render_scene(c, ps, poses.length, o.width, o.height, o.ss ?? 2, cd, cfg, sc, scene.length, out);
+      if (r !== 1) throw new Error(`render failed (${r})`);
       return new Uint8ClampedArray(this.x.memory.buffer.slice(out, out + bytes));
     });
   }
@@ -683,6 +739,9 @@ export class NavCore {
           this.f64(p, depths.length).set(depths);
           x.st_engine_set_target_depths(h, p, depths.length);
         }),
+      setMovable: (node, on) => x.st_engine_set_movable(h, node, on ? 1 : 0),
+      setFeedLimit: (v) => x.st_engine_set_feed_limit(h, v),
+      addKeepout: (node, half, m) => x.st_engine_add_keepout(h, node, half[0], half[1], half[2], m),
       start: (t0) => x.st_engine_start(h, t0),
       resetJob: () => x.st_engine_reset_job(h),
       push: (from, to, t, tc, markers, rms) =>

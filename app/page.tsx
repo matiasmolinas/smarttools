@@ -22,6 +22,17 @@ const REPOS = [
   },
 ];
 
+const ON_PART = [
+  { k: "Anchors", t: "Stick markers on the part", d: "Located once by touch, then followed when you move it, flip it or cover the sheet. A part that slips in the vise stops the job." },
+  { k: "Factory markers", t: "Parts that locate themselves", d: "Markers printed on the part at known positions: located and identified on sight, no touching." },
+  { k: "Glow · tunnel · x-ray", t: "Guidance on the part", d: "The next hole glows, an approach tunnel rises from it, and x-ray shows the screw inside and the material left." },
+  { k: "No-go zones", t: "Never into a pipe", d: "Pipes and cables are volumes in the scene: a hole whose path comes too close is refused." },
+  { k: "Hands-free", t: "The drill is the remote", d: "Tap the tip twice to confirm, twist the drill to skip. A tone guides you, so your eyes stay on the work." },
+  { k: "Learn", t: "Follow an expert's ghost", d: "An expert's run replayed one step ahead, and a score for every screw from what the engine measured." },
+  { k: "Remote", t: "An expert, miles away", d: "Poses, not video: a few kB/s. A remote expert marks a hole and it lights up on the part." },
+  { k: "Report", t: "Every screw, on record", d: "Depth, angle and flags per screw, a heat map on the part, and a report to hand over." },
+];
+
 const STEPS = [
   {
     n: "01",
@@ -90,6 +101,21 @@ export default function Home() {
           <Legend color="var(--cyan)" title="Every hole, its own axis" body="Top, chamfer or bracket: the rings, the go / no-go gate and the depth stop follow each hole's own frame." />
           <Legend color="var(--green)" title="Checked, not trusted" body="A part 2 mm off is caught before the first screw. Each screw is logged with its depth and angle." />
         </div>
+      </section>
+
+      <section aria-label="On the part" className="py-10">
+        <p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-[var(--cyan)]">On the part, in your hands</p>
+        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">The camera and the engine see the job. So the job can talk back.</h2>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {ON_PART.map((x) => (
+            <div key={x.t} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-white/40">{x.k}</div>
+              <h3 className="mt-1.5 font-medium">{x.t}</h3>
+              <p className="mt-1.5 text-xs leading-relaxed text-white/55">{x.d}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 font-mono text-[11px] text-white/40">Each one is a scenario below, running on the real engine.</p>
       </section>
 
       <ScenarioGallery />

@@ -163,10 +163,10 @@ pub fn focal_from_homography(h: &M3, cx: f64, cy: f64) -> Option<f64> {
     (n > 0).then(|| sum / n as f64)
 }
 
-fn residuals(p: &Pose, world: &[P2], img: &[P2], k: &Intrinsics, out: &mut Vec<f64>) -> bool {
+fn residuals(p: &Pose, world: &[V3], img: &[P2], k: &Intrinsics, out: &mut Vec<f64>) -> bool {
     out.clear();
     for (w, m) in world.iter().zip(img) {
-        match project([w.x, w.y, 0.0], p, k) {
+        match project(*w, p, k) {
             Some(q) => {
                 out.push(q.x - m.x);
                 out.push(q.y - m.y);
@@ -184,6 +184,12 @@ fn perturb(p: &Pose, d: &[f64; 6]) -> Pose {
 /// Gauss-Newton refinement of the pose on reprojection error (6 parameters, numeric Jacobian).
 /// Stops when the error stops decreasing. Sets `rms`.
 pub fn refine_pose(pose: &Pose, world: &[P2], img: &[P2], k: &Intrinsics, iters: usize) -> Pose {
+    let w3: Vec<V3> = world.iter().map(|w| [w.x, w.y, 0.0]).collect();
+    refine_pose3(pose, &w3, img, k, iters)
+}
+
+/// The same refinement for points anywhere in 3D (markers on several faces of a part).
+pub fn refine_pose3(pose: &Pose, world: &[V3], img: &[P2], k: &Intrinsics, iters: usize) -> Pose {
     let mut cur = *pose;
     let mut r0 = Vec::with_capacity(world.len() * 2);
     if !residuals(&cur, world, img, k, &mut r0) {

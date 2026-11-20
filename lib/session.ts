@@ -8,6 +8,7 @@
 //                                            │
 //   renderers (3D, 2D plan, HUD) ◄─ snapshot ┘  as often as they can, or never (headless)
 
+import type { MarkerBody } from "./anchors.ts";
 import type { Camera, EngineConfig, EngineSnapshot, NavCore, ToolCalib } from "./engine.ts";
 import { GATE_REASONS } from "./engine.ts";
 import { MarkerTracker, type CaptureKind, type CaptureResult, type Detector, type Rgba, type TrackerFrame } from "./markertracker.ts";
@@ -28,6 +29,8 @@ export interface SessionOptions {
   engine?: Partial<EngineConfig>;
   /** defaults to the SmartTools A4 job */
   scene?: SceneDef;
+  /** markers on parts to track (factory markers, or stickers learned on a located part) */
+  bodies?: MarkerBody[];
   /** depth to reach per target (mm), in the scene's navigation order (screws seat at their own depth) */
   targetDepths?: number[];
   t0?: number;
@@ -49,6 +52,7 @@ export class NavSession {
     this.tool = o.tool;
     this.toolCalibrated = o.toolCalibrated;
     this.tracker = new MarkerTracker(core, detector, o.camera, o.cameraCalibrated);
+    if (o.bodies) this.tracker.setBodies(o.bodies);
     const engine = core.createEngine();
     if (o.engine) engine.configure(o.engine);
     this.scene = buildEngine(engine, o.scene ?? smartToolsScene({ tool: o.tool }));
@@ -83,9 +87,13 @@ export class NavSession {
   /** A tracker result computed elsewhere (a Web Worker): hand its measurement to the engine. */
   pushTrackerFrame(f: TrackerFrame) {
     this.lastFrame = f;
-    if (f.pose) {
-      const nav = this.scene.def.navigation;
-      this.engine.push(this.id(nav.tracked), this.id(nav.reference), fromPose(f.pose), f.tCapture, f.markers, f.rmsPx);
+    const nav = this.scene.def.navigation;
+    if (f.pose) this.engine.push(this.id(nav.tracked), this.id(nav.reference), fromPose(f.pose), f.tCapture, f.markers, f.rmsPx);
+    // markers on parts: the camera against each part's body node (the engine places the part, or the
+    // camera from the part when the sheet is not seen)
+    for (const b of f.bodies ?? []) {
+      const id = this.scene.ids[b.name];
+      if (id != null) this.engine.push(this.id(nav.tracked), id, fromPose(b.pose), f.tCapture, b.markers, b.rmsPx);
     }
   }
 
@@ -163,6 +171,7 @@ export function gateMessage(bits: number): string | null {
   if (!bits) return null;
   if (bits & GATE_REASONS.NOT_CALIBRATED) return "Calibrate first";
   if (bits & GATE_REASONS.NOT_LOCATED) return "Locate the part first";
+  if (bits & GATE_REASONS.KEEP_OUT) return "No-go zone: not here";
   if (bits & (GATE_REASONS.STALE | GATE_REASONS.FEW_MARKERS)) return "Show more markers";
   if (bits & GATE_REASONS.POOR_FIT) return "Markers unclear";
   if (bits & GATE_REASONS.UNSTEADY) return "Hold steady";

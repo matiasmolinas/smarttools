@@ -4,9 +4,9 @@
 // planned integrations: their panels illustrate how each project plugs in.
 
 import { BOARD_TARGETS } from "../board.ts";
-import { GATE_REASONS, gateReasonNames, type EngineEvent, type EngineSnapshot, type NavCore, type NavEngine } from "../engine.ts";
+import { GATE_REASONS, gateReasonNames, type EngineEvent, type EngineSnapshot, type NavCore, type NavEngine, type SolidSpec } from "../engine.ts";
 import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, V02_RIG, disturb, dockRigAt, toolWorldFromHold, truthAt, type Hold, type Rig } from "../scene.ts";
-import { smartToolsScene, toXf, type SceneDef } from "../scenedef.ts";
+import { smartToolsScene, toXf, type Material, type SceneDef } from "../scenedef.ts";
 import { compose, qaxis, xf, type Xf } from "../xform.ts";
 import { phoneById } from "../phones.ts";
 import type { V3 } from "../pose.ts";
@@ -33,6 +33,8 @@ export interface PanelModel {
   steps?: PanelStep[];
   records?: { cols: string[]; rows: string[][] };
   note?: string;
+  /** files the viewer can download (a job report) */
+  downloads?: { label: string; filename: string; type: string; content: () => string }[];
 }
 
 export interface Segment {
@@ -113,6 +115,25 @@ export interface Scenario {
   ghost?: string[];
   phoneHidden?: string[];
   real?: RealWorld;
+  /** guidance drawn on the part (next hole glowing, approach tunnel, x-ray): the parts as convex solids
+   * where the engine has them (for the material left under a screw) */
+  guidance?: (ctx: Ctx, worldOf: (name: string) => Xf | null) => SolidSpec[];
+  /** markers on parts in the camera's view: the true world pose of each body node */
+  bodies?: (ctx: Ctx) => { node: string; world: Xf }[];
+  /** the marker sheet can be seen (default true; false = covered) */
+  sheetSeen?: (ctx: Ctx) => boolean;
+  /** holes skipped for later (guidance) */
+  skipped?: (ctx: Ctx) => string[];
+  /** show the sound guidance (what the tone is saying) */
+  sound?: boolean;
+  /** the job's order of targets now (default: the scene's navigation order) */
+  order?: (ctx: Ctx) => string[];
+  /** grade of a finished hole for the heat map */
+  quality?: (ctx: Ctx, name: string) => "good" | "fair" | "redo" | undefined;
+  /** a ghost tool to follow (an expert's recorded run), world pose of the tool */
+  ghostTool?: (ctx: Ctx) => Xf | null;
+  /** the next part as a hologram where it goes: a node of `real.def`, its local pose, and how it matches */
+  hologram?: (ctx: Ctx) => { node: string; local: Xf; state: "ghost" | "match" | "off" } | null;
 }
 
 // ---------------- helpers ----------------
@@ -519,7 +540,54 @@ const agentvcs: Scenario = {
   },
 };
 
-export const SCENARIOS_FLAT: Scenario[] = [drillThree, calibrate, angled, safety, cameraView, phones, athos, gatekeeper, agentvcs];
+// ---------------- no-go zones: what is inside the wall ----------------
+
+/** A water pipe 8 mm behind the wall across A2's row, and a cable running down beside the marks. */
+function wallWithServices(): SceneDef {
+  const d = smartToolsScene({ tool: reference.tool });
+  const xray = (color: string): Material => ({ color, opacity: 0.55, emissive: color, xray: true });
+  d.nodes.push(
+    { name: "pipe", parent: "sheet", kind: "display", local: { p: [0, -0.02, -0.018] }, visual3d: [{ kind: "cylinder", radius: 0.01, length: 0.4, axis: "x", material: xray("#4aa8ff") }], meta: { service: "water pipe, Ø20 mm" } },
+    { name: "cable", parent: "sheet", kind: "display", local: { p: [0.035, 0, -0.012] }, visual3d: [{ kind: "cylinder", radius: 0.004, length: 0.45, axis: "y", material: xray("#ff5a6a") }], meta: { service: "power cable" } },
+  );
+  d.navigation.keepouts = [
+    { node: "pipe", half: [0.2, 0.01, 0.01], marginMm: 6 },
+    { node: "cable", half: [0.004, 0.225, 0.004], marginMm: 10 },
+  ];
+  return d;
+}
+const noGo: Scenario = {
+  id: "no-go",
+  kicker: "Safety · inside the wall",
+  title: "No-go zones: never drill into a pipe or a cable",
+  summary: "Pipes and cables from the building plan (or a scan) are volumes in the scene. A hole whose path comes too close is refused by the engine, and the HUD says why. It also tells you when you push too hard.",
+  duration: 17,
+  view2d: "hud",
+  segments: [v03()],
+  scene: () => wallWithServices(),
+  view3d: { pos: [0.34, -0.1, 0.32], target: [0.02, -0.02, -0.01] },
+  tool: (ctx) => {
+    const [a2, a3] = [BOARD_TARGETS[1], BOARD_TARGETS[2]];
+    // 0-6 s: try A2 (the pipe is behind it): refused; then A3, drilled, pushed too hard at first
+    if (ctx.t < 6) return toolOf(ctx, withTremor(ctx, oneHole(ctx, a2, 0, { approach: 2.6, align: 9, drill: 3, hold: 0.8, retract: 2 })));
+    const h = oneHole(ctx, a3, 6.4, { approach: 2.4, align: 2.4, drill: 2.2, hold: 0.8, retract: 2 });
+    return toolOf(ctx, withTremor(ctx, h));
+  },
+  panel: (ctx) => {
+    const s = ctx.snap;
+    const ev = (k: string) => ctx.events.filter((e) => e.kind === k);
+    const lines: PanelLine[] = [
+      { label: "services", value: "water pipe Ø20 (6 mm margin) · power cable (10 mm margin)" },
+      ...ev("keep-out").map((e) => ({ label: `${ctx.names[e.node]} refused`, value: `its path runs into the pipe (${fmt(Math.abs(e.value), 0)} mm past the safe margin)`, state: "bad" as const })),
+      ...ev("feed-fast").map((e) => ({ label: "feed", value: `${fmt(e.value, 0)} mm/s: pushing too hard, ease off`, state: "warn" as const })),
+      ...gateLines(ctx),
+    ];
+    if (s && s.alarms & 16) lines.unshift({ label: "ALARM", value: "the tip is near a service: stop", state: "bad" });
+    return { caption: "The engine checks the hole's whole path against the services before it says ready, and the tip while drilling.", lines };
+  },
+};
+
+export const SCENARIOS_FLAT: Scenario[] = [drillThree, noGo, calibrate, angled, safety, cameraView, phones, athos, gatekeeper, agentvcs];
 
 export const PROJECT_INFO: Record<Project, { url: string; role: string }> = {
   athos: { url: "https://github.com/athos-agent/athos", role: "Plan & guide" },

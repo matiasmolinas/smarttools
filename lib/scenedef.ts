@@ -32,6 +32,8 @@ export interface Material {
   wireframe?: boolean;
   /** draw edges as lines on top (the line style of the landing page) */
   edges?: boolean;
+  /** seen through other surfaces (what is inside a wall or a part) */
+  xray?: boolean;
 }
 
 /** 3D representation, in the node frame (plus an optional offset, which may scale). */
@@ -43,7 +45,9 @@ export type Visual3D =
   | { kind: "mesh"; url: string; format: "stl"; material: Material; offset?: XfDef }
   | { kind: "markerSheet"; offset?: XfDef }
   | { kind: "axes"; length: number; offset?: XfDef }
-  | { kind: "line"; points: V3[]; material: Material; dashed?: boolean; offset?: XfDef };
+  | { kind: "line"; points: V3[]; material: Material; dashed?: boolean; offset?: XfDef }
+  /** a marker sticker (paper with ArUco markers) in its z = 0 plane, facing +Z */
+  | { kind: "markerPatch"; half: [number, number]; size: number; markers: { id: number; x: number; y: number }[]; offset?: XfDef };
 
 /** 2D representation, drawn in a plane view (see lib/render/render2d.ts). Sizes in metres. */
 export type Visual2D =
@@ -69,7 +73,18 @@ export interface NodeDef {
 export interface SceneDef {
   name: string;
   nodes: NodeDef[];
-  navigation: { tool: string; targets: string[]; tracked: string; reference: string };
+  navigation: {
+    tool: string;
+    targets: string[];
+    tracked: string;
+    reference: string;
+    movable?: string[];
+    known?: string[];
+    /** no-go zones: a box (half sizes, m) in a node's frame and its margin (mm) */
+    keepouts?: { node: string; half: V3; marginMm: number }[];
+    /** feed limit for the "pushing too hard" advice, mm/s */
+    feedLimitMmS?: number;
+  };
 }
 
 export const toXf = (d?: XfDef): Xf => ({ p: d?.p ?? [0, 0, 0], q: d?.q ?? QI, s: d?.s ?? [1, 1, 1] });
@@ -124,6 +139,11 @@ export function buildEngine(engine: NavEngine, def: SceneDef): BuiltScene {
   const ids: Record<string, number> = { world: 0 };
   for (const n of def.nodes) ids[n.name] = engine.addNode(n.name, n.parent ? ids[n.parent] : 0, n.kind, toXf(n.local));
   engine.setNavigation(ids[def.navigation.tool], def.navigation.targets.map((t) => ids[t]));
+  // parts that move (followed through markers on them) and calibrated nodes known from the start
+  for (const m of def.navigation.movable ?? []) engine.setMovable(ids[m], true);
+  for (const k of def.navigation.known ?? []) engine.setCalibrated(ids[k], true);
+  for (const k of def.navigation.keepouts ?? []) engine.addKeepout(ids[k.node], k.half, k.marginMm);
+  if (def.navigation.feedLimitMmS) engine.setFeedLimit(def.navigation.feedLimitMmS);
   const names: Record<number, string> = {};
   for (const [k, v] of Object.entries(ids)) names[v] = k;
   return { engine, ids, names, def };

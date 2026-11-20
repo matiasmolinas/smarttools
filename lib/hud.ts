@@ -34,6 +34,10 @@ export interface Overlay {
   gate?: { ready: boolean; message: string | null; locking?: boolean };
   /** a calibration capture in progress */
   calibrating?: { text: string; progress: number; count: number } | null;
+  /** the engine's safety alarms (bits, lib/engine.ts ALARMS) */
+  alarms?: number;
+  /** guidance hints on the part (lib/guidance.ts): out of order, material left */
+  hint?: string | null;
 }
 export interface HudOptions {
   background?: HudBackground;
@@ -226,7 +230,12 @@ export function drawHud(
         pass: false,
         check: `${Math.round(ov.calibrating.progress * 100)} % · ${ov.calibrating.count} samples`,
       }
-    : instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost), gate: ov?.gate?.message ?? null });
+    : ov?.alarms && ov.alarms & 16
+      ? { text: "STOP · no-go zone", color: RED, step: "!", pass: false, check: "the tip is close to a pipe or cable: back out" }
+      : ov?.alarms && ov.alarms & 8
+      ? { text: "STOP · the part moved", color: RED, step: "!", pass: false, check: "it slipped under the tool: re-clamp, back out, re-check" }
+      : instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost), gate: ov?.gate?.message ?? null });
+  if (ov?.hint && cue.color !== RED && !ov.calibrating) cue.check = ov.hint;
   const panelW = landscape ? Math.min(w * 0.62, u * 130) : w - u * 8;
   const pad = u * 3.4;
   const titleSize = u * (compact ? 6 : 5.4);
@@ -267,6 +276,8 @@ function instruction(
   if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least two markers in view" };
   if (c.gate === "Calibrate first" && (s.phase === "approach" || s.phase === "align"))
     return { text: "Calibrate first", color: AMBER, step: "0/3", pass: false, check: "tap Calibrate with the tip on A2" };
+  if (c.gate === "No-go zone: not here" && (s.phase === "approach" || s.phase === "align"))
+    return { text: "No-go zone", color: RED, step: "0/3", pass: false, check: "a pipe or cable runs behind this mark: pick another" };
   if (c.gate === "Locate the part first" && (s.phase === "approach" || s.phase === "align"))
     return { text: "Locate the part", color: AMBER, step: "0/3", pass: false, check: "touch its reference points with the tip" };
   if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
