@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MARKERS, TARGETS, simulate, type SimState } from "@/lib/sim";
@@ -76,11 +76,12 @@ const LABELS = [
   { key: "marker", text: "Fiducial marker" },
 ] as const;
 
-export default function NavDemo() {
+/** film: deterministic frame stepping for video capture (window.__filmStep(dt)), no orbit hints */
+export default function NavDemo({ film = false }: { film?: boolean } = {}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const hudRef = useRef<HTMLCanvasElement>(null);
   const labelRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const [phaseText, setPhaseText] = useState("approach");
+  const phaseRef = useRef<HTMLSpanElement>(null);
 
   // ---------- three.js scene ----------
   useEffect(() => {
@@ -334,10 +335,7 @@ export default function NavDemo() {
       el.style.transform = `translate(${x}px, ${y}px)`;
     };
 
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
-      const dt = Math.min(clock.getDelta(), 0.05);
-      if (!visible) return;
+    const step = (dt: number) => {
       simT += dt;
       const s: SimState = simulate(simT);
 
@@ -423,10 +421,21 @@ export default function NavDemo() {
 
       if (s.phase !== lastPhase) {
         lastPhase = s.phase;
-        setPhaseText(s.phase);
+        if (phaseRef.current) phaseRef.current.textContent = `phase: ${s.phase}`;
       }
     };
-    tick();
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      if (!visible) return;
+      step(dt);
+    };
+    const w = window as unknown as { __filmStep?: (dt: number) => void; __filmReady?: boolean };
+    if (film) {
+      w.__filmStep = step;
+      step(0);
+      w.__filmReady = true;
+    } else tick();
 
     return () => {
       cancelAnimationFrame(raf);
@@ -444,13 +453,13 @@ export default function NavDemo() {
       renderer.dispose();
       mount.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [film]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className={film ? "grid h-full grid-cols-[minmax(0,1fr)_auto] gap-8" : "grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]"}>
       {/* 3D scene */}
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#05080d]">
-        <div ref={mountRef} className="h-[420px] w-full cursor-grab active:cursor-grabbing sm:h-[560px]" />
+        <div ref={mountRef} className={film ? "h-full w-full" : "h-[420px] w-full cursor-grab active:cursor-grabbing sm:h-[560px]"} />
         <div className="pointer-events-none absolute inset-0">
           {LABELS.map((l) => (
             <div
@@ -458,31 +467,36 @@ export default function NavDemo() {
               ref={(el) => {
                 labelRefs.current[l.key] = el;
               }}
-              className="absolute left-0 top-0 transition-opacity duration-300"
+              className={film ? "absolute left-0 top-0" : "absolute left-0 top-0 transition-opacity duration-300"}
             >
-              <div className="-translate-x-1/2 -translate-y-[calc(100%+10px)] whitespace-nowrap rounded border border-white/15 bg-black/60 px-1.5 py-0.5 font-mono text-[10px] text-white/80 backdrop-blur-sm">
+              <div className={`-translate-x-1/2 whitespace-nowrap rounded border border-white/15 bg-black/60 font-mono text-white/80 backdrop-blur-sm ${film && l.key === "chuck" ? "translate-y-[14px]" : "-translate-y-[calc(100%+10px)]"} ${film ? "px-2 py-0.5 text-[14px]" : "px-1.5 py-0.5 text-[10px]"}`}>
                 {l.text}
               </div>
             </div>
           ))}
         </div>
-        <div className="pointer-events-none absolute left-4 top-4 flex flex-wrap gap-2 font-mono text-[11px]">
+        <div className={`pointer-events-none absolute flex flex-wrap gap-2 font-mono ${film ? "left-6 top-6 text-[16px]" : "left-4 top-4 text-[11px]"}`}>
           <span className="rounded-full border border-cyan-300/30 bg-black/50 px-2.5 py-1 text-cyan-200">3D · world frame</span>
-          <span className="rounded-full border border-white/15 bg-black/50 px-2.5 py-1 uppercase text-white/70">phase: {phaseText}</span>
+          <span ref={phaseRef} className="rounded-full border border-white/15 bg-black/50 px-2.5 py-1 uppercase text-white/70">phase: approach</span>
         </div>
-        <div className="pointer-events-none absolute bottom-3 left-4 right-4 flex justify-between font-mono text-[10px] text-white/40">
-          <span>drag to orbit · simulation</span>
-          <span>phone screen = the 2D guide the user sees</span>
-        </div>
+        {!film && (
+          <div className="pointer-events-none absolute bottom-3 left-4 right-4 flex justify-between font-mono text-[10px] text-white/40">
+            <span>drag to orbit · simulation</span>
+            <span>phone screen = the 2D guide the user sees</span>
+          </div>
+        )}
       </div>
 
       {/* 2D phone HUD */}
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-full max-w-[340px] rounded-[2.2rem] border border-white/15 bg-[#0b0f14] p-2.5 shadow-[0_0_60px_-20px_rgba(90,216,255,0.45)]">
-          <div className="relative overflow-hidden rounded-[1.7rem] bg-black">
+      <div className={film ? "flex h-full flex-col items-center justify-center gap-4" : "flex flex-col items-center gap-3"}>
+        <div className={film ? "w-[400px] rounded-[2.6rem] border border-white/15 bg-[#0b0f14] p-3 shadow-[0_0_80px_-20px_rgba(90,216,255,0.5)]" : "w-full max-w-[340px] rounded-[2.2rem] border border-white/15 bg-[#0b0f14] p-2.5 shadow-[0_0_60px_-20px_rgba(90,216,255,0.45)]"}>
+          <div className={`relative overflow-hidden bg-black ${film ? "rounded-[2rem]" : "rounded-[1.7rem]"}`}>
             <canvas ref={hudRef} className="block aspect-[9/15] w-full" />
           </div>
         </div>
+{film ? (
+          <div className="font-mono text-[17px] text-white/60">What the user sees on the phone</div>
+        ) : (
         <div className="flex w-full max-w-[340px] flex-col gap-2">
           <a
             href="/hud"
@@ -491,6 +505,7 @@ export default function NavDemo() {
             Open the phone screen demo →
           </a>
         </div>
+        )}
       </div>
     </div>
   );

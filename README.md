@@ -61,10 +61,18 @@ under ideal conditions, not the SmartTools application.
 npm install
 npm run dev                                   # website at http://localhost:3000
 node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
+npm run engine:test                           # Rust core: cargo test + parity with TypeScript
 ```
 
 The camera preview in `/hud` needs HTTPS or `localhost`. To try it on a phone, deploy (for example to Vercel) or use
 an HTTPS tunnel.
+
+## Navigation engine (Rust)
+
+[`engine/`](engine/) is the start of the navigation core in Rust (`smarttools-nav-core`): homography,
+pose, Gauss-Newton refinement, focal self-calibration and sub-pixel corners, compiled to a 50 KB
+WebAssembly module (`public/engine/nav_core.wasm`, wrapped by `lib/engine.ts`). A parity test checks it
+against the TypeScript prototype. See the [engine README](engine/README.md).
 
 ## Code map (website)
 
