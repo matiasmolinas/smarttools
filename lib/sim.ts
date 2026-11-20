@@ -28,6 +28,9 @@ export interface SimState {
   drilled: boolean[];
   bitSpin: number;
   label: string;
+  /** depth to reach for this mark (default 35 mm) and whether it is drilled or a screw is driven */
+  depthTargetMm?: number;
+  action?: "drill" | "drive";
 }
 
 export const TARGETS = [

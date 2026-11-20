@@ -44,7 +44,8 @@ export interface DockOptions {
 }
 
 export function dockRig(o: DockOptions = {}): DockRig {
-  const tiltDeg = o.tiltDeg ?? 0;
+  // the dock is set at its default tilt (v0.4: 15°, the bit tip ~15° below the image centre)
+  const tiltDeg = o.tiltDeg ?? DOCK.tiltDefault;
   const bodyD = o.bodyDiameter ?? DOCK.drill.bodyDiameter;
   const tipX = o.tipX ?? DOCK.drill.tipX;
   const axisZ = -(bodyD / 2) * Math.SQRT2;

@@ -1,38 +1,60 @@
 "use client";
 
-// Plays one gallery scenario: the real engine (WASM) on scripted motion, drawn in 3D (three.js, the
-// scene's visual3d), in 2D (the phone HUD over the simulated camera image, or a plan from visual2d)
-// and as a side panel. Everything is drawn from the engine's snapshots.
+// Plays one scenario on the real engine (WASM): scripted motion -> measurements -> engine -> snapshots,
+// drawn as
+// - 3D: the engine's scene (visual3d), with the CAD model of located parts as a cyan "ghost", and the
+//   real parts (where they truly are) drawn solid;
+// - 2D: the phone HUD over what the camera sees (a rendered phone view in 3D jobs, the simulated sheet
+//   image in flat jobs), or a plan (visual2d);
+// - a panel with the numbers the engine decides with.
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
-import { NavCore } from "@/lib/engine";
+import { NavCore, type EngineSnapshot } from "@/lib/engine";
 import { cameraPoseForTool, markerCodes } from "@/lib/scene";
 import { Scene3D } from "@/lib/render/render3d";
 import { drawPlan } from "@/lib/render/render2d";
 import { hudView } from "@/lib/render/hudview";
 import { drawHud } from "@/lib/hud";
-import { applyPoint, inverse, toPose } from "@/lib/xform";
+import { applyPoint, compose, inverse, toPose, type Xf } from "@/lib/xform";
+import { toXf, toolLocal, type SceneDef } from "@/lib/scenedef";
 import { ScenarioRun } from "@/lib/gallery/runner";
-import type { PanelModel, Scenario } from "@/lib/gallery/scenarios";
+import type { Ctx, PanelModel, Scenario } from "@/lib/gallery/scenarios";
 
 const CAM_W = 480;
 const CAM_H = 270;
 let corePromise: Promise<NavCore> | null = null;
 
-export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario: Scenario; playing: boolean; onEnd: () => void }) {
+/** World transforms of a static scene definition (locals composed down the tree), with overrides. */
+function staticSnapshot(def: SceneDef, overrides: Record<string, Xf | null> = {}) {
+  const ids: Record<string, number> = { world: 0 };
+  const worlds: Record<string, Xf | null> = { world: toXf() };
+  def.nodes.forEach((n, i) => {
+    ids[n.name] = i + 1;
+    const parent = n.parent ? worlds[n.parent] : toXf();
+    const local = n.name in overrides ? overrides[n.name] : toXf(n.local);
+    worlds[n.name] = parent && local ? compose(parent, local) : null;
+  });
+  const nodes = def.nodes.filter((n) => worlds[n.name]).map((n) => ({ id: ids[n.name], status: "static" as const, age: 0, world: worlds[n.name]! }));
+  return { ids, snap: { nodes } as unknown as EngineSnapshot };
+}
+
+export default function ScenarioPlayer({ scenario, playing, onEnd, variant = "gallery" }: { scenario: Scenario; playing: boolean; onEnd: () => void; variant?: "gallery" | "hero" }) {
   const mount = useRef<HTMLDivElement>(null);
   const view2d = useRef<HTMLCanvasElement>(null);
   const [panel, setPanel] = useState<PanelModel | null>(null);
   const [progress, setProgress] = useState(0);
   const [segment, setSegment] = useState("");
+  const [headline, setHeadline] = useState("");
+  const [chapter, setChapter] = useState(-1);
   const playingRef = useRef(playing);
   playingRef.current = playing;
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
+  const hero = variant === "hero";
 
   useEffect(() => {
     let disposed = false;
@@ -51,22 +73,38 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
       el.appendChild(renderer.domElement);
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x05080d);
-      scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x101820, 1.4));
-      const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-      sun.position.set(0.4, 0.6, 0.8);
+      scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x101820, 1.5));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+      sun.position.set(0.4, -0.5, 0.9);
       scene.add(sun);
-      const grid = new THREE.GridHelper(0.8, 40, 0x1d3a4a, 0x0f1d26);
+      const bench = !!scenario.view3d?.up && scenario.view3d.up[2] === 1;
+      const grid = new THREE.GridHelper(bench ? 1.0 : 0.8, bench ? 50 : 40, 0x1d3a4a, 0x0f1d26);
       grid.rotation.x = Math.PI / 2;
       grid.position.z = -0.001;
       scene.add(grid);
-      const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 10);
+      const cam = new THREE.PerspectiveCamera(hero ? 34 : 40, 1, 0.01, 10);
       const v = scenario.view3d ?? { pos: [0.42, 0.14, 0.5], target: [0, 0, 0.1] };
+      if (v.up) cam.up.set(...v.up);
       cam.position.set(...v.pos);
+      cam.layers.enable(1);
       const controls = new OrbitControls(cam, renderer.domElement);
       controls.target.set(...v.target);
       controls.enableZoom = false;
+      controls.autoRotate = hero;
+      controls.autoRotateSpeed = 0.35;
       let s3: Scene3D | null = null;
       let s3Version = -1;
+      // the real parts (solid), placed statically
+      const real = scenario.real ? new Scene3D(scenario.real.def, { only: scenario.real.nodes }) : null;
+      if (real) scene.add(real.root);
+
+      // ---- the phone's view (3D jobs): the same scene seen from the docked camera ----
+      const phoneR = scenario.view2d === "phone" ? new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }) : null;
+      const phoneCam = new THREE.PerspectiveCamera(40, 16 / 9, 0.03, 5);
+      phoneCam.layers.set(0);
+      const PW = 640, PH = 360;
+      phoneR?.setSize(PW, PH, false);
+
       const resize = () => {
         const w = el.clientWidth, h = el.clientHeight;
         renderer.setSize(w, h, false);
@@ -86,11 +124,13 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
         ro.disconnect();
         controls.dispose();
         s3?.dispose();
+        real?.dispose();
         renderer.dispose();
+        phoneR?.dispose();
         el.removeChild(renderer.domElement);
       });
 
-      // ---- the simulated phone camera (for the HUD) ----
+      // ---- the simulated phone camera image (flat jobs) ----
       const camCanvas = document.createElement("canvas");
       camCanvas.width = CAM_W;
       camCanvas.height = CAM_H;
@@ -118,7 +158,7 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
             scene.remove(s3.root);
             s3.dispose();
           }
-          s3 = new Scene3D(def, { markerCodes: codes });
+          s3 = new Scene3D(def, { markerCodes: codes, ghost: scenario.ghost, layer1: scenario.phoneHidden });
           scene.add(s3.root);
           s3Version = run.sceneVersion;
         }
@@ -129,22 +169,43 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
             if (o) o.visible = false;
           }
         }
+        if (real && scenario.real) {
+          const ctx = run.ctx(t, f.segment) as Ctx;
+          const st = staticSnapshot(scenario.real.def, scenario.real.pose?.(ctx) ?? {});
+          real.update(st.snap, st.ids);
+        }
         controls.update();
         renderer.render(scene, cam);
 
         // ---- 2D ----
         const c = view2d.current!;
-        const ctx = c.getContext("2d")!;
-        if (f.snap) {
+        const ctx2 = c.getContext("2d")!;
+        const snap = f.snap;
+        if (snap) {
+          const depthOf = (id: number) => {
+            const i = snap.targets.findIndex((x) => x.id === id);
+            return i >= 0 ? scenario.depths?.[i] : undefined;
+          };
           if (scenario.view2d === "plan") {
-            ctx.fillStyle = "#05080d";
-            ctx.fillRect(0, 0, c.width, c.height);
-            drawPlan(ctx, def, ids, f.snap, { frame: "sheet", follow: "tool", pxPerM: c.width / 0.22, width: c.width, height: c.height });
+            ctx2.fillStyle = "#05080d";
+            ctx2.fillRect(0, 0, c.width, c.height);
+            drawPlan(ctx2, def, ids, snap, { frame: "sheet", follow: "tool", pxPerM: c.width / 0.22, width: c.width, height: c.height });
           } else {
             const rig = f.segment.rig;
-            const k = CAM_W / rig.width;
+            const k = (scenario.view2d === "phone" ? PW : CAM_W) / rig.width;
             const camScaled = { ...rig.camera, f: rig.camera.f * k, cx: rig.camera.cx * k, cy: rig.camera.cy * k };
-            if (t - lastCamRender > 1 / 15 || t < lastCamRender) {
+            let source: HTMLCanvasElement = camCanvas;
+            if (scenario.view2d === "phone" && phoneR) {
+              // the true camera pose (what the lens sees), drawn with three.js
+              const camW = compose(f.toolW, inverse(toolLocal(rig.tool)));
+              phoneCam.position.set(...camW.p);
+              const q = new THREE.Quaternion(camW.q[1], camW.q[2], camW.q[3], camW.q[0]);
+              phoneCam.quaternion.copy(q.multiply(new THREE.Quaternion(1, 0, 0, 0)));
+              phoneCam.fov = (2 * Math.atan(PH / 2 / camScaled.f) * 180) / Math.PI;
+              phoneCam.updateProjectionMatrix();
+              phoneR.render(scene, phoneCam);
+              source = phoneR.domElement;
+            } else if (t - lastCamRender > 1 / 15 || t < lastCamRender) {
               lastCamRender = t;
               const img = core.render(camScaled, [cameraPoseForTool(rig, f.toolW)], {
                 width: CAM_W,
@@ -159,7 +220,6 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
               camCtx.putImageData(new ImageData(new Uint8ClampedArray(img), CAM_W, CAM_H), 0, 0);
             }
             // overlay points from the engine's estimate (where the phone would draw them)
-            const snap = f.snap;
             let aim = null, mark = null;
             const camNode = snap.nodes.find((n) => n.id === ids[def.navigation.tracked]);
             if (snap.active >= 0 && camNode) {
@@ -167,15 +227,23 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
               const tw = snap.nodes.find((n) => n.id === tgt.id)?.world;
               if (tw) [aim, mark] = core.projectPoints(camScaled, toPose(inverse(camNode.world)), [applyPoint(tw, [tgt.aim[0], tgt.aim[1], 0]), applyPoint(tw, [0, 0, 0])]);
             }
-            const hv = hudView({ def, ids, snapshot: snap, image: { aim, mark, quads: [] }, info: `${snap.markers} tags · ${f.segment.label}` });
-            drawHud(ctx, hv.state, c.width, c.height, false, { background: "camera", video: camCanvas, overlay: hv.overlay });
+            const hv = hudView({ def, ids, snapshot: snap, image: { aim, mark, quads: [] }, info: `${snap.markers} tags · ${f.segment.label}`, depthTargetMm: depthOf, action: scenario.action });
+            drawHud(ctx2, hv.state, c.width, c.height, false, { background: "camera", video: source, overlay: hv.overlay });
           }
         }
         if (t - lastPanel > 0.2 || t < lastPanel) {
           lastPanel = t;
+          const ctx = run.ctx(t, f.segment) as Ctx;
           setPanel(run.panel(t));
           setProgress(t / scenario.duration);
           setSegment(scenario.segments.length > 1 ? f.segment.label : "");
+          setHeadline(scenario.headline?.(ctx) ?? "");
+          const chs = scenario.chapters ?? [];
+          let ci = -1;
+          chs.forEach((ch, i) => {
+            if (ch.from <= t) ci = i;
+          });
+          setChapter(ci);
         }
       };
       raf = requestAnimationFrame(frame);
@@ -185,41 +253,58 @@ export default function ScenarioPlayer({ scenario, playing, onEnd }: { scenario:
       disposed = true;
       cleanups.reverse().forEach((f) => f());
     };
-  }, [scenario]);
+  }, [scenario, hero]);
 
+  const chapters = scenario.chapters ?? [];
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+    <div className={`grid gap-3 ${hero ? "lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"}`}>
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#05080d]">
-        <div ref={mount} className="h-[340px] w-full cursor-grab sm:h-[440px]" />
-        <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-cyan-300/30 bg-black/50 px-2.5 py-1 font-mono text-[11px] text-cyan-200">
-          3D · scene definition (visual3d)
-        </div>
-        {segment && (
-          <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-white/15 bg-black/60 px-2.5 py-1 font-mono text-[11px] text-white/80">{segment}</div>
+        <div ref={mount} className={`w-full cursor-grab ${hero ? "h-[380px] sm:h-[560px]" : "h-[340px] sm:h-[440px]"}`} />
+        {headline && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent px-4 pb-10 pt-4">
+            <p className={`max-w-xl font-semibold leading-tight tracking-tight text-white ${hero ? "text-xl sm:text-3xl" : "text-base sm:text-lg"}`}>{headline}</p>
+          </div>
         )}
+        {chapters.length > 0 && (
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex flex-wrap gap-1.5">
+            {chapters.map((ch, i) => (
+              <span
+                key={`${ch.label}-${i}`}
+                className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${i === chapter ? "border-[var(--green)] bg-[var(--green)]/15 text-[var(--green)]" : i < chapter ? "border-white/20 text-white/50" : "border-white/10 text-white/30"}`}
+              >
+                {i < chapter ? "✓ " : ""}
+                {ch.label}
+              </span>
+            ))}
+          </div>
+        )}
+        {!headline && (
+          <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-cyan-300/30 bg-black/50 px-2.5 py-1 font-mono text-[11px] text-cyan-200">3D · scene definition (visual3d)</div>
+        )}
+        {segment && <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-white/15 bg-black/60 px-2.5 py-1 font-mono text-[11px] text-white/80">{segment}</div>}
         <div className="absolute inset-x-0 bottom-0 h-1 bg-white/5">
           <div className="h-full bg-[var(--green)]/70" style={{ width: `${progress * 100}%` }} />
         </div>
       </div>
       <div className="flex flex-col gap-3">
-        <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black">
-          <canvas ref={view2d} className="block aspect-video w-full" />
-          <div className="pointer-events-none absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-0.5 font-mono text-[10px] text-white/70">
-            {scenario.view2d === "plan" ? "2D plan (visual2d)" : "phone HUD over the simulated camera"}
+        <div className={`relative overflow-hidden border border-white/10 bg-black ${hero ? "rounded-[1.6rem] p-1.5 shadow-[0_0_60px_-20px_rgba(90,216,255,0.45)]" : "rounded-2xl"}`}>
+          <canvas ref={view2d} className={`block aspect-video w-full ${hero ? "rounded-[1.2rem]" : ""}`} />
+          <div className="pointer-events-none absolute bottom-2 right-3 rounded-full bg-black/60 px-2 py-0.5 font-mono text-[10px] text-white/70">
+            {scenario.view2d === "plan" ? "2D plan (visual2d)" : scenario.view2d === "phone" ? "the phone: camera view + HUD (simulated)" : "phone HUD over the simulated camera"}
           </div>
         </div>
-        <PanelView panel={panel} />
+        <PanelView panel={panel} compact={hero} />
       </div>
     </div>
   );
 }
 
-function PanelView({ panel }: { panel: PanelModel | null }) {
+function PanelView({ panel, compact }: { panel: PanelModel | null; compact?: boolean }) {
   if (!panel) return <div className="rounded-2xl border border-white/10 p-4 font-mono text-xs text-white/40">Loading the engine…</div>;
   const color = (s?: string) => (s === "ok" ? "text-[var(--green)]" : s === "warn" ? "text-[var(--amber)]" : s === "bad" ? "text-red-400" : "text-white/80");
   return (
     <div className="flex min-h-[180px] flex-col gap-3 rounded-2xl border border-white/10 p-4">
-      <p className="text-sm leading-relaxed text-white/80">{panel.caption}</p>
+      {!compact && <p className="text-sm leading-relaxed text-white/80">{panel.caption}</p>}
       {panel.steps && (
         <ol className="space-y-1.5">
           {panel.steps.map((s) => (
@@ -256,7 +341,7 @@ function PanelView({ panel }: { panel: PanelModel | null }) {
         </dl>
       )}
       {panel.records && panel.records.rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <div className="max-h-40 overflow-auto">
           <table className="w-full font-mono text-[10.5px]">
             <thead>
               <tr className="text-left text-white/40">

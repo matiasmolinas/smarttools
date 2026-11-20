@@ -5,7 +5,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { PROJECT_INFO, SCENARIOS } from "@/lib/gallery/scenarios";
+import { PROJECT_INFO, SCENARIOS } from "@/lib/gallery";
 
 const ScenarioPlayer = dynamic(() => import("./ScenarioPlayer"), { ssr: false });
 

@@ -31,7 +31,7 @@ export const PHONES: PhoneProfile[] = [
     camFromTop: 15,
     camFromLeft: 14,
     provisional: true,
-    note: "the reference the dock v0.3 was designed for; lens position approximate",
+    note: "the reference the dock was designed for; lens position approximate",
   },
   {
     id: "redmi-15",

@@ -60,16 +60,18 @@ CAM_PROTRUDE = 1.0  # lens bump beyond the back face
 BODY_D_REF = 56.0  # motor housing diameter where the saddle sits
 TIP_X_REF = 190.0  # saddle centre -> bit tip, along the bit (with the bit you will use)
 
-# v0.3: the phone hangs low behind the saddle with the camera right above the bit axis, so the bit tip is in view
-# (~14° below the image centre) without tilting. v0.2 put the camera 12-17 cm above the axis and 5-8 cm to the
-# side: the tip was out of the image (scene simulator, docs/ENGINE_SPEC.md).
-TILT_MIN, TILT_MAX = 0.0, 20.0  # degrees, positive = camera looks further down (tilting up would hit the saddle)
+# v0.4: the lens sits right above the bit axis and high enough to see over the saddle and the hinge; the arm is
+# an L whose post stands beside the phone (behind the lens, never in front of it). v0.3 hung the phone low: the
+# arm's leg was 1.3 mm in front of the lens and the saddle hid the bit tip. v0.2 put the camera 5-8 cm to the
+# side. Every version is checked by intersecting the camera's view pyramid with the parts (see __main__).
+TILT_MIN, TILT_MAX = 0.0, 25.0  # degrees, positive = camera looks further down
+TILT_DEFAULT = 15.0  # where the bit tip sits ~15° below the image centre
 
 # rail (arm frame: pivot at origin; saddle frame = arm frame + PIVOT_Z at zero tilt)
 CH_IN = PHONE_THICK_MAX + 0.6  # channel inner width (X)
 CH_WALL = 3.0
 CH_X = -52.0  # channel centre X: behind the saddle (saddle back face at x = -30)
-PHONE_BOTTOM_Z = 6.0  # phone bottom edge in the saddle frame (drill body top is at -0.41 * r <= -8 mm)
+PHONE_BOTTOM_Z = 64.0  # phone bottom edge in the saddle frame: the lens looks over the hinge (ear top z = 44)
 BASE_Z1 = PHONE_BOTTOM_Z - PIVOT_Z  # channel base, arm frame (phone rests on it)
 BASE_Z0 = BASE_Z1 - 5.0
 FRONT_H, BACK_H = 5.0, 8.0  # wall heights above the base (front = screen side, -X)
@@ -78,8 +80,9 @@ LIP = 4.0  # how far the lips reach over the phone edge (Y)
 BACK_LIP_H = 8.0  # camera-side lip is short so the camera (14 mm up) is never covered
 FIX_FACE = -CAM_FROM_END  # inner face of the fixed jaw (Y): puts the lens at y = 0, above the bit axis
 RAIL_Y1 = FIX_FACE + PHONE_LEN_MAX + 25.0  # rail end (the phone extends toward +Y)
-BEAM_Z0 = 17.5 + 1.5 - PIVOT_Z  # upper beam bottom, arm frame: clears the saddle top (z = 17) by 1.5 mm
-LEG_X0, LEG_X1 = CH_X + CH_IN / 2, CH_X + CH_IN / 2 + 6.0  # vertical leg, behind the saddle
+BEAM_X0, BEAM_X1 = -46.0, -30.0  # low beam at pivot height, behind the ears (ear back face x = -24)
+BEAM_Z = 7.0  # half height of the beam/bridge (arm frame, around the pivot)
+POST_Y0, POST_Y1 = FIX_FACE - 3.0 - 13.0, FIX_FACE - 3.0  # the post stands beside the fixed jaw, clear of the lens
 
 
 def box(x0, x1, y0, y1, z0, z1):
@@ -163,16 +166,19 @@ def lower():
 # ---------------- 2. arm with rail and fixed jaw ----------------
 def arm():
     t = TONGUE_T / 2
+    # tongue between the ears (pivot + lock), bridged back to a low beam behind the ears
     tongue = cyl_y(0, 0, 11, -t, t) + cyl_y(-LOCK_R, 0, 8, -t, t) + box(-LOCK_R, 0, -t, t, -8, 8)
-    # upper beam: from the tongue back over the saddle, then a leg down behind it to the rail
-    beam = box(LEG_X0, -6, -t, t, BEAM_Z0, 8)
-    leg = box(LEG_X0, LEG_X1, -t, t, BASE_Z0, 8)
-    gusset = Manifold.batch_hull([box(LEG_X0, LEG_X1, -t, t, BASE_Z0, BASE_Z0 + 1), box(LEG_X0, LEG_X1, -t, 60, BASE_Z0, BASE_Z0 + 1),
-                                  box(LEG_X0, LEG_X1, -t, t, BEAM_Z0 - 1, BEAM_Z0)])
+    bridge = box(BEAM_X1 - 2, -LOCK_R, -t, t, -BEAM_Z, BEAM_Z)
+    beam = box(BEAM_X0, BEAM_X1, POST_Y0, t, -BEAM_Z, BEAM_Z)
     x_front0 = CH_X - CH_IN / 2 - CH_WALL
     x_front1 = CH_X - CH_IN / 2
     x_back0 = CH_X + CH_IN / 2
     x_back1 = CH_X + CH_IN / 2 + CH_WALL
+    # the post: beside the phone at the fixed-jaw end, from the beam up to the rail (never in front of the lens)
+    post = box(x_front0, BEAM_X0 + 4, POST_Y0, POST_Y1, -BEAM_Z, BASE_Z1)
+    gusset = Manifold.batch_hull([box(x_front0, x_back1, POST_Y0, POST_Y1, BASE_Z0 - 1, BASE_Z0),
+                                  box(x_front0, x_back1, POST_Y0, POST_Y1 + 40, BASE_Z0 - 1, BASE_Z0),
+                                  box(x_front0, x_back1, POST_Y0, POST_Y1, BASE_Z0 - 25, BASE_Z0 - 24)])
     base = box(x_front0, x_back1, FIX_FACE - 3, RAIL_Y1, BASE_Z0, BASE_Z1)
     front = box(x_front0, x_front1, FIX_FACE, RAIL_Y1, BASE_Z1, BASE_Z1 + FRONT_H)
     back = box(x_back0, x_back1, FIX_FACE, RAIL_Y1, BASE_Z1, BASE_Z1 + BACK_H)
@@ -181,7 +187,7 @@ def arm():
     jaw = box(x_front0, x_back1, FIX_FACE - 3, FIX_FACE, BASE_Z0, BASE_Z1 + JAW_H)
     jaw = jaw + box(x_front0, x_front1, FIX_FACE, FIX_FACE + LIP, BASE_Z1, BASE_Z1 + JAW_H)
     jaw = jaw + box(x_back0, x_back1, FIX_FACE, FIX_FACE + LIP, BASE_Z1, BASE_Z1 + BACK_LIP_H)
-    body = union([tongue, beam, leg, gusset, base, front, back, rib, jaw])
+    body = union([tongue, bridge, beam, post, gusset, base, front, back, rib, jaw])
     # holes: pivot + lock
     body = body - cyl_y(0, 0, M5, -t - 1, t + 1) - cyl_y(-LOCK_R, 0, M5, -t - 1, t + 1)
     # slot for the sliding-jaw bolt (jaw face at FIX_FACE + phone length, bolt 10 mm beyond it)
@@ -209,6 +215,63 @@ def jaw():
     return body
 
 
+# ---------------- what the camera sees ----------------
+HALF_H, HALF_V = math.atan(480 / 760), math.atan(270 / 760)  # phone main camera at 960x540, f = 760 px
+
+
+def _rot_y(v, deg):
+    a = math.radians(deg)
+    return [v[0] * math.cos(a) + v[2] * math.sin(a), v[1], -v[0] * math.sin(a) + v[2] * math.cos(a)]
+
+
+def view_occlusion(s, a, j, lo, phone_len, deg, body_d=BODY_D_REF, tip_x=TIP_X_REF, depth=120.0):
+    """Intersect the camera's view pyramid (and a 5° cone around the bit tip) with everything that could be in
+    front of the lens: saddle, arm, jaw, lower jaw, drill body and chuck. Volumes in cm3."""
+    r = body_d / 2
+    axis_z = -r * math.sqrt(2)
+    cam_arm = [CH_X + PHONE_REF_T / 2 + CAM_PROTRUDE, FIX_FACE + CAM_FROM_END, BASE_Z1 + CAM_FROM_EDGE]
+    c = _rot_y(cam_arm, deg)
+    lens = [c[0], c[1], c[2] + PIVOT_Z]
+    fwd = _rot_y([1, 0, 0], deg)
+    up = _rot_y([0, 0, 1], deg)
+    right = [0, -1, 0]
+    apex = [lens[i] + fwd[i] * 2.0 for i in range(3)]
+    far = [[lens[i] + fwd[i] * depth + right[i] * sx * depth * math.tan(HALF_H) + up[i] * sz * depth * math.tan(HALF_V)
+            for i in range(3)] for sx in (-1, 1) for sz in (-1, 1)]
+    pyramid = Manifold.hull_points([apex] + far)
+    # parts in the saddle frame
+    arm_t = a.rotate([0, deg, 0]).translate([0, 0, PIVOT_Z])
+    jaw_t = j.translate([0, FIX_FACE + phone_len, 0]).rotate([0, deg, 0]).translate([0, 0, PIVOT_Z])
+    lower_t = lo.translate([0, 0, 2 * axis_z])
+    chuck_x0, chuck_x1 = tip_x - 110 - 45, tip_x - 110
+    body = Manifold.cylinder(chuck_x0 + 60, r, r, SEG).rotate([0, 90, 0]).translate([-60, 0, axis_z])
+    chuck = Manifold.cylinder(chuck_x1 - chuck_x0, 22, 22, SEG).rotate([0, 90, 0]).translate([chuck_x0, 0, axis_z])
+    parts = s + arm_t + jaw_t + lower_t + body + chuck
+    # the cone around the line of sight to the tip
+    tip = [tip_x, 0.0, axis_z]
+    d = [tip[i] - apex[i] for i in range(3)]
+    dist = math.sqrt(sum(x * x for x in d))
+    u = [x / dist for x in d]
+    p1 = [0.0, -u[2], u[1]]
+    n1 = math.sqrt(sum(x * x for x in p1)) or 1.0
+    p1 = [x / n1 for x in p1]
+    p2 = [u[1] * p1[2] - u[2] * p1[1], u[2] * p1[0] - u[0] * p1[2], u[0] * p1[1] - u[1] * p1[0]]
+    end = [apex[i] + u[i] * (dist - 4.0) for i in range(3)]
+    rad = (dist - 4.0) * math.tan(math.radians(5.0))
+    ring = [[end[i] + rad * (math.cos(k * math.pi / 8) * p1[i] + math.sin(k * math.pi / 8) * p2[i]) for i in range(3)] for k in range(16)]
+    cone = Manifold.hull_points([apex] + ring)
+    # where the tip appears in the image
+    cam_down = -(u[0] * up[0] + u[1] * up[1] + u[2] * up[2])
+    cam_fwd = u[0] * fwd[0] + u[1] * fwd[1] + u[2] * fwd[2]
+    cam_side = u[0] * right[0] + u[1] * right[1] + u[2] * right[2]
+    return {
+        "tip_cone": (cone ^ parts).volume() / 1000,
+        "view_pct": 100 * (pyramid ^ parts).volume() / pyramid.volume(),
+        "tip_down": math.degrees(math.atan2(cam_down, cam_fwd)),
+        "tip_side": math.degrees(math.atan2(cam_side, cam_fwd)),
+    }
+
+
 # ---------------- rig: where the camera is relative to the bit (for the software) ----------------
 def rig_geometry(body_d=BODY_D_REF, tip_x=TIP_X_REF, phone_len=PHONE_REF_LEN):
     """Camera and bit in the saddle frame (mm), for the scene simulator and the 3D view.
@@ -216,10 +279,11 @@ def rig_geometry(body_d=BODY_D_REF, tip_x=TIP_X_REF, phone_len=PHONE_REF_LEN):
     axis_z = -(body_d / 2) * math.sqrt(2)
     cam_arm = [CH_X + PHONE_REF_T / 2 + CAM_PROTRUDE, FIX_FACE + CAM_FROM_END, BASE_Z1 + CAM_FROM_EDGE]
     return {
-        "version": "0.3",
+        "version": "0.4",
         "units": "mm",
         "pivot": [0.0, 0.0, PIVOT_Z],
         "tiltRange": [TILT_MIN, TILT_MAX],
+        "tiltDefault": TILT_DEFAULT,
         "phone": {"length": phone_len, "height": PHONE_REF_H, "thickness": PHONE_REF_T, "camFromEnd": CAM_FROM_END,
                   "camFromEdge": CAM_FROM_EDGE},
         "drill": {"bodyDiameter": body_d, "tipX": tip_x, "axisZ": axis_z},
@@ -316,7 +380,7 @@ if __name__ == "__main__":
     print("overlap arm/saddle  cm3:", round((a_asm ^ s).volume() / 1000, 3))
     print("overlap jaw/arm     cm3:", round((j_asm ^ a_asm).volume() / 1000, 3))
     worst = 0.0
-    for deg in (TILT_MIN, 0.0, TILT_MAX):
+    for deg in (TILT_MIN, TILT_DEFAULT, TILT_MAX):
         tilted = (a + j.translate([0, FIX_FACE + phone_len, 0]) + phone.translate([0, 0, -PIVOT_Z])).rotate([0, deg, 0]).translate([0, 0, PIVOT_Z])
         for r in (20.0, 28.0, 34.0):
             body = Manifold.cylinder(240, r, r, SEG, True).rotate([0, 90, 0]).translate([-60, 0, -r * math.sqrt(2)])
@@ -325,18 +389,31 @@ if __name__ == "__main__":
             worst = max(worst, ov_b, ov_s)
             print(f"tilt {deg:+5.1f}°  body Ø{2 * r:.0f}: overlap with saddle {ov_s:.3f} cm3, with drill body {ov_b:.3f} cm3")
     print("worst overlap cm3:", round(worst, 3))
+    # what the camera sees: its view pyramid must not hit the dock, the drill or the chuck, and the cone
+    # around the bit tip must be completely clear (v0.3 failed this: the arm's leg sat in front of the lens)
+    print("camera view check (overlap with dock and drill, cm3):")
+    view_ok = True
+    for deg in (TILT_MIN, TILT_DEFAULT, TILT_MAX):
+        occ = view_occlusion(s, a, j, lo, phone_len, deg)
+        ok = occ["tip_cone"] < 0.001
+        view_ok &= ok if deg == TILT_DEFAULT else True
+        print(f"  tilt {deg:4.1f}°: tip {occ['tip_down']:5.1f}° below the image centre, {occ['tip_side']:4.1f}° aside · "
+              f"tip cone {occ['tip_cone']:.3f} · near view (12 cm) {occ['view_pct']:.2f} % blocked{'' if ok else '  <- BLOCKED'}")
+    print("view at the default tilt:", "clear" if view_ok else "BLOCKED")
+    if not view_ok:
+        raise SystemExit("the camera's view of the bit tip is blocked at the default tilt: fix the dock before printing")
     # rig export for the software (scene simulator, 3D view, end-to-end tests)
     rig = rig_geometry()
     root = os.path.abspath(os.path.join(here, "..", ".."))
     with open(os.path.join(here, "rig.json"), "w") as fh:
         json.dump(rig, fh, indent=2)
     with open(os.path.join(root, "lib", "dockgeom.ts"), "w") as fh:
-        fh.write("// Generated by hardware/dock/dock.py — do not edit. Dock v0.3 geometry for the software (mm).\n")
+        fh.write("// Generated by hardware/dock/dock.py — do not edit. Dock v0.4 geometry for the software (mm).\n")
         fh.write("export const DOCK = " + json.dumps(rig, indent=2) + " as const;\n")
     cam = rig["cameraInArm"]
     tip = rig["tipInSaddle"]
     fwd, down = tip[0] - cam[0], (cam[2] + PIVOT_Z) - tip[2]
-    print(f"camera -> tip at 0° tilt: {fwd:.0f} mm ahead, {down:.0f} mm below, {abs(cam[1]):.0f} mm to the side "
-          f"({math.degrees(math.atan2(down, fwd)):.1f}° below the optical axis)")
+    print(f"camera -> tip, untilted: {fwd:.0f} mm ahead, {down:.0f} mm below, {abs(cam[1]):.0f} mm to the side "
+          f"({math.degrees(math.atan2(down, fwd)):.1f}° below the horizontal)")
     render(asm, os.path.join(here, "preview.png"))
     print("wrote saddle.stl arm.stl jaw.stl lower.stl rig.json ../../lib/dockgeom.ts preview.png")

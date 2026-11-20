@@ -13,6 +13,7 @@ import { smartToolsScene, toXf, INTO_SHEET } from "../lib/scenedef.ts";
 import { BOARD_TARGETS } from "../lib/board.ts";
 import { applyDir, compose, qaxis, qmul, xf, type Xf } from "../lib/xform.ts";
 import type { V3 } from "../lib/pose.ts";
+import { BASE_ON_BENCH, CHECKPOINTS, FIDUCIALS, SCREWS, SCREW_DEPTHS, assemblyScene, probeError, registerPart, toolAt as toolPose } from "../lib/assembly.ts";
 
 const args = process.argv.slice(2);
 const QUICK = args.includes("--quick");
@@ -29,7 +30,7 @@ const codes = markerCodes(new AR.Dictionary("ARUCO_MIP_36h12").codeList);
 const detector = () => new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" });
 // dock: the real dock v0.3 (hardware/dock/dock.py), tilted on its hinge with --tilt
 // ideal: the idealised rig of the first simulations; v02: dock v0.2 as it was designed
-const RIGS: Record<string, () => Rig> = { dock: () => (TILT || PHONE ? dockRigAt(TILT, DEFAULT_RIG, PHONE) : DEFAULT_RIG), ideal: () => (TILT ? tiltedRig(TILT) : IDEAL_RIG), v02: () => V02_RIG };
+const RIGS: Record<string, () => Rig> = { dock: () => (TILT || PHONE ? dockRigAt(TILT || undefined, DEFAULT_RIG, PHONE) : DEFAULT_RIG), ideal: () => (TILT ? tiltedRig(TILT) : IDEAL_RIG), v02: () => V02_RIG };
 if (!RIGS[RIG_NAME]) throw new Error(`unknown rig ${RIG_NAME}`);
 const rig = RIGS[RIG_NAME]();
 const W = rig.width, H = rig.height;
@@ -434,6 +435,96 @@ await scenario("safety", "Safety: markers hidden, uncalibrated dock, shaking han
     check("tilting 1.2° while drilling raises the angle alarm", events.includes("angle-alarm") && (s.snapshot!.alarms & 2) === 2, `alarms ${s.snapshot!.alarms}, events ${[...new Set(events)].join(", ")}`);
     s.dispose();
   }
+});
+
+await scenario("assembly", "3D assembly: register a part by touching it with the bit, verify, then drive screws on two faces", () => {
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool, scene: assemblyScene({ tool }), targetDepths: SCREW_DEPTHS });
+  // turn the tool about its bit so the camera faces the marker sheet's centre (more markers in view)
+  const toward = (p: V3): V3 => [-p[0], -p[1], 0];
+  const truthW = (name: string) => compose(BASE_ON_BENCH, SCREWS.find((x) => x.name === name)!.frame);
+  const fromPart = (p: V3) => compose(BASE_ON_BENCH, xf(p)).p;
+  const d: Disturbance = { ...DEFAULT_DISTURBANCE, tremorMm: 0.08, tremorDeg: 0.04, vibrationMm: 0.05, vibrationDeg: 0.03 };
+  const tipNow = () => s.world("tool")!.p;
+  let t0 = 0;
+  /** hold the tip on a world point for `dur` seconds and return the engine's mean tip over the last half */
+  const touch = (p: V3, axis: V3 = [0.03, -0.02, -1]) => {
+    const tips: V3[] = [];
+    const n = Math.hypot(...axis);
+    const ax = axis.map((v) => v / n) as V3;
+    drive({
+      session: s,
+      from: t0,
+      to: t0 + 1.2,
+      latency: 0.04,
+      disturbance: { ...d, vibrationMm: 0, vibrationDeg: 0 },
+      toolAt: (t) => ({ toolW: compose(toolPose(p, ax, toward(p)), xf([0.00004 * Math.sin(t * 59), 0.00004 * Math.cos(t * 61), 0])) }),
+      onTick: (snap) => snap.t > t0 + 0.6 && tips.push(tipNow()),
+    });
+    t0 += 1.3;
+    return [0, 1, 2].map((k) => tips.reduce((a, v) => a + v[k], 0) / tips.length) as V3;
+  };
+
+  // 1. before registering, the gate stays shut on the part's holes
+  let readyBefore = 0;
+  drive({ session: s, from: t0, to: t0 + 1.5, latency: 0.04, disturbance: CALM, toolAt: () => ({ toolW: toolPose(truthW("S1").p, [0, 0, -1], toward(truthW("S1").p)) }), onTick: (x) => (readyBefore += x.ready ? 1 : 0) });
+  t0 += 1.6;
+  check("no screw before the part is registered", readyBefore === 0 && (s.snapshot!.gate & 128) === 128, `${readyBefore} ready ticks, gate reasons ${s.snapshot!.gate} (not located)`);
+
+  // 2. register: touch the four dimples
+  const touches = FIDUCIALS.map((f) => touch(fromPart(f.p)));
+  const reg = registerPart(core, s.engine, s.id("base"), xf(), FIDUCIALS.map((f) => f.p), touches)!;
+  const holeErr = Math.max(...SCREWS.filter((x) => x.part === "base").map((x) => dist(compose(reg.world, x.frame).p, truthW(x.name).p) * 1000));
+  check("registration by touch: FRE < 0.6 mm", reg.freMm < 0.6, `FRE ${f2(reg.freMm)} mm (max ${f2(reg.maxMm)} mm) from 4 touches`);
+  check("every base hole within 0.8 mm of the true part", holeErr < 0.8, `worst hole ${f2(holeErr)} mm`);
+
+  // 3. verify on points not used to register
+  // the bit square to the surface it touches: K1 is on the chamfer
+  const chamferAxis = applyDir(truthW("C1"), [0, 0, 1]);
+  const ver = CHECKPOINTS.map((k) => probeError(reg.world, k.p, touch(fromPart(k.p), k.name === "K1" ? chamferAxis : undefined)));
+  check("verification touches within 1 mm", ver.every((e) => e < 1), CHECKPOINTS.map((k, i) => `${k.name} ${f2(ver[i])} mm`).join(", "));
+
+  // 4. drive S1 (top) and C1 (35° chamfer)
+  for (const name of ["S1", "C1"]) {
+    const tw = truthW(name);
+    const depth = SCREWS.find((x) => x.name === name)!.depthMm / 1000;
+    const tips: number[] = [], angles: number[] = [];
+    let falseReady = 0, ready = 0, seated = false;
+    const start = t0;
+    drive({
+      session: s,
+      from: t0,
+      to: t0 + 6,
+      latency: 0.04,
+      disturbance: d,
+      toolAt: (t) => {
+        const k = Math.min(1, (t - start) / 2);
+        const z = t - start < 2 ? -0.03 * (1 - k) : t - start < 3.6 ? 0 : Math.min(depth, ((t - start - 3.6) / 1.8) * depth);
+        const tilt = t - start < 2 ? 3 - 2.85 * k : 0.12;
+        const local = xf([0.00015, -0.0001, z], qaxis([1, 0.4, 0], (tilt * Math.PI) / 180));
+        const w = compose(tw, local);
+        return { toolW: toolPose(w.p, applyDir(w, [0, 0, 1]), toward(tw.p)) };
+      },
+      onTick: (snap, truthToolW) => {
+        if (snap.active < 0 || s.name(snap.targets[snap.active].id) !== name) return;
+        const est = snap.targets[snap.active];
+        const tr = navInTarget(tw, truthToolW);
+        // accuracy while aligning and driving (the approach moves fast, as in the drilling scenarios)
+        if (snap.t - start > 2.2) {
+          tips.push(dist(est.tip, tr.tip) * 1000);
+          angles.push(ang(est.axis, tr.axis));
+        }
+        if (snap.ready) {
+          ready++;
+          if (tr.angleErrDeg >= REQUIREMENT.angleDeg || tr.offsetMm >= REQUIREMENT.offsetMm || tr.gapMm > 1) falseReady++;
+        }
+        if (snap.events.some((e) => e.kind === "depth-reached" && s.name(e.node) === name)) seated = true;
+      },
+    });
+    t0 += 6.2;
+    const face = SCREWS.find((x) => x.name === name)!.face;
+    check(`${name} (${face}): ready, seated at ${depth * 1000} mm, tip p95 < 1 mm`, ready > 0 && seated && pct(tips, 95) < 1 && falseReady === 0, `ready ${ready} ticks, seated ${seated}, tip p95 ${f2(pct(tips, 95))} mm, angle p95 ${f3(pct(angles, 95))}°, false ready ${falseReady}`);
+  }
+  s.dispose();
 });
 
 // =============================================================================================

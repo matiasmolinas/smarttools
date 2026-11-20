@@ -21,6 +21,9 @@ export interface HudInputs {
   calibrating?: Overlay["calibrating"];
   /** display thresholds for the ring colours (the engine's gate limits) */
   limits?: { maxAngleDeg: number; maxOffsetMm: number };
+  /** depth per target (mm, by target node id) and whether marks are drilled or screws driven */
+  depthTargetMm?: (targetId: number) => number | undefined;
+  action?: "drill" | "drive";
 }
 
 export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
@@ -52,8 +55,9 @@ export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
     tip: { x: tip[0], y: tip[1], z: tip[2] },
     chuck: { x: tip[0] - axis[0] * BIT_LEN, y: tip[1] - axis[1] * BIT_LEN, z: tip[2] - axis[2] * BIT_LEN },
     axis: { x: axis[0], y: axis[1], z: axis[2] },
-    yawDeg: (Math.atan2(axis[0], -axis[2]) * 180) / Math.PI,
-    pitchDeg: (Math.atan2(axis[1], -axis[2]) * 180) / Math.PI,
+    // tilt relative to the active mark's own axis (any face, any angle); same signs as before for square holes
+    yawDeg: active ? active.yawDeg : (Math.atan2(axis[0], -axis[2]) * 180) / Math.PI,
+    pitchDeg: active ? -active.pitchDeg : (Math.atan2(axis[1], -axis[2]) * 180) / Math.PI,
     angleErrDeg: active?.angleErrDeg ?? 90,
     offsetMm: active?.offsetMm ?? 1e3,
     gapMm: active?.gapMm ?? 200,
@@ -63,6 +67,8 @@ export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
     drilled: s.targets.map((t) => t.drilled),
     bitSpin: 0,
     label: activeName,
+    depthTargetMm: active ? i.depthTargetMm?.(active.id) : undefined,
+    action: i.action,
   };
   const overlay: Overlay = {
     lost,

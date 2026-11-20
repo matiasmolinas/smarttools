@@ -84,7 +84,7 @@ export default function HudScreen() {
         };
         if (!sim) setPhoneName(tr.phone.name);
         if (sim) {
-          const rig = dockRigAt(0, DEFAULT_RIG, tr.phone);
+          const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
           tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
           tr.extraInfo = () => {
             const s = tr.session, snap = s?.snapshot, truth = simTruthRef.current;
@@ -179,7 +179,7 @@ export default function HudScreen() {
       }
       const ts = (now() - simStart) % RUN_TIME;
       const st = truthAt(ts);
-      const rig = dockRigAt(0, DEFAULT_RIG, tr.phone);
+      const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
       const truth = toolWorldFromHold(tr.core, rig, disturb(st.hold, ts, st.phase, DEFAULT_DISTURBANCE));
       simTruthRef.current = truth;
       const codes = (codesRef.current ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList));

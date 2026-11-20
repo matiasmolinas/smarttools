@@ -22,7 +22,15 @@ export interface Scene3DOptions {
   loadMesh?: MeshLoader;
   /** marker codes (36 bits per id, scene.markerCodes) to draw the real patterns on the sheet */
   markerCodes?: Uint8Array;
+  /** nodes drawn as a "ghost" (the engine's CAD model): translucent cyan with bright edges */
+  ghost?: string[];
+  /** only build these nodes (e.g. the real parts of a workpiece) */
+  only?: string[];
+  /** nodes put on layer 1 (a camera with only layer 0 enabled, like the phone's, does not see them) */
+  layer1?: string[];
 }
+
+const GHOST: Material = { color: "#5ad8ff", opacity: 0.16, emissive: "#0b2a38", edges: true, roughness: 0.9 };
 
 export class Scene3D {
   readonly root = new THREE.Group();
@@ -37,6 +45,8 @@ export class Scene3D {
     const loads: Promise<void>[] = [];
     for (const n of def.nodes) {
       if (!n.visual3d?.length) continue;
+      if (o.only && !o.only.includes(n.name)) continue;
+      const ghost = o.ghost?.includes(n.name);
       const obj = new THREE.Group();
       obj.name = n.name;
       obj.matrixAutoUpdate = false;
@@ -46,13 +56,18 @@ export class Scene3D {
         holder.matrix.fromArray(toMatrix4ColumnMajor(off));
         holder.matrixAutoUpdate = false;
         obj.add(holder);
-        const made = buildVisual(v, o, holder);
+        const vis = ghost && "material" in v ? ({ ...v, material: GHOST } as Visual3D) : v;
+        const made = buildVisual(vis, o, holder, ghost);
         if (made) loads.push(made);
       }
+      if (o.layer1?.includes(n.name)) obj.traverse((c) => c.layers.set(1));
       this.objects.set(n.name, obj);
       this.root.add(obj);
     }
-    this.ready = Promise.all(loads).then(() => undefined);
+    // meshes load later: put them on the node's layer once they are in
+    this.ready = Promise.all(loads).then(() => {
+      for (const name of o.layer1 ?? []) this.objects.get(name)?.traverse((c) => c.layers.set(1));
+    });
   }
 
   /** Place every node from a snapshot. Nodes that are lost are faded. */
@@ -108,11 +123,12 @@ function material(m: Material): THREE.Material {
   return mat;
 }
 
-function withEdges(mesh: THREE.Mesh, m: Material, into: THREE.Object3D) {
+function withEdges(mesh: THREE.Mesh, m: Material, into: THREE.Object3D, bright = false) {
   into.add(mesh);
   if (m.edges) {
-    const e = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), new THREE.LineBasicMaterial({ color: 0x5ad8ff, transparent: true, opacity: 0.55 }));
-    e.material.userData.baseOpacity = 0.55;
+    const op = bright ? 0.95 : 0.55;
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), new THREE.LineBasicMaterial({ color: bright ? 0x7fe4ff : 0x5ad8ff, transparent: true, opacity: op }));
+    e.material.userData.baseOpacity = op;
     e.matrix.copy(mesh.matrix);
     e.matrixAutoUpdate = mesh.matrixAutoUpdate;
     e.position.copy(mesh.position);
@@ -121,10 +137,10 @@ function withEdges(mesh: THREE.Mesh, m: Material, into: THREE.Object3D) {
   }
 }
 
-function buildVisual(v: Visual3D, o: Scene3DOptions, into: THREE.Object3D): Promise<void> | null {
+function buildVisual(v: Visual3D, o: Scene3DOptions, into: THREE.Object3D, bright = false): Promise<void> | null {
   switch (v.kind) {
     case "box":
-      withEdges(new THREE.Mesh(new THREE.BoxGeometry(...v.size), material(v.material)), v.material, into);
+      withEdges(new THREE.Mesh(new THREE.BoxGeometry(...v.size), material(v.material)), v.material, into, bright);
       return null;
     case "sphere":
       withEdges(new THREE.Mesh(new THREE.SphereGeometry(v.radius, 24, 16), material(v.material)), v.material, into);
@@ -137,7 +153,7 @@ function buildVisual(v: Visual3D, o: Scene3DOptions, into: THREE.Object3D): Prom
       // three.js cylinders run along Y
       if ((v.axis ?? "y") === "z") mesh.rotation.x = Math.PI / 2;
       if (v.axis === "x") mesh.rotation.z = Math.PI / 2;
-      withEdges(mesh, v.material, into);
+      withEdges(mesh, v.material, into, bright);
       return null;
     }
     case "axes":

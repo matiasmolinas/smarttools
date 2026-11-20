@@ -204,12 +204,12 @@ export function drawHud(
 
   // depth progress: thin arc around the tip while drilling
   if (drilling || s.depthMm > 0.05) {
-    const frac = Math.min(1, s.depthMm / DEPTH_TARGET_MM);
+    const frac = Math.min(1, s.depthMm / (s.depthTargetMm ?? DEPTH_TARGET_MM));
     const r = u * 12.5;
     line(ctx, () => ctx.arc(rc.x, rc.y, r, 0, Math.PI * 2), "rgba(245,248,252,0.22)", lw * 2.2);
     line(ctx, () => ctx.arc(rc.x, rc.y, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2), frac >= 0.998 ? RED : GREEN, lw * 2.4);
     label(ctx, `${s.depthMm.toFixed(1)}`, rc.x + r + u * 2.5, rc.y - u * 1.2, u * 4.2, WHITE, "left", MONO, 500);
-    label(ctx, `/ ${DEPTH_TARGET_MM} mm`, rc.x + r + u * 2.5, rc.y + u * 3, u * 2.6, SOFT, "left", MONO, 400);
+    label(ctx, `/ ${s.depthTargetMm ?? DEPTH_TARGET_MM} mm`, rc.x + r + u * 2.5, rc.y + u * 3, u * 2.6, SOFT, "left", MONO, 400);
   } else if (onMark || s.phase === "align") {
     // angle readout beside the chuck ring, only while squaring up
     label(ctx, `${s.angleErrDeg.toFixed(1)}°`, chX + chuckR + u * 2, chY, u * 3.6, square ? GREEN : AMBER, "left", MONO, 500);
@@ -267,13 +267,20 @@ function instruction(
   if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least two markers in view" };
   if (c.gate === "Calibrate first" && (s.phase === "approach" || s.phase === "align"))
     return { text: "Calibrate first", color: AMBER, step: "0/3", pass: false, check: "tap Calibrate with the tip on A2" };
+  if (c.gate === "Locate the part first" && (s.phase === "approach" || s.phase === "align"))
+    return { text: "Locate the part", color: AMBER, step: "0/3", pass: false, check: "touch its reference points with the tip" };
   if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
-  if (s.phase === "hold") return { text: `Stop · ${DEPTH_TARGET_MM} mm`, color: GREEN, step: "3/3", pass: true, check: `depth ${s.depthMm.toFixed(1)} mm · err ${s.angleErrDeg.toFixed(2)}°` };
+  const D = s.depthTargetMm ?? DEPTH_TARGET_MM;
+  const drive = s.action === "drive";
+  if (s.phase === "hold")
+    return drive
+      ? { text: `Seated · ${s.label}`, color: GREEN, step: "3/3", pass: true, check: `${s.depthMm.toFixed(1)} mm · ${s.angleErrDeg.toFixed(2)}° off its axis` }
+      : { text: `Stop · ${D} mm`, color: GREEN, step: "3/3", pass: true, check: `depth ${s.depthMm.toFixed(1)} mm · err ${s.angleErrDeg.toFixed(2)}°` };
   if (s.phase === "retract") return { text: `Done · next ${s.label}`, color: GREEN, step: "1/3", pass: true, check: "hole logged" };
   if (s.phase === "drill") {
-    const left = DEPTH_TARGET_MM - s.depthMm;
-    if (left < 3) return { text: "Ease off", color: AMBER, step: "3/3", pass: false, check: `stop at ${DEPTH_TARGET_MM} mm` };
-    return { text: `Drill · ${left.toFixed(0)} mm left`, color: GREEN, step: "3/3", pass: false, check: `stop at ${DEPTH_TARGET_MM} mm · keep rings centred` };
+    const left = D - s.depthMm;
+    if (left < 3) return { text: drive ? "Slow · seating" : "Ease off", color: AMBER, step: "3/3", pass: false, check: `stop at ${D} mm` };
+    return { text: `${drive ? "Drive" : "Drill"} · ${left.toFixed(0)} mm left`, color: GREEN, step: "3/3", pass: false, check: `stop at ${D} mm · keep rings centred` };
   }
   if (!c.onMark) {
     if (s.offsetMm > 1) return { text: "Tip to the mark", color: AMBER, step: "1/3", pass: false, check: "tip within 1.0 mm of the mark" };

@@ -28,7 +28,7 @@ export interface Rig {
 
 const CAMERA_960: Camera = { f: 760, cx: 486, cy: 266, k1: -0.08, k2: 0.03, p1: 0, p2: 0 };
 
-/** The real dock v0.3 (hardware/dock/dock.py -> lib/dockgeom.ts) at 0° tilt, with a Redmi-class main
+/** The real dock (hardware/dock/dock.py -> lib/dockgeom.ts) at its default tilt, with a Redmi-class main
  * camera at 960x540 and mild barrel distortion. */
 export const DEFAULT_RIG: Rig = {
   camera: CAMERA_960,
@@ -45,9 +45,9 @@ export const IDEAL_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.003, 0.058, 0
 /** Dock v0.2 as designed (camera at the fixed-jaw end, top edge): 78 mm aside and 170 mm above the bit. */
 export const V02_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.078, 0.1696, 0.209], axisCam: [0, 0, 1] } };
 
-/** The dock v0.3 at a given hinge tilt (the camera moves with the arm about the pivot), optionally with
+/** The dock at a given hinge tilt (default: its default tilt) (the camera moves with the arm about the pivot), optionally with
  * a phone profile (lib/phones.ts) instead of the reference phone. */
-export function dockRigAt(tiltDeg: number, base: Rig = DEFAULT_RIG, phone?: PhoneProfile | string): Rig {
+export function dockRigAt(tiltDeg?: number, base: Rig = DEFAULT_RIG, phone?: PhoneProfile | string): Rig {
   return { ...base, tool: dockRig({ tiltDeg, phone }).tool };
 }
 

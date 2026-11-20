@@ -150,6 +150,11 @@ pub struct TargetNav {
     pub depth_mm: f64,
 }
 
+/// Distance of the tip from the hole's axis, mm.
+fn lateral_mm(n: &TargetNav) -> f64 {
+    n.tip[0].hypot(n.tip[1]) * 1000.0
+}
+
 pub fn target_nav(target: NodeId, t: &Transform) -> TargetNav {
     let tip = t.p;
     let axis = t.q.rotate([0.0, 0.0, 1.0]);
@@ -272,6 +277,8 @@ pub struct Engine {
     tracks: Vec<Track>,
     tool: Option<NodeId>,
     targets: Vec<NodeId>,
+    /// depth to reach per target (mm); defaults to config.depth_target_mm
+    depths: Vec<f64>,
     drilled: Vec<bool>,
     calibrated: Vec<(NodeId, bool)>,
     active: Option<usize>,
@@ -299,6 +306,7 @@ impl Engine {
             tracks: Vec::new(),
             tool: None,
             targets: Vec::new(),
+            depths: Vec::new(),
             drilled: Vec::new(),
             calibrated: Vec::new(),
             active: None,
@@ -354,9 +362,18 @@ impl Engine {
     }
     pub fn set_targets(&mut self, targets: &[NodeId]) {
         self.targets = targets.to_vec();
+        self.depths = vec![self.config.depth_target_mm; targets.len()];
         self.drilled = vec![false; targets.len()];
         self.active = None;
     }
+    /// Depth to reach for each target, mm (a screw seats at its own depth). Missing entries keep the
+    /// configured default.
+    pub fn set_target_depths(&mut self, depths: &[f64]) {
+        for (i, d) in depths.iter().enumerate().take(self.depths.len()) {
+            self.depths[i] = *d;
+        }
+    }
+
     /// Mark a calibrated node as calibrated or not (the gate requires every calibrated node on
     /// the tool's chain to be calibrated).
     pub fn set_calibrated(&mut self, node: NodeId, ok: bool) {
@@ -545,6 +562,21 @@ impl Engine {
 
     // ---------------- 4-5: navigation and checks ----------------
 
+    /// Every calibrated node from `n` up to the root has been calibrated (a tool's dock, or a part's
+    /// registration for a target on that part).
+    fn chain_calibrated(&self, mut n: NodeId) -> bool {
+        loop {
+            let Some(node) = self.graph.node(n) else { return false };
+            if node.kind == NodeKind::Calibrated && !self.calibrated.iter().any(|(id, ok)| *id == n && *ok) {
+                return false;
+            }
+            match node.parent {
+                Some(p) => n = p,
+                None => return true,
+            }
+        }
+    }
+
     fn tool_calibrated(&self) -> bool {
         let Some(mut n) = self.tool else { return false };
         loop {
@@ -570,6 +602,16 @@ impl Engine {
         }
     }
 
+    /// The tool's world pose from the last measurement (filtered, not extrapolated).
+    fn measured_tool_world(&self) -> Option<Transform> {
+        let tool = self.tool?;
+        let tr = self.tool_track()?;
+        let last = tr.hist.back()?;
+        let parent = self.graph.node(tr.node)?.parent.and_then(|p| self.graph.world(p)).unwrap_or(Transform::IDENTITY);
+        let rel = self.graph.relative(tr.node, tool)?;
+        Some(parent.compose(&last.out).compose(&rel))
+    }
+
     fn navigate_and_check(&mut self, t: f64) {
         let cfg = self.config;
         let (pose_age, markers, rms) = match self.tool_track() {
@@ -584,16 +626,28 @@ impl Engine {
                 self.steady.reset();
             }
         }
-        let navs: Vec<TargetNav> = match self.tool {
+        // two views of the tool: predicted to now (for display) and as last measured (for decisions).
+        // Prediction compensates latency on screen, but when the tool stops against a part it overshoots
+        // for a fraction of a second: phases, the gate, depth events and alarms use measured data only.
+        let display: Vec<TargetNav> = match self.tool {
             Some(tool) if pose_age.is_finite() => self.targets.iter().filter_map(|&tg| self.graph.relative(tg, tool).map(|rel| target_nav(tg, &rel))).collect(),
             _ => Vec::new(),
+        };
+        let navs: Vec<TargetNav> = match (self.tool, self.measured_tool_world()) {
+            (Some(_), Some(tool_w)) if pose_age.is_finite() => self
+                .targets
+                .iter()
+                .filter_map(|&tg| self.graph.world(tg).map(|w| target_nav(tg, &w.inverse().compose(&tool_w))))
+                .collect(),
+            _ => display.clone(),
         };
 
         // active target: nearest not yet drilled while not engaged; sticky once engaged
         if navs.len() == self.targets.len() && !navs.is_empty() {
             let engaged = self.active.is_some_and(|i| {
                 let n = &navs[i];
-                n.depth_mm > 0.3 || (n.gap_mm < cfg.engage_gap_mm && n.offset_mm < cfg.engage_offset_mm)
+                (n.depth_mm > 0.3 && lateral_mm(n) < cfg.engage_offset_mm && self.chain_calibrated(self.targets[i]))
+                    || (n.gap_mm < cfg.engage_gap_mm && n.offset_mm < cfg.engage_offset_mm)
             });
             let cooling = self.done_at.is_some_and(|d| t - d < 0.5);
             if !engaged && !cooling {
@@ -601,7 +655,11 @@ impl Engine {
                     self.drilled.iter_mut().for_each(|d| *d = false);
                     self.push_event(EventKind::JobReset, crate::scene::ROOT, 0.0);
                 }
-                let best = (0..navs.len()).filter(|&i| !self.drilled[i]).min_by(|&a, &b| navs[a].offset_mm.total_cmp(&navs[b].offset_mm));
+                // prefer marks on parts already located (registered); fall back to any mark
+                let open: Vec<usize> = (0..navs.len()).filter(|&i| !self.drilled[i]).collect();
+                let located: Vec<usize> = open.iter().copied().filter(|&i| self.chain_calibrated(self.targets[i])).collect();
+                let pool = if located.is_empty() { open } else { located };
+                let best = pool.into_iter().min_by(|&a, &b| navs[a].offset_mm.total_cmp(&navs[b].offset_mm));
                 if best != self.active {
                     self.active = best;
                     if let Some(i) = best {
@@ -611,19 +669,24 @@ impl Engine {
             }
         }
         let nav = self.active.and_then(|i| navs.get(i).copied());
+        let located = self.active.is_none_or(|i| self.chain_calibrated(self.targets[i]));
 
         // phase
         let mut phase = Phase::Approach;
         if let Some(n) = nav {
             let i = self.active.unwrap_or(0);
-            if n.depth_mm >= cfg.depth_target_mm - 0.2 {
+            let depth_target = self.depths.get(i).copied().unwrap_or(cfg.depth_target_mm);
+            // depth only counts inside the hole: in 3D the tip can be "below" a far-away hole's plane
+            // ... and only on a located part: a hole on a part that has not been registered is not real yet
+            let in_hole = lateral_mm(&n) < cfg.engage_offset_mm && located;
+            if in_hole && n.depth_mm >= depth_target - 0.2 {
                 phase = Phase::Hold;
                 if !self.drilled[i] {
                     self.drilled[i] = true;
                     self.push_event(EventKind::DepthReached, self.targets[i], n.depth_mm);
                 }
                 self.done_at = Some(t);
-            } else if n.depth_mm > 0.3 {
+            } else if in_hole && n.depth_mm > 0.3 {
                 phase = Phase::Drill;
             } else if self.done_at.is_some_and(|d| t - d < 1.5) {
                 phase = Phase::Retract;
@@ -643,6 +706,8 @@ impl Engine {
         let g = gate(
             &GateInput {
                 calibrated: self.tool_calibrated(),
+                // the active target's part must be located (registered) before driving into it
+                located,
                 pose_age_s: pose_age,
                 rms_px: rms,
                 markers,
@@ -693,7 +758,7 @@ impl Engine {
             tick: self.k,
             t,
             nodes,
-            targets: navs,
+            targets: display,
             drilled: self.drilled.clone(),
             active: self.active,
             phase,
@@ -931,6 +996,124 @@ mod tests {
         e.push(meas(cam, ROOT, &cam_world([0.0, 0.07, 0.05], [0.0, 0.0, -1.0]), 0.01));
         e.advance_to(0.02);
         assert_eq!(e.snapshot().active, Some(0));
+    }
+
+    #[test]
+    fn a_target_on_an_unregistered_part_keeps_the_gate_closed_and_depth_is_per_target() {
+        // a part (calibrated = registered) carrying a screw hole that seats at 12 mm
+        let mut g = SceneGraph::new();
+        let part = g.add("part", ROOT, NodeKind::Calibrated, Transform::IDENTITY).unwrap();
+        let into = Quat::from_axis_angle([1.0, 0.0, 0.0], std::f64::consts::PI);
+        let hole = g.add("hole", part, NodeKind::Planned, Transform::rigid([0.02, 0.0, 0.0], into)).unwrap();
+        let cam = g.add("camera", ROOT, NodeKind::Tracked, Transform::IDENTITY).unwrap();
+        let tool = g.add("tool", cam, NodeKind::Calibrated, Transform::rigid([0.0, 0.0, 0.17], Quat::IDENTITY)).unwrap();
+        let mut e = Engine::new(g, EngineConfig::default());
+        e.set_tool(tool);
+        e.set_targets(&[hole]);
+        e.set_target_depths(&[12.0]);
+        e.set_calibrated(tool, true);
+        e.start(0.0);
+        let at = |d: f64| cam_world([0.0201, 0.0, -d], [0.0, 0.0, -1.0]);
+        let mut t = 0.0;
+        while t < 1.5 {
+            e.push(meas(cam, ROOT, &at(0.0), t));
+            e.advance_to(t);
+            t += 1.0 / 30.0;
+        }
+        assert!(!e.snapshot().ready && e.snapshot().gate & crate::nav::reason::NOT_LOCATED != 0, "part not registered");
+        assert_eq!(e.snapshot().gate & crate::nav::reason::NOT_CALIBRATED, 0, "the tool itself is calibrated");
+        e.set_calibrated(part, true);
+        let t1 = t;
+        while t < t1 + 1.5 {
+            e.push(meas(cam, ROOT, &at(0.0), t));
+            e.advance_to(t);
+            t += 1.0 / 30.0;
+        }
+        assert!(e.snapshot().ready, "registered: ready");
+        // drive to 12 mm: the screw is seated, not 35 mm
+        let t2 = t;
+        while t < t2 + 2.0 {
+            e.push(meas(cam, ROOT, &at(((t - t2) / 1.5 * 0.012).min(0.0121)), t));
+            e.advance_to(t);
+            t += 1.0 / 30.0;
+        }
+        assert_eq!(e.snapshot().phase, Phase::Hold);
+        assert!(e.take_events().iter().any(|x| x.kind == EventKind::DepthReached && (x.value - 12.0).abs() < 0.5));
+    }
+
+    #[test]
+    fn a_tip_below_a_far_hole_is_not_drilling_it() {
+        // two holes: A on the bench (z = 0), B on a raised part 76 mm higher and 60 mm away
+        let mut g = SceneGraph::new();
+        let into = Quat::from_axis_angle([1.0, 0.0, 0.0], std::f64::consts::PI);
+        let a = g.add("A", ROOT, NodeKind::Planned, Transform::rigid([0.0, 0.0, 0.0], into)).unwrap();
+        let b = g.add("B", ROOT, NodeKind::Planned, Transform::rigid([0.06, 0.0, 0.076], into)).unwrap();
+        let cam = g.add("camera", ROOT, NodeKind::Tracked, Transform::IDENTITY).unwrap();
+        let tool = g.add("tool", cam, NodeKind::Calibrated, Transform::rigid([0.0, 0.0, 0.17], Quat::IDENTITY)).unwrap();
+        let mut e = Engine::new(g, EngineConfig::default());
+        e.set_tool(tool);
+        e.set_targets(&[b, a]);
+        e.set_calibrated(tool, true);
+        e.start(0.0);
+        for i in 0..60 {
+            let t = i as f64 / 30.0;
+            e.push(meas(cam, ROOT, &cam_world([0.0, 0.0, 0.004], [0.0, 0.0, -1.0]), t));
+            e.advance_to(t);
+        }
+        let s = e.snapshot();
+        assert_eq!(s.targets[s.active.unwrap()].target, a, "the nearby hole, not the far one above");
+        assert_ne!(s.phase, Phase::Hold);
+        assert!(!s.drilled.iter().any(|&d| d));
+    }
+
+    #[test]
+    fn a_hole_on_an_unlocated_part_is_never_drilled() {
+        let mut g = SceneGraph::new();
+        let part = g.add("part", ROOT, NodeKind::Calibrated, Transform::IDENTITY).unwrap();
+        let into = Quat::from_axis_angle([1.0, 0.0, 0.0], std::f64::consts::PI);
+        let hole = g.add("hole", part, NodeKind::Planned, Transform::rigid([0.0, 0.0, 0.0], into)).unwrap();
+        let cam = g.add("camera", ROOT, NodeKind::Tracked, Transform::IDENTITY).unwrap();
+        let tool = g.add("tool", cam, NodeKind::Calibrated, Transform::rigid([0.0, 0.0, 0.17], Quat::IDENTITY)).unwrap();
+        let mut e = Engine::new(g, EngineConfig::default());
+        e.set_tool(tool);
+        e.set_targets(&[hole]);
+        e.set_calibrated(tool, true);
+        e.start(0.0);
+        // the tip 50 mm "inside" the (unlocated) hole
+        for i in 0..60 {
+            let t = i as f64 / 30.0;
+            e.push(meas(cam, ROOT, &cam_world([0.0, 0.0, -0.05], [0.0, 0.0, -1.0]), t));
+            e.advance_to(t);
+        }
+        let s = e.snapshot();
+        assert!(!matches!(s.phase, Phase::Drill | Phase::Hold), "phase {:?}", s.phase);
+        assert!(!s.drilled[0] && s.gate & crate::nav::reason::NOT_LOCATED != 0);
+        assert!(!e.take_events().iter().any(|x| x.kind == EventKind::DepthReached));
+    }
+
+    #[test]
+    fn decisions_use_measurements_not_the_prediction() {
+        // the tool comes down fast and stops on the surface: the prediction overshoots below it,
+        // but the phase never becomes "drill" and no depth is reported
+        let (mut e, sheet, _, cam, _) = rig();
+        e.config.predict_max_s = 0.12;
+        let mut worst_display: f64 = 0.0;
+        for i in 0..240 {
+            let t = i as f64 / 120.0;
+            if i % 4 == 0 {
+                let tc = (t - 0.08).max(0.0);
+                let z = (0.06 - tc * 0.12).max(0.0); // 120 mm/s down, then stopped on the surface
+                e.push(meas(cam, sheet, &cam_world([0.0201, 0.0, z], [0.0, 0.0, -1.0]), tc));
+            }
+            e.advance_to(t);
+            let s = e.snapshot();
+            if let Some(n) = s.active.and_then(|i| s.targets.get(i)) {
+                worst_display = worst_display.max(n.depth_mm);
+            }
+            assert!(!matches!(s.phase, Phase::Drill | Phase::Hold), "t {t}: phase {:?}", s.phase);
+        }
+        assert!(worst_display > 1.0, "the displayed (predicted) tip does overshoot: {worst_display} mm");
+        assert!(!e.take_events().iter().any(|x| x.kind == EventKind::DepthReached));
     }
 
     #[test]

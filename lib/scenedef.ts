@@ -146,8 +146,15 @@ const C = { tool: "#ffb547", cyan: "#5ad8ff", green: "#3dffa8", white: "#e8eef5"
  * drill on the dock (calibrated). `tool` is the dock calibration; `angledTargetDeg` optionally adds
  * a fourth target "B1" tilted about the sheet's Y axis (an angled hole) for tests and demos.
  */
-export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: number; dockTiltDeg?: number; phone?: PhoneProfile | string }): SceneDef {
-  const dock = dockRig({ tiltDeg: opts.dockTiltDeg ?? 0, phone: opts.phone });
+export function smartToolsScene(opts: {
+  tool: ToolCalib;
+  angledTargetDeg?: number;
+  dockTiltDeg?: number;
+  phone?: PhoneProfile | string;
+  /** "driver": a hex screwdriver bit in a bit holder instead of the drill bit */
+  bit?: "drill" | "driver";
+}): SceneDef {
+  const dock = dockRig({ tiltDeg: opts.dockTiltDeg, phone: opts.phone });
   const bodyR = DOCK.drill.bodyDiameter / 2000;
   const nodes: NodeDef[] = [
     {
@@ -196,7 +203,7 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
       visual3d: [{ kind: "cylinder", radius: 0.006, length: 0.004, axis: "z", material: { color: C.cyan, metalness: 0.6 } }],
       visual2d: [{ kind: "dot", radius: 0.003, color: C.cyan }],
     },
-    // the 3D-printed dock v0.3 (hardware/dock), display only, placed from the same geometry the simulator uses
+    // the 3D-printed dock (hardware/dock), display only, placed from the same geometry the simulator uses
     // (lib/dockrig.ts). Units under "dock" are millimetres (scale 0.001).
     {
       name: "dock",
@@ -241,7 +248,12 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
       kind: "calibrated",
       local: toolLocal(opts.tool),
       visual3d: [
-        { kind: "cylinder", radius: DRILL.bitRadius, length: DRILL.bitLength, axis: "z", offset: { p: [0, 0, -DRILL.bitLength / 2] }, material: { color: C.steel, metalness: 0.9, roughness: 0.3 } },
+        ...(opts.bit === "driver"
+          ? ([
+              { kind: "cylinder", radius: 0.0032, length: 0.045, axis: "z", offset: { p: [0, 0, -0.0225] }, material: { color: "#d8e2ec", metalness: 0.95, roughness: 0.25 } },
+              { kind: "cylinder", radius: 0.0055, length: DRILL.bitLength - 0.045, axis: "z", offset: { p: [0, 0, -0.045 - (DRILL.bitLength - 0.045) / 2] }, material: { color: C.steel, metalness: 0.9, roughness: 0.3 } },
+            ] satisfies Visual3D[])
+          : ([{ kind: "cylinder", radius: DRILL.bitRadius, length: DRILL.bitLength, axis: "z", offset: { p: [0, 0, -DRILL.bitLength / 2] }, material: { color: C.steel, metalness: 0.9, roughness: 0.3 } }] satisfies Visual3D[])),
         { kind: "cylinder", radius: 0.018, length: 0.04, axis: "z", offset: { p: [0, 0, -DRILL.bitLength - 0.02] }, material: { color: C.steel, metalness: 0.7, roughness: 0.4, edges: true } },
         { kind: "cylinder", radius: bodyR, length: 0.16, axis: "z", offset: { p: [0, 0, -DOCK.drill.tipX / 1000 - 0.03] }, material: { color: C.body, edges: true } },
         { kind: "box", size: [0.034, 0.13, 0.045], offset: { p: [0, bodyR + 0.06, -DOCK.drill.tipX / 1000 - 0.08] }, material: { color: C.body, edges: true } },
