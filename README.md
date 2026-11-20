@@ -63,58 +63,74 @@ npm install
 npm run dev                                   # website at http://localhost:3000
 node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
 npm run engine:test                           # Rust core: cargo test + parity with TypeScript
-npm run scene:test                            # full pipeline on simulated camera frames (add -- --tilt 12 or -- --quick)
+npm test                                      # Rust + parity + TypeScript unit + quick E2E
 ```
 
 The camera preview in `/hud` needs HTTPS or `localhost`. To try it on a phone, deploy (for example to Vercel) or use
 an HTTPS tunnel.
 
-## Navigation engine (Rust) and scene simulator
+## Navigation engine
 
-[`engine/`](engine/) is the navigation core in Rust (`smarttools-nav-core`), compiled to a ~100 KB WebAssembly
-module (`public/engine/nav_core.wasm`, wrapped by `lib/engine.ts`):
+The design is in [docs/ENGINE_SPEC.md](docs/ENGINE_SPEC.md):
 
-- **Pose:** sub-pixel corners, normalised DLT homography, Gauss-Newton refinement, and a robust solve that drops
-  markers half hidden by the drill bit.
-- **Lens:** Brown-Conrady distortion and camera calibration (focal length, principal point, k1, k2).
-- **Dock calibration:** the bit tip by circling around it (pivot), the bit axis by twisting around it, so the camera
-  does not have to be parallel to the bit.
-- **Navigation:** tip, axis, aim point, angle, offset, depth, a One Euro filter, steadiness, and a deterministic
-  go / no-go gate (calibrated, enough markers, good fit, steady, square within 0.4°, on the mark within 0.75 mm).
-- **Scene simulator:** renders what the docked camera sees: the marker sheet through a distorting lens, the bit in view,
-  hand tremor, motor vibration, motion blur, uneven light, sensor noise and a hand over the markers.
+- **Clock.** A central engine clock ticks at 120 Hz. Every tick, it ingests timestamped measurements, filters and
+  predicts each tracked element, recomputes its scene graph and runs every check: the go / no-go gate, the lock, the
+  phases and the safety alarms.
+- **Scene graph.** Each element (sheet, holes, phone camera, drill, dock) is a node with a position, a quaternion and
+  an optional parent. World transforms are recomputed from scratch every tick, so nothing drifts.
+- **Trackers and renderers.** Trackers only write measurements; they run in a Web Worker on the phone. Renderers only
+  read snapshots, as often as they can, or not at all.
+- **Representations.** Every element can have a 3D representation (STL meshes or primitives, with surface
+  properties) and a simplified 2D one. The drill, for example, is a 3D model in the 3D scene and tip and chuck rings in
+  the 2D plan and on the phone.
 
-`lib/navpipeline.ts` is the one pipeline used by the phone and by the tests. `npm run scene:test` runs it on simulated
-frames and checks everything against the ground truth: lens and dock calibration, three holes with tremor and
-vibration, occlusion, an uncalibrated dock and a shaking hand. It currently passes 17/17 (15 fps):
+| Part | Where |
+|---|---|
+| Scene graph, engine, math, calibration, scene simulator | [`engine/`](engine/) (Rust → ~170 KB WebAssembly, `lib/engine.ts`) |
+| Tracker (frames → measurements) | `lib/markertracker.ts`, run in `lib/workers/tracker.worker.ts` |
+| Session (tracker → engine → snapshots) | `lib/session.ts`, browser loops in `lib/tracker.ts` |
+| Scene definition with 3D / 2D representations | `lib/scenedef.ts` |
+| Renderers: 3D, 2D plan, phone HUD | `lib/render/`, `lib/hud.ts` |
 
-| | Result |
+[`/engine`](https://smarttools-nav.vercel.app/engine) shows it working. One engine is fed by the scene simulator and
+drawn three ways from the same snapshots: 3D, 2D plan and HUD. Each renderer can be slowed down or switched off while
+the engine keeps 120 Hz.
+
+### Tests
+
+```bash
+npm run engine:test   # Rust: 43 tests + TypeScript/Rust parity
+npm run test:unit     # TypeScript: 19 tests (transforms, engine wrapper, scene definitions, session, renderers)
+npm run test:e2e      # 8 end-to-end scenarios, 32 checks (add -- --tilt 12, -- --quick, -- --only drill)
+```
+
+The end-to-end scenarios render camera frames with the simulator (lens distortion, the bit in view, hand tremor,
+motor vibration, blur, uneven light, noise, a hand over the markers). They track the frames with the real tracker,
+feed the engine with capture timestamps and compare every snapshot with the ground truth:
+
+| Scenario | Result (15 fps camera, 50 ms latency) |
 |---|---|
 | Lens calibration | focal length within 0.01 %, k1 within 0.001 |
-| Dock calibration | tip within 0.1 mm, axis within 0.05° |
-| Drilling (p95) | angle 0.08–0.10°, aim 0.09–0.11 mm, depth 0.06 mm |
-| Gate | no false "ready" (truth outside 0.5° / 1 mm), "ready" reached on every hole |
-| Without calibration | angle error 3.4° (parallel dock) to 13° (tilted dock) |
+| Dock calibration | tip within 0.05 mm, axis within 0.03° |
+| Three holes with tremor and vibration (p95, aligning and drilling) | tip 0.23 mm, angle 0.15°, aim 0.30 mm, depth 0.20 mm |
+| Latency compensation (80 ms) | moving-tip error p95 10.4 mm → 3.7 mm |
+| Renderer at 20 Hz, a 300 ms stall | ~6 ticks skipped per frame; the stall reported as an overrun; no "ready" on old data |
+| Frames out of order | merged, none dropped |
+| A hole planned 15° off the normal | "ready" and drilled along its own axis (angle p95 0.03°) |
+| Safety | no false "ready" in any scenario; never "ready" when covered, uncalibrated or shaking; angle alarm while drilling |
 
-These are simulated results: they show the method and the software work, not how a real phone performs (rolling
-shutter, compression, autofocus, a real hand). `/hud` → **Sim cam** shows the same simulation running in the browser.
-See the [engine README](engine/README.md).
+These are simulated results. They show that the method and the software work, not how a real phone performs (rolling
+shutter, compression, autofocus, a real hand).
 
 ## Code map (website)
 
 | Path | Contents |
 |---|---|
-| `lib/navpipeline.ts` | The navigation pipeline: frame → markers → pose → navigation → gate (phone and tests) |
-| `lib/tracker.ts` | Browser side: camera or simulated frames, calibration flows, stored calibration, HUD state |
-| `lib/scene.ts` | Scene simulator: the rig, the drilling motion, tremor, vibration, rendered frames |
-| `lib/engine.ts` | TypeScript wrapper for the Rust core |
-| `lib/pose.ts` | Homography, pose from homography, Gauss-Newton refinement, focal estimate |
-| `lib/subpix.ts` | Sub-pixel corner refinement |
+| `components/NavDemo.tsx` | three.js line scene on the landing page |
+| `components/HudScreen.tsx` | Full-screen phone HUD (`/hud`): camera, simulated camera, calibration flows |
+| `components/EngineLab.tsx` | `/engine`: the engine drawn in 3D, as a 2D plan and as the HUD |
+| `lib/sim.ts` | Scripted drilling animation for the landing page |
 | `lib/board.ts` | Marker sheet geometry and targets |
-| `lib/hud.ts` | 2D HUD renderer (canvas) |
-| `lib/sim.ts` | Deterministic drilling simulation for the demo |
-| `components/NavDemo.tsx` | three.js scene |
-| `components/HudScreen.tsx` | Full-screen phone HUD |
 
 ## Related projects
 

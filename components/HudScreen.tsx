@@ -3,25 +3,31 @@
 import { useEffect, useRef, useState } from "react";
 import { simulate } from "@/lib/sim";
 import { drawHud, type HudBackground } from "@/lib/hud";
-import { OpticalTracker } from "@/lib/tracker";
+import { BrowserNav } from "@/lib/tracker";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
-import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, markerCodes, renderHold, truthAt, truthNav } from "@/lib/scene";
+import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, markerCodes, navInTarget, toolWorldFromHold, truthAt } from "@/lib/scene";
+import { toXf } from "@/lib/scenedef";
+import type { Xf } from "@/lib/xform";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
+type VideoFrameMeta = { captureTime?: number; expectedDisplayTime?: number };
+type VideoWithRvfc = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: VideoFrameMeta) => void) => number; cancelVideoFrameCallback?: (id: number) => void };
 
 // "simcam": the scene simulator renders what the docked camera would see, and the real pipeline tracks it
 type View = HudBackground | "simcam";
 const SURFACES: View[] = ["wall", "wood", "camera", "simcam", "grid"];
 const SURF_LABEL: Record<View, string> = { wall: "Wall", wood: "Wood", camera: "Cam", simcam: "Sim cam", grid: "Grid" };
+const SIM_FPS = 15;
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const restartRef = useRef(false);
-  const trackerRef = useRef<OpticalTracker | null>(null);
-  const simTrackerRef = useRef<OpticalTracker | null>(null);
+  const trackerRef = useRef<BrowserNav | null>(null);
+  const simTrackerRef = useRef<BrowserNav | null>(null);
   const loadingRef = useRef(false);
   const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const simTruthRef = useRef<Xf | null>(null);
   const tNowRef = useRef(0);
   const [bg, setBg] = useState<View>("wall");
   const bgRef = useRef<View>("wall");
@@ -62,16 +68,27 @@ export default function HudScreen() {
     const ref = sim ? simTrackerRef : trackerRef;
     if (ref.current || loadingRef.current) return;
     loadingRef.current = true;
-    OpticalTracker.create()
+    BrowserNav.create()
       .then((tr) => {
         tr.onMessage = say;
+        tr.onSimImage = (img) => {
+          const c = (simCanvasRef.current ??= document.createElement("canvas"));
+          if (c.width !== img.width || c.height !== img.height) {
+            c.width = img.width;
+            c.height = img.height;
+          }
+          c.getContext("2d")!.putImageData(img, 0, 0);
+        };
         if (sim) {
           const rig = DEFAULT_RIG;
-          tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height);
-          tr.extraInfo = (r) => {
-            const st = truthAt(tNowRef.current % RUN_TIME);
-            const tn = truthNav(tr.engine, rig, disturb(st.hold, tNowRef.current % RUN_TIME, st.phase, DEFAULT_DISTURBANCE), st.targetIndex).nav;
-            return r.nav ? ` · true ${tn.angleErrDeg.toFixed(2)}° est ${r.nav.angleErrDeg.toFixed(2)}°` : "";
+          tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
+          tr.extraInfo = () => {
+            const s = tr.session, snap = s?.snapshot, truth = simTruthRef.current;
+            if (!s || !snap || snap.active < 0 || !truth) return "";
+            const tgt = snap.targets[snap.active];
+            const def = s.scene.def.nodes.find((n) => s.scene.ids[n.name] === tgt.id)!;
+            const tn = navInTarget(toXf(def.local), truth);
+            return ` · true ${tn.angleErrDeg.toFixed(2)}° est ${tgt.angleErrDeg.toFixed(2)}°`;
           };
         }
         ref.current = tr;
@@ -96,6 +113,7 @@ export default function HudScreen() {
         const v = videoRef.current!;
         v.srcObject = stream;
         await v.play().catch(() => {});
+        ensureTracker(false);
         say("CAMERA ON");
       } catch {
         say("CAMERA BLOCKED");
@@ -118,7 +136,7 @@ export default function HudScreen() {
 
   const cycleSurface = () => choose(SURFACES[(SURFACES.indexOf(bg) + 1) % SURFACES.length]);
 
-  // render loop
+  // three independent loops: frames (camera rate), engine clock (120 Hz), render (display rate)
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
@@ -130,59 +148,82 @@ export default function HudScreen() {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
     resize();
-    let raf = 0;
-    let last = performance.now();
-    let t = 0;
-    const tick = (now: number) => {
-      raf = requestAnimationFrame(tick);
-      t += Math.min((now - last) / 1000, 0.05);
-      last = now;
+    const now = () => performance.now() / 1000;
+    let simStart = now();
+
+    // 1a. camera frames, with their capture time when the browser provides it
+    const v = videoRef.current as VideoWithRvfc;
+    let rvfc = 0;
+    let fallback: ReturnType<typeof setInterval> | null = null;
+    const onVideoFrame = (t: number, meta: VideoFrameMeta) => {
+      if (bgRef.current === "camera") trackerRef.current?.frame(v, (meta.captureTime ?? t) / 1000);
+      rvfc = v.requestVideoFrameCallback!(onVideoFrame);
+    };
+    if (v.requestVideoFrameCallback) rvfc = v.requestVideoFrameCallback(onVideoFrame);
+    else fallback = setInterval(() => bgRef.current === "camera" && trackerRef.current?.frame(v, now()), 33);
+
+    // 1b. simulated camera frames
+    const sim = setInterval(() => {
+      if (bgRef.current !== "simcam") return;
+      ensureTracker(true);
+      const tr = simTrackerRef.current;
+      if (!tr) return;
       if (restartRef.current) {
         restartRef.current = false;
-        t = 0;
-        simTrackerRef.current?.cancelCalibration();
+        simStart = now();
+        tr.cancelCalibration();
       }
+      const ts = (now() - simStart) % RUN_TIME;
+      const st = truthAt(ts);
+      const rig = DEFAULT_RIG;
+      const truth = toolWorldFromHold(tr.core, rig, disturb(st.hold, ts, st.phase, DEFAULT_DISTURBANCE));
+      simTruthRef.current = truth;
+      const codes = (codesRef.current ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList));
+      // the worker renders the camera view and tracks it; the image comes back for display
+      tr.simFrame(rig, codes, truth, now(), 1 + Math.round(ts * 1000));
+    }, 1000 / SIM_FPS);
+
+    // 2. the engine clock: ticks at 120 Hz regardless of rendering
+    const clock = setInterval(() => {
+      const t = now();
       tNowRef.current = t;
+      if (bgRef.current === "camera") trackerRef.current?.advance(t);
+      if (bgRef.current === "simcam") simTrackerRef.current?.advance(t);
+    }, 4);
+
+    // 3. render: the latest snapshot, as often as the display allows
+    let raf = 0;
+    let last = performance.now();
+    let tSim = 0;
+    const draw = (frameNow: number) => {
+      raf = requestAnimationFrame(draw);
+      tSim += Math.min((frameNow - last) / 1000, 0.05);
+      last = frameNow;
       const w = canvas.width;
       const h = canvas.height;
       if (w <= 0 || h <= 0) return;
-      const v = videoRef.current;
-      if (bgRef.current === "camera" && v && v.readyState >= 2) {
-        // 100% optical: markers -> pose -> drill state
-        ensureTracker(false);
-        const r = trackerRef.current?.update(v, t);
-        if (r) {
-          drawHud(ctx, r.state, w, h, false, { background: "camera", video: v, overlay: r.overlay });
-          return;
-        }
+      if (bgRef.current === "camera" && v.readyState >= 2) {
+        const view = trackerRef.current?.view();
+        if (view) return drawHud(ctx, view.state, w, h, false, { background: "camera", video: v, overlay: view.overlay });
       }
-      if (bgRef.current === "simcam") {
-        ensureTracker(true);
-        const tr = simTrackerRef.current;
-        if (tr) {
-          const rig = DEFAULT_RIG;
-          const ts = t % RUN_TIME;
-          const st = truthAt(ts);
-          const codes = (codesRef.current ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList));
-          // lighter than the test bench (no blur, 1 sample per pixel) to keep the phone responsive
-          const img = renderHold(tr.engine, rig, codes, ts, st.phase, st.hold, { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, 1 + Math.round(ts * 1000), { ss: 1 });
-          const c = (simCanvasRef.current ??= document.createElement("canvas"));
-          if (c.width !== img.width || c.height !== img.height) {
-            c.width = img.width;
-            c.height = img.height;
-          }
-          c.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0);
-          const r = tr.process(img, t);
-          drawHud(ctx, r.state, w, h, false, { background: "camera", video: c, overlay: r.overlay });
-          return;
-        }
+      if (bgRef.current === "simcam" && simCanvasRef.current) {
+        const view = simTrackerRef.current?.view();
+        if (view) return drawHud(ctx, view.state, w, h, false, { background: "camera", video: simCanvasRef.current, overlay: view.overlay });
+      }
+      if (bgRef.current !== "simcam" && restartRef.current) {
+        restartRef.current = false;
+        tSim = 0;
       }
       const bgNow = bgRef.current === "simcam" ? "grid" : bgRef.current;
-      drawHud(ctx, simulate(t), w, h, false, { background: bgNow, video: v });
+      drawHud(ctx, simulate(tSim), w, h, false, { background: bgNow, video: v });
     };
-    raf = requestAnimationFrame(tick);
+    raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      clearInterval(clock);
+      clearInterval(sim);
+      if (fallback) clearInterval(fallback);
+      if (rvfc) v.cancelVideoFrameCallback?.(rvfc);
       ro.disconnect();
     };
   }, []);

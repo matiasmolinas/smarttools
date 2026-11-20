@@ -31,7 +31,7 @@ export interface Overlay {
   quads: { x: number; y: number }[][]; // video px: detected markers
   info: string;
   /** the engine's go / no-go gate (lib/navpipeline.ts) */
-  gate?: { ready: boolean; message: string | null };
+  gate?: { ready: boolean; message: string | null; locking?: boolean };
   /** a calibration capture in progress */
   calibrating?: { text: string; progress: number; count: number } | null;
 }
@@ -115,8 +115,10 @@ export function drawHud(
   if (onMark && square && gateOk) L.since ??= s.t;
   else L.since = null;
   const lockAge = L.since == null ? -1 : s.t - L.since;
-  const ready = lockAge >= LOCK_TIME;
-  const locking = lockAge >= 0 && !ready;
+  // with the engine, the lock timer lives in the engine: the HUD only shows its decision
+  const engineGate = ov?.gate && ov.gate.locking !== undefined ? ov.gate : null;
+  const ready = engineGate ? engineGate.ready : lockAge >= LOCK_TIME;
+  const locking = engineGate ? !!engineGate.locking : lockAge >= 0 && !ready;
   const drilling = s.phase === "drill" || s.phase === "hold";
   const broken = drilling && s.depthMm > 0.3 && !square;
 

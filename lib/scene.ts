@@ -7,6 +7,9 @@
 import { BOARD_MARKERS, BOARD_TARGETS } from "./board.ts";
 import type { Camera, NavCore, RenderOptions, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
+import { applyDir, compose, fromPose, inverse, relative, toPose, type Xf } from "./xform.ts";
+import { toolLocal } from "./scenedef.ts";
+
 
 export type Phase = "approach" | "align" | "drill" | "hold" | "retract";
 
@@ -261,4 +264,57 @@ export function runFrame(core: NavCore, rig: Rig, codes: Uint8Array, t: number, 
 function norm(v: V3): V3 {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+// ---------------- general poses (any tool orientation, any target frame) ----------------
+
+
+/** World transform of the tool (origin at the bit tip, +Z = drilling direction) for a hold. */
+export function toolWorldFromHold(core: NavCore, rig: Rig, h: Hold): Xf {
+  const pose = core.rigPose(h.yawDeg, h.pitchDeg, h.twistDeg, h.tipWorld, rig.tool);
+  return compose(inverse(fromPose(pose)), toolLocal(rig.tool));
+}
+
+/** Camera pose (x_cam = R X + t) for a tool world transform, given the dock geometry. */
+export function cameraPoseForTool(rig: Rig, toolW: Xf): Pose {
+  const camW = compose(toolW, inverse(toolLocal(rig.tool)));
+  return toPose(inverse(camW));
+}
+
+/** Navigation of a tool against a target frame (+Z = drilling direction), same math as the engine. */
+export function navInTarget(targetW: Xf, toolW: Xf) {
+  const t = relative(targetW, toolW);
+  const tip = t.p;
+  const axis = applyDir(t, [0, 0, 1]);
+  const s = axis[2] > 1e-6 ? -tip[2] / axis[2] : NaN;
+  const aim: [number, number] = Number.isFinite(s) ? [tip[0] + axis[0] * s, tip[1] + axis[1] * s] : [tip[0], tip[1]];
+  return {
+    tip,
+    axis,
+    aim,
+    angleErrDeg: (Math.acos(Math.min(1, Math.max(-1, axis[2]))) * 180) / Math.PI,
+    offsetMm: Number.isFinite(s) ? Math.hypot(aim[0], aim[1]) * 1000 : Infinity,
+    gapMm: Math.max(0, -tip[2] * 1000),
+    depthMm: Math.max(0, tip[2] * 1000),
+  };
+}
+
+/** Render the camera frame for a tool held at toolW (with motion blur from a list of tool poses). */
+export function renderTool(core: NavCore, rig: Rig, codes: Uint8Array, toolWs: Xf[], d: Disturbance, seed: number, extra: Partial<RenderOptions> = {}) {
+  const poses = toolWs.map((w) => cameraPoseForTool(rig, w));
+  const data = core.render(rig.camera, poses, {
+    width: rig.width,
+    height: rig.height,
+    ss: 2,
+    codes,
+    noise: d.noise,
+    vignette: d.vignette,
+    gradient: d.gradient,
+    gain: d.gain,
+    seed,
+    bit: { tipCam: rig.tool.tipCam, axisCam: rig.tool.axisCam, length: rig.bitLength, radius: rig.bitRadius },
+    occluders: d.occluders,
+    ...extra,
+  });
+  return { width: rig.width, height: rig.height, data };
 }

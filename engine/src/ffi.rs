@@ -15,7 +15,7 @@ use crate::subpix::{self, Rgba};
 use std::alloc::{alloc, dealloc, Layout};
 use std::slice;
 
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 #[no_mangle]
 pub extern "C" fn st_abi_version() -> u32 {
@@ -584,5 +584,348 @@ pub unsafe extern "C" fn st_solve_pose_robust(world: *const f64, img: *const f64
             keep.iter().filter(|&&k| k).count() as i32
         }
         None => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scene graph + engine (ABI 3). Handle-based. Transforms are 10 `f64`: p (3), q (w, x, y, z), s (3).
+// ---------------------------------------------------------------------------------------------
+
+use crate::engine::{Engine, EngineConfig, Measurement};
+use crate::scene::{NodeKind, SceneGraph, Transform};
+
+/// New engine with an empty scene (just the world root, id 0). Free with [`st_engine_free`].
+#[no_mangle]
+pub extern "C" fn st_engine_new() -> *mut Engine {
+    Box::into_raw(Box::new(Engine::new(SceneGraph::new(), EngineConfig::default())))
+}
+
+/// # Safety
+/// `h` from [`st_engine_new`], not used afterwards.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_free(h: *mut Engine) {
+    if !h.is_null() {
+        drop(Box::from_raw(h));
+    }
+}
+
+/// Configuration, 26 `f64` in this order: tick_hz, max_catchup, predict_max_s, predict (0/1),
+/// stale_after_s, lost_after_s, history_s, lock_time_s, steady_window_s, depth_target_mm,
+/// engage_gap_mm, engage_offset_mm, requirement_angle_deg, the 7 gate limits (as `st_gate`),
+/// pos_min_cutoff, pos_beta, rot_min_cutoff, rot_beta, d_cutoff, (reserved).
+///
+/// # Safety
+/// `h` valid; `c`: 26 `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_configure(h: *mut Engine, c: *const f64) -> i32 {
+    if h.is_null() || c.is_null() {
+        return -1;
+    }
+    let c = slice::from_raw_parts(c, 26);
+    let cfg = EngineConfig {
+        tick_hz: c[0],
+        max_catchup: c[1].max(1.0) as u32,
+        predict_max_s: c[2],
+        predict: c[3] != 0.0,
+        stale_after_s: c[4],
+        lost_after_s: c[5],
+        history_s: c[6],
+        lock_time_s: c[7],
+        steady_window_s: c[8],
+        depth_target_mm: c[9],
+        engage_gap_mm: c[10],
+        engage_offset_mm: c[11],
+        requirement_angle_deg: c[12],
+        limits: GateLimits {
+            max_angle_deg: c[13],
+            max_offset_mm: c[14],
+            max_rms_px: c[15],
+            min_markers: c[16].max(0.0) as u32,
+            max_pose_age_s: c[17],
+            max_jitter_mm: c[18],
+            max_jitter_deg: c[19],
+        },
+        pos_min_cutoff: c[20],
+        pos_beta: c[21],
+        rot_min_cutoff: c[22],
+        rot_beta: c[23],
+        d_cutoff: c[24],
+    };
+    (*h).configure(cfg);
+    1
+}
+
+/// Add a node. `name`: UTF-8 bytes. `kind`: 0 reference, 1 tracked, 2 calibrated, 3 planned,
+/// 4 derived, 5 display. Returns the id, or a negative error (-1 bad args, -2 unknown parent,
+/// -3 name taken, -5 scale on a rigid node).
+///
+/// # Safety
+/// `h` valid; `name`: `name_len` bytes; `local`: 10 `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_add_node(h: *mut Engine, name: *const u8, name_len: usize, parent: u32, kind: u32, local: *const f64) -> i32 {
+    if h.is_null() || name.is_null() || local.is_null() {
+        return -1;
+    }
+    let Ok(n) = std::str::from_utf8(slice::from_raw_parts(name, name_len)) else { return -1 };
+    let Some(k) = NodeKind::from_u8(kind as u8) else { return -1 };
+    match (*h).graph.add(n, parent, k, Transform::from_slice(slice::from_raw_parts(local, 10))) {
+        Ok(id) => id as i32,
+        Err(e) => scene_err(e),
+    }
+}
+
+fn scene_err(e: crate::scene::SceneError) -> i32 {
+    use crate::scene::SceneError::*;
+    match e {
+        UnknownNode => -2,
+        NameTaken => -3,
+        Cycle => -4,
+        ScaleOnRigidChain => -5,
+        RootIsFixed => -6,
+    }
+}
+
+/// # Safety
+/// `h` valid; `local`: 10 `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_local(h: *mut Engine, node: u32, local: *const f64) -> i32 {
+    if h.is_null() || local.is_null() {
+        return -1;
+    }
+    match (*h).graph.set_local(node, Transform::from_slice(slice::from_raw_parts(local, 10))) {
+        Ok(()) => {
+            (*h).graph.update();
+            1
+        }
+        Err(e) => scene_err(e),
+    }
+}
+
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_reparent(h: *mut Engine, node: u32, parent: u32, keep_world: u32) -> i32 {
+    if h.is_null() {
+        return -1;
+    }
+    match (*h).graph.reparent(node, parent, keep_world != 0) {
+        Ok(()) => 1,
+        Err(e) => scene_err(e),
+    }
+}
+
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_calibrated(h: *mut Engine, node: u32, ok: u32) {
+    if !h.is_null() {
+        (*h).set_calibrated(node, ok != 0);
+    }
+}
+
+/// # Safety
+/// `h` valid; `targets`: `n` ids.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_set_nav(h: *mut Engine, tool: u32, targets: *const u32, n: usize) {
+    if h.is_null() || (n > 0 && targets.is_null()) {
+        return;
+    }
+    (*h).set_tool(tool);
+    let t = if n == 0 { &[][..] } else { slice::from_raw_parts(targets, n) };
+    (*h).set_targets(t);
+}
+
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_start(h: *mut Engine, t0: f64) {
+    if !h.is_null() {
+        (*h).start(t0);
+    }
+}
+
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_reset_job(h: *mut Engine) {
+    if !h.is_null() {
+        (*h).reset_job();
+    }
+}
+
+/// Queue a measurement `T_from_to` captured at `t_capture`.
+///
+/// # Safety
+/// `h` valid; `t`: 10 `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_push(h: *mut Engine, from: u32, to: u32, t: *const f64, t_capture: f64, markers: u32, rms_px: f64) {
+    if h.is_null() || t.is_null() {
+        return;
+    }
+    (*h).push(Measurement { from, to, transform: Transform::from_slice(slice::from_raw_parts(t, 10)), t_capture, markers, rms_px });
+}
+
+/// Run the ticks due up to `t_wall`; returns how many ran.
+///
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_advance(h: *mut Engine, t_wall: f64) -> u32 {
+    if h.is_null() {
+        return 0;
+    }
+    (*h).advance_to(t_wall)
+}
+
+/// Engine time of the next tick.
+///
+/// # Safety
+/// `h` valid.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_now(h: *const Engine) -> f64 {
+    if h.is_null() {
+        return f64::NAN;
+    }
+    (*h).now()
+}
+
+pub const SNAP_HEADER: usize = 24;
+pub const SNAP_NODE: usize = 13;
+pub const SNAP_TARGET: usize = 16;
+pub const SNAP_EVENT: usize = 5;
+
+/// Write the latest snapshot and hand over its events (they are not repeated). Returns the number
+/// of `f64` written, or minus the size needed if `cap` is too small (nothing is consumed).
+/// Layout: header (24) = tick, t, n_nodes, n_targets, active (-1 none), phase, gate, ready, locking,
+/// alarms, jitter_mm, jitter_deg, markers, rms_px, pose_age_s, n_events, ticks, overruns,
+/// measurements, late_merged, late_dropped, latency_s, 0, 0; then per node (13) = id, status, age,
+/// world (10); per target (16) = id, drilled, tip (3), axis (3), aim (2), yaw, pitch, angle_err,
+/// offset_mm, gap_mm, depth_mm; per event (5) = tick, t, kind, node, value.
+///
+/// # Safety
+/// `h` valid; `out`: `cap` `f64`.
+#[no_mangle]
+pub unsafe extern "C" fn st_engine_snapshot(h: *mut Engine, out: *mut f64, cap: usize) -> i32 {
+    if h.is_null() || out.is_null() {
+        return 0;
+    }
+    let e = &mut *h;
+    let s = e.snapshot();
+    let n_ev = s.events.len();
+    let need = SNAP_HEADER + s.nodes.len() * SNAP_NODE + s.targets.len() * SNAP_TARGET + n_ev * SNAP_EVENT;
+    if cap < need {
+        return -(need as i32);
+    }
+    let o = slice::from_raw_parts_mut(out, need);
+    let st = s.stats;
+    o[..SNAP_HEADER].copy_from_slice(&[
+        s.tick as f64,
+        s.t,
+        s.nodes.len() as f64,
+        s.targets.len() as f64,
+        s.active.map_or(-1.0, |i| i as f64),
+        s.phase as u8 as f64,
+        s.gate as f64,
+        s.ready as u8 as f64,
+        s.locking as u8 as f64,
+        s.alarms as f64,
+        s.jitter_mm,
+        s.jitter_deg,
+        s.markers as f64,
+        s.rms_px,
+        s.pose_age_s,
+        n_ev as f64,
+        st.ticks as f64,
+        st.overruns as f64,
+        st.measurements as f64,
+        st.late_merged as f64,
+        st.late_dropped as f64,
+        st.latency_s,
+        0.0,
+        0.0,
+    ]);
+    let mut k = SNAP_HEADER;
+    for n in &s.nodes {
+        o[k] = n.id as f64;
+        o[k + 1] = n.status as u8 as f64;
+        o[k + 2] = n.age;
+        o[k + 3..k + 13].copy_from_slice(&n.world.to_array());
+        k += SNAP_NODE;
+    }
+    for (i, t) in s.targets.iter().enumerate() {
+        o[k..k + SNAP_TARGET].copy_from_slice(&[
+            t.target as f64,
+            s.drilled.get(i).copied().unwrap_or(false) as u8 as f64,
+            t.tip[0],
+            t.tip[1],
+            t.tip[2],
+            t.axis[0],
+            t.axis[1],
+            t.axis[2],
+            t.aim[0],
+            t.aim[1],
+            t.yaw_deg,
+            t.pitch_deg,
+            t.angle_err_deg,
+            t.offset_mm,
+            t.gap_mm,
+            t.depth_mm,
+        ]);
+        k += SNAP_TARGET;
+    }
+    for ev in &s.events {
+        o[k..k + SNAP_EVENT].copy_from_slice(&[ev.tick as f64, ev.t, ev.kind as u8 as f64, ev.node as f64, ev.value]);
+        k += SNAP_EVENT;
+    }
+    e.take_events();
+    need as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_through_the_c_abi() {
+        unsafe {
+            let h = st_engine_new();
+            let id = |name: &str, parent: u32, kind: u32, t: [f64; 10]| st_engine_add_node(h, name.as_ptr(), name.len(), parent, kind, t.as_ptr());
+            let ident = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+            let sheet = id("sheet", 0, 0, ident);
+            // target A, +Z into the sheet (180° about X: q = (0, 1, 0, 0))
+            let a = id("A", sheet as u32, 3, [0.02, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+            let cam = id("camera", 0, 1, ident);
+            let tool = id("tool", cam as u32, 2, [0.0, 0.0, 0.17, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+            assert!(sheet > 0 && a > 0 && cam > 0 && tool > 0);
+            assert_eq!(id("A", 0, 3, ident), -3, "name taken");
+            assert_eq!(id("x", 99, 3, ident), -2, "unknown parent");
+            assert_eq!(id("y", 0, 1, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 1.0, 1.0]), -5, "scale on a tracked node");
+            st_engine_set_nav(h, tool as u32, [a as u32].as_ptr(), 1);
+            st_engine_set_calibrated(h, tool as u32, 1);
+            st_engine_start(h, 0.0);
+            // camera 0.17 m in front of A looking into the sheet: world(camera) = (0.02, 0, 0.17), 180° about X
+            let cam_w = Transform::rigid([0.02, 0.0, 0.17], crate::scene::Quat::new(0.0, 1.0, 0.0, 0.0));
+            let m = cam_w.inverse().to_array(); // T_camera_sheet
+            st_engine_push(h, cam as u32, sheet as u32, m.as_ptr(), 0.0, 8, 0.2);
+            assert_eq!(st_engine_advance(h, 0.0), 1);
+            let mut small = [0.0; 4];
+            let need = -st_engine_snapshot(h, small.as_mut_ptr(), 4);
+            assert!(need > 0);
+            let mut buf = vec![0.0; need as usize];
+            assert_eq!(st_engine_snapshot(h, buf.as_mut_ptr(), buf.len()), need);
+            assert_eq!(buf[2] as usize, 5, "nodes: world, sheet, A, camera, tool");
+            assert_eq!(buf[3] as usize, 1);
+            assert_eq!(buf[4], 0.0, "active target 0");
+            let tgt = SNAP_HEADER + 5 * SNAP_NODE;
+            assert_eq!(buf[tgt] as i32, a);
+            assert!(buf[tgt + 12].abs() < 1e-9, "angle 0");
+            assert!(buf[tgt + 13].abs() < 1e-9 && buf[tgt + 14].abs() < 1e-9, "on the mark, touching");
+            // events are handed over once
+            assert!(buf[15] >= 1.0);
+            let mut again = vec![0.0; 512];
+            st_engine_snapshot(h, again.as_mut_ptr(), again.len());
+            assert_eq!(again[15], 0.0);
+            st_engine_free(h);
+        }
     }
 }

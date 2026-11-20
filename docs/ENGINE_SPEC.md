@@ -1,7 +1,7 @@
 # SmartTools navigation engine: architecture and specification
 
-Status: proposal, v0.1 (2026-11-20). It describes the target architecture. The code at commit `3fe562a` implements
-parts of it: the math in `engine/` and a frame-driven pipeline in `lib/navpipeline.ts`.
+Status: v0.2 (2026-11-20). Implemented, except where §16 says otherwise. §16 maps every part of the specification
+to its code and tests, and lists where the implementation differs from the first draft (v0.1) and why.
 
 This document turns a design that already worked in a previous navigation system into a specification for SmartTools.
 Its two core ideas are:
@@ -35,7 +35,7 @@ It then states what we keep, what we refine, and how to get there from the curre
 
 ---
 
-## 2. Where the current implementation stands
+## 2. Where the implementation stood at v0.1 (before this design)
 
 | Concept | Today | Gap |
 |---|---|---|
@@ -437,3 +437,68 @@ Each phase ends with the scene test passing 17/17 (plus its new checks), so noth
   only use the axis?
 - **IMU fusion.** Once our own camera module exists, does it carry an IMU? If so, the estimator in §8 already has the
   slot for it (a gyro at 1 kHz between camera frames).
+
+---
+
+## 16. Implementation status (v0.2)
+
+### 16.1 Where each part lives
+
+| Spec | Code | Tests |
+|---|---|---|
+| §3 conventions, §4 scene graph (`Quat`, `Transform`, `Node`, topological update, `relative`, re-parenting, cycle and scale rules) | `engine/src/scene.rs`; TypeScript mirror for renderers in `lib/xform.ts` | 8 Rust tests (matrices, inverse, re-parenting, cycles, scale rules, 10⁶ updates with no drift); `tests/xform.test.mts` |
+| §6 measurements (edges `T_from_to`, capture time, quality), §7 clock (logical time, catch-up, overruns), §8 filter + prediction + late merge, §9 navigation in the target frame, checks (gate, lock, phases, alarms, events), §10 snapshot | `engine/src/engine.rs`, C ABI in `engine/src/ffi.rs`, TypeScript wrapper `NavCore.createEngine()` in `lib/engine.ts` | 10 Rust engine tests + 1 C-ABI test; `tests/engine.test.mts` |
+| Trackers produce measurements only | `lib/markertracker.ts` (detection, sub-pixel, undistortion, robust solve, calibration captures) | `tests/session.test.mts`, E2E |
+| Tracker thread (§11) | `lib/workers/tracker.worker.ts` + `lib/trackerclient.ts` (one frame in flight, newer frames dropped while busy) | `/engine` and `/hud` in a browser |
+| Session: tracker → engine → snapshot | `lib/session.ts` (`NavSession`), browser loops in `lib/tracker.ts` (`BrowserNav`) | `tests/session.test.mts`, E2E |
+| Scene definitions and visual representations (§17) | `lib/scenedef.ts` | `tests/scenedef.test.mts` |
+| Renderers | `lib/render/render3d.ts` (three.js), `lib/render/render2d.ts` (plan), `lib/render/hudview.ts` + `lib/hud.ts` (phone HUD) | `tests/render.test.mts`, `tests/session.test.mts` |
+| §12 E2E with the simulator | `scripts/e2e.mts` (scenarios below), simulator in `lib/scene.ts` + `engine/src/sim.rs` | 32 checks, run with the dock parallel and tilted 12° |
+
+### 16.2 Differences from the first draft, with the reason
+
+| Item | v0.1 | Now | Why (measured in `scripts/e2e.mts`) |
+|---|---|---|---|
+| Prediction cap | 50 ms | 120 ms | At 15 fps with 50 ms latency, measurements are up to ~117 ms old; with a 50 ms cap the tip lagged 2.5 mm (p95) while drilling; with 120 ms, 0.2 mm |
+| Stale threshold / gate's maximum measurement age | 150 ms | 250 ms | At 8–15 fps plus latency, 150 ms flagged good data as stale and reset the lock on every frame; steadiness already guarantees the tool is still when the gate opens |
+| Lock timer | in the HUD (`LOCK_TIME` 0.75 s) | in the engine (0.4 s) | The HUD only displays the engine's decision (`ready`, `locking`, reasons) |
+| Engine thread | Web Worker | main thread; the tracker is in the Web Worker | The engine costs microseconds per tick; the tracker (detection) was what saturated the main thread: 6 fps with it there, 60 fps with it in the worker, engine at 120 Hz either way |
+| Snapshot transport | `SharedArrayBuffer` | a typed snapshot parsed each tick | The engine and the renderers share the main thread, so no transport is needed yet |
+| Uncertainty and dynamic gate margin (§8) | covariance per node | not yet: fixed margin (0.4°, 0.75 mm) | Next step; the E2E false-ready check (0 in every scenario) guards the fixed margin meanwhile |
+| Replay logs (§12) | inputs logged | not yet | Next step; the engine is deterministic (tested), so a log of measurements will replay exactly |
+
+### 16.3 E2E scenarios (`npm run test:e2e`)
+
+Every scenario renders camera frames with the simulator, tracks them with the real `MarkerTracker`, feeds the
+engine with capture timestamps and checks its snapshots against the ground truth at each tick. No renderer runs: the
+whole job is navigated headless.
+
+| Scenario | What it checks |
+|---|---|
+| `lens` | Lens calibration from a sweep: focal length, principal point, distortion |
+| `dock` | Pivot (tip) and twist (axis) calibration; the engine's tool node updated and marked calibrated |
+| `drill` | Three holes with tremor, motor vibration, blur and noise, 15 fps camera, 50 ms latency: 120 Hz ticks, never stale, tip, angle, aim and depth accuracy, no false "ready", "ready" and depth reached on every hole |
+| `latency` | 80 ms latency, the same frames with prediction on and off: prediction cuts the moving-tip error by more than 40 % |
+| `decoupled` | A renderer at 20 Hz skips ~6 ticks per frame; a 300 ms stall is reported as an overrun, the clock catches up, no "ready" on old data |
+| `reorder` | Frames arrive out of order (up to 2.5 frame intervals): merged, none dropped, accuracy kept, no false "ready" |
+| `angled` | A hole planned 15° off the normal: chosen, "ready", depth and angle measured along its own axis |
+| `safety` | Camera covered, uncalibrated dock, shaking hand: never "ready"; tilting 1.2° while drilling raises the angle alarm |
+
+## 17. Visual representations (render-agnostic elements)
+
+A scene is defined once (`SceneDef` in `lib/scenedef.ts`). Each node has its structure (name, parent, kind, local
+transform) and, optionally, representations:
+
+- **`visual3d`:** for a 3D scene. It is either a primitive (box, cylinder, sphere, plane, line, axes) or a **mesh**
+  (STL today; the format field leaves room for others). Each has surface properties (colour, opacity, metalness,
+  roughness, emissive, wireframe, edge lines) and an offset transform, which may scale (STL files are in mm).
+- **`visual2d`:** a simplified symbol for plans and HUDs: crosshair (a planned hole, showing its drilling direction),
+  rings (the drill: tip ring and chuck ring), the marker sheet, dot, label, rect.
+
+The **engine receives only the structure** (`buildEngine`). Renderers read the definition and the engine's
+snapshots, and nothing else. Navigation therefore runs with no renderer at all (the E2E tests run headless). The same
+element can be drawn in several ways at once, as on the `/engine` page:
+
+- **The drill:** a 3D model (bit, chuck, body, handle, battery) and, in 2D, the tip and chuck rings.
+- **The dock:** an STL mesh, the real `hardware/dock` part, on a display node with scale 0.001.
+- **A hole:** a translucent cylinder along its planned axis in 3D, and a crosshair with its direction in 2D.
