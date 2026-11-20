@@ -19,7 +19,9 @@ your hands.
 
 | Page | What it is |
 |---|---|
-| [`/`](https://smarttools-nav.vercel.app) | Landing page with a three.js line scene of the drill, wall, markers and docked phone, plus the 2D HUD, and a [gallery of scenarios](https://smarttools-nav.vercel.app/#scenarios) running the real engine in 3D + 2D |
+| [`/`](https://smarttools-nav.vercel.app) | For makers: print (dock, sheet, markers), mount it on your screwdriver, then register, plan and operate. The whole 3D-assembly job, and the assembly and drilling demos running the real engine in 3D + 2D |
+| [`/developers`](https://smarttools-nav.vercel.app/developers) | For developers: the navigation engine with its 3D, 2D and AR views, the numbers, athos, contract-gatekeeper and agentvcs with how each should be integrated ([docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)), and every demo |
+| [`/engine`](https://smarttools-nav.vercel.app/engine) | The engine lab: one engine drawn in 3D, as a 2D plan and as the HUD |
 | [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Phone**, **Lens**, **Calibrate**, export / import) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
 
@@ -277,6 +279,9 @@ shutter, compression, autofocus, a real hand).
 | `lib/board.ts` | Marker sheet geometry and targets |
 
 ## Related projects
+
+How each one should come in (used from its repository, with only its format implemented here) is analysed in
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
 - [athos](https://github.com/athos-agent/athos): verified procedural know-how as Markdown steps (When / Do / Check / Because), replayed step by step on the tool
 - [contract-gatekeeper](https://github.com/matiasmolinas/contract-gatekeeper): zero-LLM deterministic verifier for agent-written plugins

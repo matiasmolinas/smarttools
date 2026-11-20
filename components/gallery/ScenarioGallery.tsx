@@ -21,8 +21,16 @@ export const CATEGORIES = [
 type Cat = (typeof CATEGORIES)[number]["id"];
 export const categoryOf = (s: Scenario): Cat => (s.id.startsWith("assembly") ? "assembly" : s.project ? "platform" : "drilling");
 
-export default function ScenarioGallery() {
-  const [cat, setCat] = useState<Cat>("assembly");
+export default function ScenarioGallery({
+  cats = CATEGORIES.map((c) => c.id),
+  title = "See every part of it, working.",
+}: {
+  /** the categories shown (the home page leaves out the platform ones) */
+  cats?: readonly Cat[];
+  title?: string;
+} = {}) {
+  const shown = CATEGORIES.filter((c) => cats.includes(c.id));
+  const [cat, setCat] = useState<Cat>(shown[0].id);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [autoAdvance, setAutoAdvance] = useState(true);
@@ -47,6 +55,7 @@ export default function ScenarioGallery() {
       const s = m && SCENARIOS.find((x) => x.id === m[1]);
       if (!s) return;
       const c = categoryOf(s);
+      if (!cats.includes(c)) return;
       setCat(c);
       setIndex(SCENARIOS.filter((x) => categoryOf(x) === c).indexOf(s));
       setPlaying(true);
@@ -56,7 +65,8 @@ export default function ScenarioGallery() {
     open();
     window.addEventListener("hashchange", open);
     return () => window.removeEventListener("hashchange", open);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cats.join(",")]);
 
   const go = (d: number) => setIndex((i) => (i + d + list.length) % list.length);
 
@@ -65,7 +75,7 @@ export default function ScenarioGallery() {
       <p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-[var(--cyan)]">Demos</p>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight sm:text-4xl">See every part of it, working.</h2>
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-4xl">{title}</h2>
           <p className="mt-2 max-w-2xl text-sm text-white/55">
             Each demo runs the real navigation engine on scripted motion and draws it three ways: the 3D scene, what the
             phone shows, and the numbers it decides with.
@@ -89,7 +99,7 @@ export default function ScenarioGallery() {
       </div>
 
       <div className="mt-6 flex flex-wrap gap-2" role="tablist">
-        {CATEGORIES.map((c) => (
+        {shown.map((c) => (
           <button
             key={c.id}
             role="tab"
