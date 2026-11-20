@@ -1,0 +1,3 @@
+# Rust build output and sources are not needed to build the site (the .wasm is in public/engine)
+engine/target
+hardware/dock/*.stl
