@@ -25,7 +25,7 @@ function label(text: string, color = "#e8eef5", bg = "rgba(5,8,13,0.72)") {
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillStyle = color;
-  g.fillText(text, 64, 33);
+  g.fillText(text, c.width / 2, 33);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
