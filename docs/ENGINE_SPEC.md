@@ -453,7 +453,8 @@ Each phase ends with the scene test passing 17/17 (plus its new checks), so noth
 | Session: tracker → engine → snapshot | `lib/session.ts` (`NavSession`), browser loops in `lib/tracker.ts` (`BrowserNav`) | `tests/session.test.mts`, E2E |
 | Scene definitions and visual representations (§17) | `lib/scenedef.ts` | `tests/scenedef.test.mts` |
 | Renderers | `lib/render/render3d.ts` (three.js), `lib/render/render2d.ts` (plan), `lib/render/hudview.ts` + `lib/hud.ts` (phone HUD) | `tests/render.test.mts`, `tests/session.test.mts` |
-| §12 E2E with the simulator | `scripts/e2e.mts` (scenarios below), simulator in `lib/scene.ts` + `engine/src/sim.rs` | 32 checks, run with the dock parallel and tilted 12° |
+| §12 E2E with the simulator | `scripts/e2e.mts` (scenarios below), simulator in `lib/scene.ts` + `engine/src/sim.rs` | 34 checks on the dock v0.3 at 0° and 10° of tilt |
+| Rig geometry from the hardware | `hardware/dock/dock.py` → `rig.json`, `lib/dockgeom.ts`; transforms in `lib/dockrig.ts`; used by the simulator (`DEFAULT_RIG`), the 3D view and the tests | `tests/scenedef.test.mts` (dock and drill from one geometry), E2E `rig` |
 
 ### 16.2 Differences from the first draft, with the reason
 
@@ -475,6 +476,7 @@ whole job is navigated headless.
 
 | Scenario | What it checks |
 |---|---|
+| `rig` | The dock's geometry: the bit tip inside the image, at least 6 markers in view on every mark (on the surface and 35 mm deep). Fails for dock v0.2 (`--rig v02`), passes for v0.3 |
 | `lens` | Lens calibration from a sweep: focal length, principal point, distortion |
 | `dock` | Pivot (tip) and twist (axis) calibration; the engine's tool node updated and marked calibrated |
 | `drill` | Three holes with tremor, motor vibration, blur and noise, 15 fps camera, 50 ms latency: 120 Hz ticks, never stale, tip, angle, aim and depth accuracy, no false "ready", "ready" and depth reached on every hole |

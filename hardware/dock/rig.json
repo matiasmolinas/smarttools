@@ -1,0 +1,50 @@
+{
+  "version": "0.3",
+  "units": "mm",
+  "pivot": [
+    0.0,
+    0.0,
+    32.0
+  ],
+  "tiltRange": [
+    0.0,
+    20.0
+  ],
+  "phone": {
+    "length": 162.2,
+    "height": 75.4,
+    "thickness": 8.0,
+    "camFromEnd": 15.0,
+    "camFromEdge": 14.0
+  },
+  "drill": {
+    "bodyDiameter": 56.0,
+    "tipX": 190.0,
+    "axisZ": -39.59797974644666
+  },
+  "cameraInArm": [
+    -47.0,
+    0.0,
+    -12.0
+  ],
+  "phoneCentreInArm": [
+    -52.0,
+    66.1,
+    11.700000000000003
+  ],
+  "slidingJawInArm": [
+    0.0,
+    147.2,
+    0.0
+  ],
+  "tipInSaddle": [
+    190.0,
+    0.0,
+    -39.59797974644666
+  ],
+  "lowerJawInSaddle": [
+    0.0,
+    0.0,
+    -79.19595949289332
+  ]
+}

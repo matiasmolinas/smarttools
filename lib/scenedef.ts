@@ -11,6 +11,10 @@ import { BOARD_MARKERS, BOARD_TARGETS, MARKER_SIZE, SHEET } from "./board.ts";
 import type { NavEngine, NodeKindName, ToolCalib } from "./engine.ts";
 import { NODE_KINDS } from "./engine.ts";
 import { QI, qaxis, qfromTo, qmul, type Q, type Xf } from "./xform.ts";
+import { DOCK, dockRig } from "./dockrig.ts";
+
+/** A transform in mm as a display node local transform in metres with scale 0.001 (for mm meshes). */
+const mmToM = (t: Xf): XfDef => ({ p: [t.p[0] / 1000, t.p[1] / 1000, t.p[2] / 1000], q: t.q, s: [0.001, 0.001, 0.001] });
 import type { V3 } from "./pose.ts";
 
 export interface XfDef {
@@ -142,7 +146,9 @@ const C = { tool: "#ffb547", cyan: "#5ad8ff", green: "#3dffa8", white: "#e8eef5"
  * drill on the dock (calibrated). `tool` is the dock calibration; `angledTargetDeg` optionally adds
  * a fourth target "B1" tilted about the sheet's Y axis (an angled hole) for tests and demos.
  */
-export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: number }): SceneDef {
+export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: number; dockTiltDeg?: number }): SceneDef {
+  const dock = dockRig({ tiltDeg: opts.dockTiltDeg ?? 0 });
+  const bodyR = DOCK.drill.bodyDiameter / 2000;
   const nodes: NodeDef[] = [
     {
       name: "sheet",
@@ -186,28 +192,47 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
     {
       name: "camera",
       kind: "tracked",
-      // the phone around the camera (camera frame: x right, y down, z forward)
-      visual3d: [
-        { kind: "box", size: [0.165, 0.077, 0.009], offset: { p: [0.06, 0.02, -0.006] }, material: { color: "#0b0f14", edges: true } },
-        { kind: "cylinder", radius: 0.006, length: 0.004, axis: "z", material: { color: C.cyan, metalness: 0.6 } },
-      ],
+      // the lens (the phone is drawn with the dock below)
+      visual3d: [{ kind: "cylinder", radius: 0.006, length: 0.004, axis: "z", material: { color: C.cyan, metalness: 0.6 } }],
       visual2d: [{ kind: "dot", radius: 0.003, color: C.cyan }],
     },
+    // the 3D-printed dock v0.3 (hardware/dock), display only, placed from the same geometry the simulator uses
+    // (lib/dockrig.ts). Units under "dock" are millimetres (scale 0.001).
     {
-      // the 3D-printed dock (hardware/dock), display only: STL in millimetres
       name: "dock",
       parent: "camera",
       kind: "display",
-      // dock frame (X toward the bit, Y lateral, Z up) -> camera frame (x right, y down, z forward)
-      local: { p: [0.06, 0.072, 0.018], q: qfromM([0, -1, 0, 0, 0, -1, 1, 0, 0]), s: [0.001, 0.001, 0.001] },
-      visual3d: [{ kind: "mesh", url: "/models/dock-arm.stl", format: "stl", material: { color: C.tool, opacity: 0.85, roughness: 0.7 } }],
+      local: mmToM(dock.cameraSaddle),
+      visual3d: [{ kind: "mesh", url: "/models/dock-saddle.stl", format: "stl", material: { color: C.tool, roughness: 0.7 } }],
     },
     {
-      name: "dock-saddle",
+      name: "dock-lower",
       parent: "dock",
       kind: "display",
-      local: { p: [0, 0, -32] },
-      visual3d: [{ kind: "mesh", url: "/models/dock-saddle.stl", format: "stl", material: { color: C.tool, opacity: 0.85, roughness: 0.7 } }],
+      local: { p: [...DOCK.lowerJawInSaddle] as V3 },
+      visual3d: [{ kind: "mesh", url: "/models/dock-lower.stl", format: "stl", material: { color: C.tool, roughness: 0.7 } }],
+    },
+    {
+      name: "dock-arm",
+      parent: "dock",
+      kind: "display",
+      local: { p: dock.saddleArm.p, q: dock.saddleArm.q },
+      visual3d: [
+        { kind: "mesh", url: "/models/dock-arm.stl", format: "stl", material: { color: C.tool, roughness: 0.7 } },
+        {
+          kind: "box",
+          size: [DOCK.phone.thickness, DOCK.phone.length, DOCK.phone.height],
+          offset: { p: [...DOCK.phoneCentreInArm] as V3 },
+          material: { color: "#0b0f14", roughness: 0.3, edges: true },
+        },
+      ],
+    },
+    {
+      name: "dock-jaw",
+      parent: "dock-arm",
+      kind: "display",
+      local: { p: [...DOCK.slidingJawInArm] as V3 },
+      visual3d: [{ kind: "mesh", url: "/models/dock-jaw.stl", format: "stl", material: { color: C.green, roughness: 0.7 } }],
     },
     {
       // the drill: origin at the bit tip, +Z = drilling direction
@@ -218,9 +243,9 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
       visual3d: [
         { kind: "cylinder", radius: DRILL.bitRadius, length: DRILL.bitLength, axis: "z", offset: { p: [0, 0, -DRILL.bitLength / 2] }, material: { color: C.steel, metalness: 0.9, roughness: 0.3 } },
         { kind: "cylinder", radius: 0.018, length: 0.04, axis: "z", offset: { p: [0, 0, -DRILL.bitLength - 0.02] }, material: { color: C.steel, metalness: 0.7, roughness: 0.4, edges: true } },
-        { kind: "cylinder", radius: 0.027, length: 0.13, axis: "z", offset: { p: [0, 0, -DRILL.bitLength - 0.105] }, material: { color: C.body, edges: true } },
-        { kind: "box", size: [0.034, 0.13, 0.045], offset: { p: [0, 0.085, -DRILL.bitLength - 0.13] }, material: { color: C.body, edges: true } },
-        { kind: "box", size: [0.07, 0.03, 0.1], offset: { p: [0, 0.16, -DRILL.bitLength - 0.12] }, material: { color: "#2b3947", edges: true } },
+        { kind: "cylinder", radius: bodyR, length: 0.16, axis: "z", offset: { p: [0, 0, -DOCK.drill.tipX / 1000 - 0.03] }, material: { color: C.body, edges: true } },
+        { kind: "box", size: [0.034, 0.13, 0.045], offset: { p: [0, bodyR + 0.06, -DOCK.drill.tipX / 1000 - 0.08] }, material: { color: C.body, edges: true } },
+        { kind: "box", size: [0.07, 0.03, 0.1], offset: { p: [0, bodyR + 0.13, -DOCK.drill.tipX / 1000 - 0.07] }, material: { color: "#2b3947", edges: true } },
       ],
       visual2d: [{ kind: "rings", tipRadius: 0.004, chuckRadius: 0.009, chuckOffset: DRILL.bitLength, color: C.tool }],
       meta: { bitLength: DRILL.bitLength, bitDiameterMm: 6 },
@@ -228,23 +253,4 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
     { name: "chuck", parent: "tool", kind: "derived", local: { p: [0, 0, -DRILL.bitLength] } },
   );
   return { name: "smarttools-a4-v2", nodes, navigation: { tool: "tool", targets, tracked: "camera", reference: "sheet" } };
-}
-
-function qfromM(m: number[]): Q {
-  // proper rotation matrix (row-major) -> quaternion
-  const tr = m[0] + m[4] + m[8];
-  if (tr > 0) {
-    const s = Math.sqrt(tr + 1) * 2;
-    return [0.25 * s, (m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s];
-  }
-  if (m[0] > m[4] && m[0] > m[8]) {
-    const s = Math.sqrt(1 + m[0] - m[4] - m[8]) * 2;
-    return [(m[7] - m[5]) / s, 0.25 * s, (m[1] + m[3]) / s, (m[2] + m[6]) / s];
-  }
-  if (m[4] > m[8]) {
-    const s = Math.sqrt(1 + m[4] - m[0] - m[8]) * 2;
-    return [(m[2] - m[6]) / s, (m[1] + m[3]) / s, 0.25 * s, (m[5] + m[7]) / s];
-  }
-  const s = Math.sqrt(1 + m[8] - m[0] - m[4]) * 2;
-  return [(m[3] - m[1]) / s, (m[2] + m[6]) / s, (m[5] + m[7]) / s, 0.25 * s];
 }

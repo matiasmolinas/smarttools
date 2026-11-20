@@ -6,7 +6,8 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { NavCore, cameraFromHfov, type Camera, type EngineSnapshot, type ToolCalib } from "../lib/engine.ts";
-import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, markerCodes, navInTarget, renderTool, tiltedRig, toolWorldFromHold, truthAt, type Disturbance, type Hold } from "../lib/scene.ts";
+import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, IDEAL_RIG, RUN_TIME, V02_RIG, disturb, dockRigAt, markerCodes, navInTarget, renderTool, tiltedRig, toolWorldFromHold, truthAt, type Disturbance, type Hold, type Rig } from "../lib/scene.ts";
+import { tipInView } from "../lib/dockrig.ts";
 import { NavSession, REQUIREMENT } from "../lib/session.ts";
 import { smartToolsScene, toXf, INTO_SHEET } from "../lib/scenedef.ts";
 import { BOARD_TARGETS } from "../lib/board.ts";
@@ -17,6 +18,7 @@ const args = process.argv.slice(2);
 const QUICK = args.includes("--quick");
 const ONLY = args.includes("--only") ? args[args.indexOf("--only") + 1].split(",") : null;
 const TILT = args.includes("--tilt") ? Number(args[args.indexOf("--tilt") + 1]) : 0;
+const RIG_NAME = args.includes("--rig") ? args[args.indexOf("--rig") + 1] : "dock";
 const CAM_FPS = QUICK ? 8 : 15;
 
 const require = createRequire(import.meta.url);
@@ -24,7 +26,11 @@ const { AR } = require("js-aruco2");
 const core = await NavCore.load(readFileSync(new URL("../public/engine/nav_core.wasm", import.meta.url)));
 const codes = markerCodes(new AR.Dictionary("ARUCO_MIP_36h12").codeList);
 const detector = () => new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" });
-const rig = TILT ? tiltedRig(TILT) : DEFAULT_RIG;
+// dock: the real dock v0.3 (hardware/dock/dock.py), tilted on its hinge with --tilt
+// ideal: the idealised rig of the first simulations; v02: dock v0.2 as it was designed
+const RIGS: Record<string, () => Rig> = { dock: () => (TILT ? dockRigAt(TILT) : DEFAULT_RIG), ideal: () => (TILT ? tiltedRig(TILT) : IDEAL_RIG), v02: () => V02_RIG };
+if (!RIGS[RIG_NAME]) throw new Error(`unknown rig ${RIG_NAME}`);
+const rig = RIGS[RIG_NAME]();
 const W = rig.width, H = rig.height;
 const GUESS_CAMERA: Camera = cameraFromHfov(W, H, 66);
 const GUESS_TOOL: ToolCalib = { tipCam: [0, 0.055, 0.17], axisCam: [0, 0, 1] };
@@ -136,6 +142,25 @@ let calibrated = { camera: false, tool: false };
 const t0 = performance.now();
 
 // =============================================================================================
+await scenario("rig", `Rig geometry (${RIG_NAME}${TILT ? `, tilt ${TILT}°` : ""}): the bit tip in the image, markers in view on every mark`, () => {
+  const v = tipInView(rig.tool);
+  const halfV = (Math.atan2(rig.height / 2, rig.camera.f) * 180) / Math.PI;
+  const halfH = (Math.atan2(rig.width / 2, rig.camera.f) * 180) / Math.PI;
+  check("bit tip inside the image (with a 2° margin)", Math.abs(v.downDeg) < halfV - 2 && Math.abs(v.sideDeg) < halfH - 2, `tip ${v.downDeg.toFixed(1)}° below / ${v.sideDeg.toFixed(1)}° aside the optical axis; field ±${halfV.toFixed(1)}° x ±${halfH.toFixed(1)}°`);
+  const det = detector();
+  const counts: string[] = [];
+  let min = Infinity;
+  for (const t of BOARD_TARGETS) {
+    for (const z of [0, -0.035]) {
+      const toolW = toolWorldFromHold(core, rig, { tipWorld: [t.x, t.y, z], yawDeg: 0, pitchDeg: 0, twistDeg: 0 });
+      const n = det.detect(renderTool(core, rig, codes, [toolW], CALM, 3)).length;
+      min = Math.min(min, n);
+      counts.push(`${t.label}${z ? " (35 mm deep)" : ""} ${n}`);
+    }
+  }
+  check("at least 6 markers in view on every mark, on the surface and 35 mm deep", min >= 6, counts.join(", "));
+});
+
 await scenario("lens", "Lens calibration: sweep the phone over the sheet (CALM, no latency)", () => {
   const s = newSession();
   s.beginCapture("camera");
@@ -412,7 +437,7 @@ await scenario("safety", "Safety: markers hidden, uncalibrated dock, shaking han
 
 // =============================================================================================
 const failed = rows.filter((r) => !r.pass);
-console.log(`\n${rows.length - failed.length}/${rows.length} checks passed in ${((performance.now() - t0) / 1000).toFixed(0)} s${TILT ? ` (dock tilted ${TILT}°)` : ""}`);
+console.log(`\n${rows.length - failed.length}/${rows.length} checks passed in ${((performance.now() - t0) / 1000).toFixed(0)} s (rig ${RIG_NAME}${TILT ? `, tilt ${TILT}°` : ""})`);
 for (const f of failed) console.log(`  FAILED [${f.scenario}] ${f.name}: ${f.detail}`);
 console.log(failed.length ? "E2E FAIL" : "E2E PASS");
 process.exit(failed.length ? 1 : 0);
