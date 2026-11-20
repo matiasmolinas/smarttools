@@ -95,6 +95,21 @@ What is not built yet is marked "coming with the app" in place, not hidden:
 For each project, the integration (used from its repository, or migrated here) is decided in
 [INTEGRATIONS.md](INTEGRATIONS.md).
 
+### `/architecture`: the third page
+
+How SmartTools splits between the phone and the cloud ([ARCHITECTURE.md](ARCHITECTURE.md)), drawn in 3D with
+three.js from `lib/architecture.ts`:
+- the phone with the real-time loop;
+- the rule, as a wall the loop never crosses;
+- the cloud's services;
+- the three files that travel between them.
+
+Phase buttons (F1, F2, F3) light up what each phase brings. The same data is listed as text below the scene.
+
+### `/memory` and `/hud`
+
+`/memory` is the phone's memory (plans and jobs, offline). It uses the makers menu. `/hud` has no top bar.
+
 ## Rules for future changes
 
 - **One headline idea per section.** For makers, a new feature goes under Print, Mount or Work; for developers, under one of the four things. Not in a new list.

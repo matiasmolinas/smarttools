@@ -11,6 +11,8 @@ import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerC
 import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { toXf } from "@/lib/scenedef";
 import type { Xf } from "@/lib/xform";
+import { SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
+import { activePlanId, browserMemory, setActivePlanId } from "@/lib/memory";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 type VideoFrameMeta = { captureTime?: number; expectedDisplayTime?: number };
@@ -44,6 +46,10 @@ export default function HudScreen() {
   const [phoneName, setPhoneName] = useState(phoneById(DEFAULT_PHONE_ID).name);
   const importRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // plans and jobs (F1: planned with the tool as a pointer, kept in the phone's memory)
+  const [draft, setDraft] = useState<Plan | null>(null);
+  const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
+  const [done, setDone] = useState(0);
 
   function say(t: string) {
     setToast(t);
@@ -87,7 +93,15 @@ export default function HudScreen() {
           }
           c.getContext("2d")!.putImageData(img, 0, 0);
         };
-        if (!sim) setPhoneName(tr.phone.name);
+        if (!sim) {
+          setPhoneName(tr.phone.name);
+          const id = activePlanId();
+          if (id)
+            browserMemory()
+              .plan(id)
+              .then((p) => p && applyPlan(p, tr, false))
+              .catch(() => {});
+        }
         if (sim) {
           const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
           tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
@@ -142,6 +156,57 @@ export default function HudScreen() {
     bgRef.current = next;
     setBg(next);
   }
+
+  function applyPlan(p: Plan, tr = trackerRef.current, announce = true) {
+    if (!tr) return;
+    tr.setPlan(p);
+    setPlanState(p);
+    setActivePlanId(p.id === SHEET_PLAN.id ? null : p.id);
+    if (announce) say(`PLAN · ${p.name.toUpperCase()} · ${p.holes.length} HOLES`);
+  }
+  async function nextPlan() {
+    const tr = trackerRef.current;
+    if (!tr) return say("ENGINE LOADING");
+    const saved = (await browserMemory().plans().catch(() => [])).map((r) => r.value);
+    const all = [SHEET_PLAN, ...saved];
+    const i = all.findIndex((p) => p.id === plan.id);
+    applyPlan(all[(i + 1) % all.length]);
+  }
+  function mark() {
+    const tr = trackerRef.current;
+    if (!tr || !draft) return;
+    const m = tr.markHere();
+    if (!m.ok) return say(m.reason.toUpperCase());
+    const r = addHole(draft, m);
+    if (!r.ok) return say(r.reason.toUpperCase());
+    setDraft(r.plan);
+    const h = r.plan.holes[r.plan.holes.length - 1];
+    say(`${h.label} · ${h.x.toFixed(1)}, ${h.y.toFixed(1)} MM`);
+    soundRef.current?.vibrate("depth-reached");
+  }
+  async function savePlan() {
+    if (!draft) return;
+    if (!draft.holes.length) return say("MARK A HOLE FIRST");
+    const r = await browserMemory().savePlan(draft);
+    if (!r.ok) return say(r.errors[0].toUpperCase());
+    setDraft(null);
+    applyPlan(r.plan, trackerRef.current, false);
+    say(`PLAN SAVED · ${r.plan.holes.length} HOLES`);
+  }
+  async function finishJob() {
+    const tr = trackerRef.current;
+    if (!tr) return say("ENGINE LOADING");
+    const rec = tr.finishJob();
+    if (!rec) return say("NO HOLE DRILLED YET");
+    await browserMemory().saveJob(rec);
+    setDone(0);
+    say(`JOB SAVED · ${rec.report.verdict.toUpperCase()}`);
+  }
+  // holes done in this job, for the bar
+  useEffect(() => {
+    const iv = setInterval(() => setDone(trackerRef.current?.recorder?.holes.length ?? 0), 500);
+    return () => clearInterval(iv);
+  }, []);
 
   const cycleSurface = () => choose(SURFACES[(SURFACES.indexOf(bg) + 1) % SURFACES.length]);
 
@@ -286,6 +351,42 @@ export default function HudScreen() {
         </div>
       )}
 
+      {/* plan and job bar, bottom (camera only): plan with the tool as a pointer, choose a plan, end the job */}
+      {bg === "camera" && (
+        <div className="absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] flex justify-center px-20">
+          <div className="flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/20 bg-black/55 p-1.5 font-mono text-[11px] backdrop-blur-md">
+            {draft ? (
+              <>
+                <span className="px-2 text-white/70">Planning · {draft.holes.length} holes</span>
+                <Pill onClick={mark} strong>
+                  Mark hole
+                </Pill>
+                <Pill onClick={() => draft.holes.length && setDraft(removeLastHole(draft))}>Undo</Pill>
+                <Pill onClick={savePlan}>Save</Pill>
+                <Pill onClick={() => setDraft(null)}>Cancel</Pill>
+              </>
+            ) : (
+              <>
+                <Pill onClick={nextPlan}>
+                  {plan.name.length > 18 ? `${plan.name.slice(0, 17)}…` : plan.name} · {done}/{plan.holes.length}
+                </Pill>
+                <Pill
+                  onClick={() => {
+                    setDraft(newPlan(`Plan ${new Date().toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
+                    say("TOUCH THE SURFACE WITH THE TIP · MARK HOLE");
+                  }}
+                >
+                  New plan
+                </Pill>
+                <Pill onClick={finishJob} strong>
+                  Finish job
+                </Pill>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* floating control column, right edge (portrait and landscape) */}
       <div className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 flex -translate-y-1/2 flex-col items-center gap-3.5">
         <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
@@ -407,11 +508,25 @@ export default function HudScreen() {
         <a href="/markers" className="mt-1 font-mono text-[10px] text-white/60 hover:text-white">
           Markers
         </a>
+        <a href="/memory" className="font-mono text-[10px] text-white/60 hover:text-white">
+          Memory
+        </a>
         <a href="/" className="font-mono text-[10px] text-white/50 hover:text-white/80">
           ← 3D
         </a>
       </div>
     </div>
+  );
+}
+
+function Pill({ children, onClick, strong }: { children: React.ReactNode; onClick: () => void; strong?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-3 py-1.5 transition active:scale-95 ${strong ? "bg-[#3ee59b] font-semibold text-black" : "border border-white/25 text-white/90 hover:border-white/50"}`}
+    >
+      {children}
+    </button>
   );
 }
 

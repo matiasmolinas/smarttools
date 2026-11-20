@@ -1,0 +1,12 @@
+{
+ "id": "hash-009-num-shortest",
+ "description": "ECMAScript Number serialization",
+ "input": "[0.30000000000000004, 1.0, 4.50, 100]\n",
+ "expect": {
+  "exit": 0,
+  "json": {
+   "ok": true,
+   "canonical": "[0.30000000000000004,1,4.5,100]"
+  }
+ }
+}

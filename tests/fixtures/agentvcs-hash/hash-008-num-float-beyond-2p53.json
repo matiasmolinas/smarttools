@@ -1,0 +1,12 @@
+{
+ "id": "hash-008-num-float-beyond-2p53",
+ "description": "ECMAScript Number serialization",
+ "input": "[2.9514790517935283e20, 1.2345678901234567e19]\n",
+ "expect": {
+  "exit": 0,
+  "json": {
+   "ok": true,
+   "canonical": "[295147905179352830000,12345678901234567000]"
+  }
+ }
+}

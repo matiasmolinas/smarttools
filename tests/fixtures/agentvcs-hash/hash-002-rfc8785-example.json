@@ -1,0 +1,13 @@
+{
+ "id": "hash-002-rfc8785-example",
+ "description": "RFC 8785 \u00a73.2.2 canonicalization example",
+ "input": "{\n  \"numbers\": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],\n  \"string\": \"\\u20ac$\\u000F\\u000aA'\\u0042\\u0022\\u005c\\\\\\\"\\/\",\n  \"literals\": [null, true, false]\n}\n",
+ "expect": {
+  "exit": 0,
+  "json": {
+   "ok": true,
+   "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"\u20ac$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}",
+   "hash": "b3:5b3b80c51be7d32b5df2e507fa592a888faf3a4c98b39ef647fadffcd4ce73bd"
+  }
+ }
+}

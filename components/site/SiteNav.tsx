@@ -1,5 +1,6 @@
-// The site's top bar. Two audiences, two menus: makers (the home page: print, mount, work) and developers
-// (/developers: the engine and the three open-source projects). The switch between them is always visible.
+// The site's top bar. Three pages, three menus: makers (the home page: print, mount, work), developers
+// (/developers: the engine and the three open-source projects) and the architecture (/architecture: what runs
+// on the phone, what runs in the cloud). The switch between them is always visible.
 
 const MENUS = {
   makers: [
@@ -14,6 +15,12 @@ const MENUS = {
     { href: "/developers#gatekeeper", label: "gatekeeper" },
     { href: "/developers#agentvcs", label: "agentvcs" },
     { href: "/developers#scenarios", label: "All demos" },
+  ],
+  architecture: [
+    { href: "/architecture#diagram", label: "In 3D" },
+    { href: "/architecture#where", label: "What runs where" },
+    { href: "/architecture#files", label: "The files" },
+    { href: "/architecture#phases", label: "Phases" },
   ],
 } as const;
 
@@ -39,6 +46,7 @@ export default function SiteNav({ compact = false, audience = "makers" }: { comp
         <div className="flex items-center rounded-full border border-white/15 p-0.5 text-xs font-medium">
           {tab("makers", "/", "Makers")}
           {tab("developers", "/developers", "Developers")}
+          {tab("architecture", "/architecture", "Architecture")}
         </div>
       </div>
       <div className="hidden items-center gap-5 text-sm text-white/60 lg:flex">

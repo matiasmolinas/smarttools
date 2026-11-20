@@ -173,6 +173,8 @@ export function smartToolsScene(opts: {
   phone?: PhoneProfile | string;
   /** "driver": a hex screwdriver bit in a bit holder instead of the drill bit */
   bit?: "drill" | "driver";
+  /** the holes to drill, on the sheet (m; a plan, lib/plan.ts); defaults to the sheet's targets A1-A3 */
+  targets?: { label: string; x: number; y: number; depthMm?: number; diameterMm?: number }[];
 }): SceneDef {
   const dock = dockRig({ tiltDeg: opts.dockTiltDeg, phone: opts.phone });
   const bodyR = DOCK.drill.bodyDiameter / 2000;
@@ -184,24 +186,24 @@ export function smartToolsScene(opts: {
       visual2d: [{ kind: "markerSheet" }],
       meta: { width: SHEET.w, height: SHEET.h, markers: BOARD_MARKERS.length, markerSize: MARKER_SIZE },
     },
-    ...BOARD_TARGETS.map(
-      (t): NodeDef => ({
+    ...(opts.targets ?? BOARD_TARGETS).map(
+      (t: { label: string; x: number; y: number; depthMm?: number; diameterMm?: number }): NodeDef => ({
         name: t.label,
         parent: "sheet",
         kind: "planned",
         local: { p: [t.x, t.y, 0], q: INTO_SHEET },
         visual3d: [
           // the planned hole: 35 mm along +Z (into the material)
-          { kind: "cylinder", radius: 0.003, length: 0.035, axis: "z", offset: { p: [0, 0, 0.0175] }, material: { color: C.cyan, opacity: 0.35 } },
+          { kind: "cylinder", radius: (t.diameterMm ?? 6) / 2000, length: (t.depthMm ?? 35) / 1000, axis: "z", offset: { p: [0, 0, (t.depthMm ?? 35) / 2000] }, material: { color: C.cyan, opacity: 0.35 } },
           { kind: "line", points: [[-0.006, 0, 0], [0.006, 0, 0]], material: { color: C.white } },
           { kind: "line", points: [[0, -0.006, 0], [0, 0.006, 0]], material: { color: C.white } },
         ],
         visual2d: [{ kind: "crosshair", size: 0.006, label: t.label }],
-        meta: { depthMm: 35, diameterMm: 6 },
+        meta: { depthMm: t.depthMm ?? 35, diameterMm: t.diameterMm ?? 6 },
       }),
     ),
   ];
-  const targets = BOARD_TARGETS.map((t) => t.label);
+  const targets = (opts.targets ?? BOARD_TARGETS).map((t) => t.label);
   if (opts.angledTargetDeg) {
     const q = qmul(qaxis([0, 1, 0], (opts.angledTargetDeg * Math.PI) / 180), INTO_SHEET);
     nodes.push({

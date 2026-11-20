@@ -18,6 +18,9 @@ import type { SimState } from "./sim";
 import { hudView } from "./render/hudview";
 import { DEFAULT_PHONE_ID, PHONES, phoneById, type PhoneProfile } from "./phones";
 import { checkCalibration, dockRig } from "./dockrig";
+import { smartToolsScene } from "./scenedef";
+import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
+import { JobRecorder, defaultContext, type JobRecord } from "./jobrecord";
 
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
 /** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
@@ -51,6 +54,10 @@ export class BrowserNav {
   frames = 0;
   /** the phone in the dock; calibrations are stored per phone */
   phone: PhoneProfile = phoneById(readPhoneId());
+  /** the plan being worked (the sheet's A1-A3 until one is chosen) */
+  plan: Plan = SHEET_PLAN;
+  /** the job in progress: every hole of the plan, as the engine measures it */
+  recorder: JobRecorder | null = null;
 
   private constructor(core: NavCore) {
     this.core = core;
@@ -95,15 +102,19 @@ export class BrowserNav {
     const tool = load<ToolCalib>(key("tool", this.phone.id), w, h, (t) => t);
     this.session?.dispose();
     const camera = cam ?? cameraFromHfov(w, h, DEFAULT_HFOV_DEG);
+    // before calibrating, what the phone profile predicts at mid tilt (the gate stays closed anyway)
+    const toolCal = tool ?? dockRig({ phone: this.phone, tiltDeg: 8 }).tool;
     this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), {
       camera,
       cameraCalibrated: !!cam,
-      // before calibrating, what the phone profile predicts at mid tilt (the gate stays closed anyway)
-      tool: tool ?? dockRig({ phone: this.phone, tiltDeg: 8 }).tool,
+      tool: toolCal,
       toolCalibrated: !!tool,
+      scene: smartToolsScene({ tool: toolCal, targets: planTargets(this.plan) }),
+      targetDepths: planDepths(this.plan),
       t0,
     });
     this.attachWorker(camera, !!cam);
+    this.startJob(t0);
     return this.session;
   }
 
@@ -132,8 +143,46 @@ export class BrowserNav {
     const s = this.session;
     if (!s) return 0;
     const n = s.advance(tWall);
+    if (n > 0 && s.snapshot) this.recorder?.feed(s.snapshot);
     this.stepCalibration(tWall);
     return n;
+  }
+
+  // ---------------- plans and jobs ----------------
+  /** Work a plan (validated by the caller, lib/memory). The session is rebuilt with its holes. */
+  setPlan(plan: Plan) {
+    this.plan = plan;
+    this.forgetCalibrationSilently();
+  }
+  /** Where the tip touches the sheet now, to mark a hole (planning with the tool as a pointer). */
+  markHere(): Mark {
+    const s = this.session;
+    if (!s) return { ok: false, reason: "Point the camera at the sheet" };
+    if (!s.toolCalibrated) return { ok: false, reason: "Calibrate first" };
+    const nav = s.scene.def.navigation;
+    return tipOnSheet(s.snapshot, s.id(nav.tool), s.id(nav.tracked));
+  }
+  private startJob(t0: number) {
+    const s = this.session;
+    if (!s || this.ephemeral) return;
+    const c = this.calibrated;
+    // engine time is performance.now() in seconds; map it to the wall clock when asked
+    const wall = (t: number) => Date.now() - (performance.now() / 1000 - t) * 1000;
+    this.recorder = new JobRecorder(
+      this.plan,
+      defaultContext({ phone: { id: this.phone.id, name: this.phone.name, provisional: this.phone.provisional }, calibration: { lens: c.camera, dock: c.tool }, source: "camera" }),
+      (id) => (this.plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined),
+      { wall, t0 },
+    );
+  }
+  /** End the job: its record (null if no hole was drilled), and a fresh job on the same plan. */
+  finishJob(): JobRecord | null {
+    const r = this.recorder, s = this.session;
+    if (!r || !s) return null;
+    const rec = r.holes.length ? r.finish(performance.now() / 1000) : null;
+    s.engine.resetJob();
+    this.startJob(performance.now() / 1000);
+    return rec;
   }
 
   // ---------------- loop 3: what to draw ----------------
@@ -175,6 +224,7 @@ export class BrowserNav {
   forgetCalibrationSilently() {
     this.session?.dispose();
     this.session = null;
+    this.recorder = null;
     this.client?.terminate();
     this.client = null;
   }
