@@ -9,7 +9,7 @@ import type { Camera, NavCore, RenderOptions, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
 import { applyDir, compose, fromPose, inverse, relative, toPose, type Xf } from "./xform.ts";
 import { toolLocal } from "./scenedef.ts";
-import { dockRig } from "./dockrig.ts";
+import { dockRig, type PhoneProfile } from "./dockrig.ts";
 
 
 export type Phase = "approach" | "align" | "drill" | "hold" | "retract";
@@ -45,9 +45,10 @@ export const IDEAL_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.003, 0.058, 0
 /** Dock v0.2 as designed (camera at the fixed-jaw end, top edge): 78 mm aside and 170 mm above the bit. */
 export const V02_RIG: Rig = { ...DEFAULT_RIG, tool: { tipCam: [0.078, 0.1696, 0.209], axisCam: [0, 0, 1] } };
 
-/** The dock v0.3 at a given hinge tilt (the camera moves with the arm about the pivot). */
-export function dockRigAt(tiltDeg: number, base: Rig = DEFAULT_RIG): Rig {
-  return { ...base, tool: dockRig({ tiltDeg }).tool };
+/** The dock v0.3 at a given hinge tilt (the camera moves with the arm about the pivot), optionally with
+ * a phone profile (lib/phones.ts) instead of the reference phone. */
+export function dockRigAt(tiltDeg: number, base: Rig = DEFAULT_RIG, phone?: PhoneProfile | string): Rig {
+  return { ...base, tool: dockRig({ tiltDeg, phone }).tool };
 }
 
 /** A rig with the camera rotated down by `deg` about its own centre (used with the ideal rig). */
@@ -136,7 +137,7 @@ function holeStyle(i: number) {
 
 /** Ground-truth intention (no tremor) at time t of a full three-hole run. */
 export function truthAt(t: number): TruthStep {
-  const hole = Math.min(BOARD_TARGETS.length - 1, Math.floor(t / HOLE_TIME));
+  const hole = Math.min(BOARD_TARGETS.length - 1, Math.max(0, Math.floor(t / HOLE_TIME)));
   let local = t - hole * HOLE_TIME;
   const tg = BOARD_TARGETS[hole];
   const s = holeStyle(hole);

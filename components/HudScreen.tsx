@@ -6,7 +6,8 @@ import { drawHud, type HudBackground } from "@/lib/hud";
 import { BrowserNav } from "@/lib/tracker";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
-import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, markerCodes, navInTarget, toolWorldFromHold, truthAt } from "@/lib/scene";
+import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerCodes, navInTarget, toolWorldFromHold, truthAt } from "@/lib/scene";
+import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { toXf } from "@/lib/scenedef";
 import type { Xf } from "@/lib/xform";
 
@@ -35,6 +36,8 @@ export default function HudScreen() {
   const streamRef = useRef<MediaStream | null>(null);
   const codesRef = useRef<Uint8Array | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [phoneName, setPhoneName] = useState(phoneById(DEFAULT_PHONE_ID).name);
+  const importRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function say(t: string) {
@@ -79,8 +82,9 @@ export default function HudScreen() {
           }
           c.getContext("2d")!.putImageData(img, 0, 0);
         };
+        if (!sim) setPhoneName(tr.phone.name);
         if (sim) {
-          const rig = DEFAULT_RIG;
+          const rig = dockRigAt(0, DEFAULT_RIG, tr.phone);
           tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
           tr.extraInfo = () => {
             const s = tr.session, snap = s?.snapshot, truth = simTruthRef.current;
@@ -175,7 +179,7 @@ export default function HudScreen() {
       }
       const ts = (now() - simStart) % RUN_TIME;
       const st = truthAt(ts);
-      const rig = DEFAULT_RIG;
+      const rig = dockRigAt(0, DEFAULT_RIG, tr.phone);
       const truth = toolWorldFromHold(tr.core, rig, disturb(st.hold, ts, st.phase, DEFAULT_DISTURBANCE));
       simTruthRef.current = truth;
       const codes = (codesRef.current ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList));
@@ -281,6 +285,19 @@ export default function HudScreen() {
               <CalIcon />
             </RoundButton>
             <RoundButton
+              label={phoneName.replace("Redmi ", "")}
+              caption="Phone"
+              onClick={() => {
+                const tr = trackerRef.current;
+                if (!tr) return say("ENGINE LOADING");
+                const p = tr.nextPhone();
+                setPhoneName(p.name);
+                say(`${p.name.toUpperCase()}${p.provisional ? " · PROVISIONAL PROFILE" : ""}`);
+              }}
+            >
+              <PhoneIcon />
+            </RoundButton>
+            <RoundButton
               label=""
               caption="Lens"
               onClick={() => {
@@ -308,6 +325,47 @@ export default function HudScreen() {
         <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
         </RoundButton>
+        {bg === "camera" && (
+          <div className="flex flex-col items-center gap-1 font-mono text-[10px] text-white/60">
+            <button
+              onClick={() => {
+                const tr = trackerRef.current;
+                if (!tr) return;
+                const url = URL.createObjectURL(new Blob([tr.exportProfile()], { type: "application/json" }));
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `smarttools-${tr.phone.id}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="hover:text-white"
+            >
+              Export
+            </button>
+            <button onClick={() => importRef.current?.click()} className="hover:text-white">
+              Import
+            </button>
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                const tr = trackerRef.current;
+                if (!f || !tr) return;
+                try {
+                  const name = tr.importProfile(await f.text());
+                  setPhoneName(name);
+                  say(`IMPORTED · ${name.toUpperCase()}`);
+                } catch {
+                  say("NOT A SMARTTOOLS PHONE FILE");
+                }
+                e.target.value = "";
+              }}
+            />
+          </div>
+        )}
         <a href="/markers" className="mt-1 font-mono text-[10px] text-white/60 hover:text-white">
           Markers
         </a>
@@ -371,6 +429,14 @@ function CalIcon() {
     <svg {...ico}>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
+    </svg>
+  );
+}
+function PhoneIcon() {
+  return (
+    <svg {...ico}>
+      <rect x="3" y="7" width="18" height="10" rx="2" />
+      <circle cx="6.5" cy="13.5" r="1.2" />
     </svg>
   );
 }

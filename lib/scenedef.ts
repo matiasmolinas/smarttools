@@ -11,7 +11,7 @@ import { BOARD_MARKERS, BOARD_TARGETS, MARKER_SIZE, SHEET } from "./board.ts";
 import type { NavEngine, NodeKindName, ToolCalib } from "./engine.ts";
 import { NODE_KINDS } from "./engine.ts";
 import { QI, qaxis, qfromTo, qmul, type Q, type Xf } from "./xform.ts";
-import { DOCK, dockRig } from "./dockrig.ts";
+import { DOCK, dockRig, type PhoneProfile } from "./dockrig.ts";
 
 /** A transform in mm as a display node local transform in metres with scale 0.001 (for mm meshes). */
 const mmToM = (t: Xf): XfDef => ({ p: [t.p[0] / 1000, t.p[1] / 1000, t.p[2] / 1000], q: t.q, s: [0.001, 0.001, 0.001] });
@@ -146,8 +146,8 @@ const C = { tool: "#ffb547", cyan: "#5ad8ff", green: "#3dffa8", white: "#e8eef5"
  * drill on the dock (calibrated). `tool` is the dock calibration; `angledTargetDeg` optionally adds
  * a fourth target "B1" tilted about the sheet's Y axis (an angled hole) for tests and demos.
  */
-export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: number; dockTiltDeg?: number }): SceneDef {
-  const dock = dockRig({ tiltDeg: opts.dockTiltDeg ?? 0 });
+export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: number; dockTiltDeg?: number; phone?: PhoneProfile | string }): SceneDef {
+  const dock = dockRig({ tiltDeg: opts.dockTiltDeg ?? 0, phone: opts.phone });
   const bodyR = DOCK.drill.bodyDiameter / 2000;
   const nodes: NodeDef[] = [
     {
@@ -221,8 +221,8 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
         { kind: "mesh", url: "/models/dock-arm.stl", format: "stl", material: { color: C.tool, roughness: 0.7 } },
         {
           kind: "box",
-          size: [DOCK.phone.thickness, DOCK.phone.length, DOCK.phone.height],
-          offset: { p: [...DOCK.phoneCentreInArm] as V3 },
+          size: dock.phoneSize,
+          offset: { p: dock.phoneCentreInArm },
           material: { color: "#0b0f14", roughness: 0.3, edges: true },
         },
       ],
@@ -231,7 +231,7 @@ export function smartToolsScene(opts: { tool: ToolCalib; angledTargetDeg?: numbe
       name: "dock-jaw",
       parent: "dock-arm",
       kind: "display",
-      local: { p: [...DOCK.slidingJawInArm] as V3 },
+      local: { p: dock.slidingJawInArm },
       visual3d: [{ kind: "mesh", url: "/models/dock-jaw.stl", format: "stl", material: { color: C.green, roughness: 0.7 } }],
     },
     {
