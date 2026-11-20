@@ -67,6 +67,7 @@ export class NavPipeline {
   private lastPose: Pose | null = null;
   private lastSeen = -1;
   private lastRms = 0;
+  private lastUsed = 0;
   private fSamples: number[] = [];
   private fAuto: number | null = null;
   private targetIndex = 0;
@@ -79,7 +80,8 @@ export class NavPipeline {
     this.det = detector;
     this.opts = { limits: PIPELINE_LIMITS, filter: true, ...opts };
     this.filter = core.createFilter();
-    this.steady = core.createSteadiness(0.3);
+    // 0.5 s: long enough that a ~10 Hz hand tremor sampled at 8-30 fps cannot alias to "still"
+    this.steady = core.createSteadiness(0.5);
   }
 
   dispose() {
@@ -163,18 +165,25 @@ export class NavPipeline {
 
     let cam = this.camera;
     let pose: Pose | null = null;
+    let used = 0;
+    let keep: boolean[] = [];
     if (world.length >= 4) {
       const und = this.core.undistortPoints(cam, raw);
       const K = { f: cam.f, cx: cam.cx, cy: cam.cy };
       if (!this.opts.cameraCalibrated && this.fAuto == null) this.sampleFocal(world, und, K);
       cam = this.camera;
-      pose = this.core.solvePose(world, und, { f: cam.f, cx: cam.cx, cy: cam.cy });
+      const sol = this.core.solvePoseRobust(world, und, { f: cam.f, cx: cam.cx, cy: cam.cy });
+      pose = sol?.pose ?? null;
+      used = sol?.kept ?? 0;
+      keep = sol?.keep ?? [];
     }
     if (pose && pose.rms < 4) {
       this.lastPose = pose;
       this.lastSeen = t;
       this.lastRms = pose.rms;
-      if (this.cap) this.capture(world, raw, pose);
+      this.lastUsed = used;
+      // calibration samples: only the markers the robust solve accepted
+      if (this.cap) this.capture(world.filter((_, i) => keep[i >> 2]), raw.filter((_, i) => keep[i >> 2]), pose);
     }
     const fresh = !!this.lastPose && t - this.lastSeen < HOLD_S;
     const P = fresh ? this.lastPose : null;
@@ -202,8 +211,7 @@ export class NavPipeline {
       rawNav = this.core.navEvaluate(P, this.opts.tool, target);
       if (this.lastSeen === t) this.steady.push(t, rawNav.tip, rawNav.axis);
       const j = this.steady.jitter();
-      jitter = { mm: j.mm, deg: j.span > 0.15 ? j.deg : Infinity };
-      if (j.span <= 0.15) jitter.mm = Infinity;
+      jitter = j.span > 0.3 ? { mm: j.mm, deg: j.deg } : { mm: Infinity, deg: Infinity };
       if (this.opts.filter) {
         const f = this.filter.step(t, rawNav.tip, rawNav.axis);
         nav = this.core.navEvaluateWorld(f.tip, f.axis, target);
@@ -228,7 +236,7 @@ export class NavPipeline {
         calibrated: this.opts.toolCalibrated,
         poseAgeS: P ? t - this.lastSeen : Infinity,
         rmsPx: P ? this.lastRms : Infinity,
-        markers: P ? known.length : 0,
+        markers: P ? this.lastUsed : 0,
         angleErrDeg: nav?.angleErrDeg ?? Infinity,
         offsetMm: nav?.offsetMm ?? Infinity,
         jitterMm: jitter.mm,

@@ -32,6 +32,16 @@ export const DEFAULT_RIG: Rig = {
   bitRadius: 0.003,
 };
 
+/** The same rig with the camera tilted down on the dock hinge (degrees), so the bit tip moves from the
+ * bottom edge of the image toward its centre. The bit is no longer parallel to the optical axis; the
+ * twist calibration measures the new axis. */
+export function tiltedRig(deg: number, base: Rig = DEFAULT_RIG): Rig {
+  const a = (deg * Math.PI) / 180;
+  // camera pitched down by a = points in the camera frame rotate up by a about the camera x axis
+  const rot = (v: V3): V3 => [v[0], v[1] * Math.cos(a) - v[2] * Math.sin(a), v[1] * Math.sin(a) + v[2] * Math.cos(a)];
+  return { ...base, tool: { tipCam: rot(base.tool.tipCam), axisCam: norm(rot(base.tool.axisCam)) } };
+}
+
 export interface Disturbance {
   /** hand tremor amplitude: tip mm / axis deg (8-12 Hz physiological tremor) */
   tremorMm: number;

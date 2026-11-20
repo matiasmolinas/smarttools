@@ -4,20 +4,30 @@ import { useEffect, useRef, useState } from "react";
 import { simulate } from "@/lib/sim";
 import { drawHud, type HudBackground } from "@/lib/hud";
 import { OpticalTracker } from "@/lib/tracker";
+import { AR } from "@/lib/aruco";
+import { DICTIONARY } from "@/lib/board";
+import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, markerCodes, renderHold, truthAt, truthNav } from "@/lib/scene";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 
-const SURFACES: HudBackground[] = ["wall", "wood", "camera", "grid"];
-const SURF_LABEL: Record<HudBackground, string> = { wall: "Wall", wood: "Wood", camera: "Cam", grid: "Grid" };
+// "simcam": the scene simulator renders what the docked camera would see, and the real pipeline tracks it
+type View = HudBackground | "simcam";
+const SURFACES: View[] = ["wall", "wood", "camera", "simcam", "grid"];
+const SURF_LABEL: Record<View, string> = { wall: "Wall", wood: "Wood", camera: "Cam", simcam: "Sim cam", grid: "Grid" };
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const restartRef = useRef(false);
   const trackerRef = useRef<OpticalTracker | null>(null);
-  const [bg, setBg] = useState<HudBackground>("wall");
-  const bgRef = useRef<HudBackground>("wall");
+  const simTrackerRef = useRef<OpticalTracker | null>(null);
+  const loadingRef = useRef(false);
+  const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tNowRef = useRef(0);
+  const [bg, setBg] = useState<View>("wall");
+  const bgRef = useRef<View>("wall");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const codesRef = useRef<Uint8Array | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -35,7 +45,7 @@ export default function HudScreen() {
         initial = localStorage.getItem("hud-bg");
       } catch {}
     }
-    if (initial === "wall" || initial === "wood" || initial === "grid") {
+    if (initial === "wall" || initial === "wood" || initial === "grid" || initial === "simcam") {
       bgRef.current = initial;
       setBg(initial);
     }
@@ -47,7 +57,30 @@ export default function HudScreen() {
   }
   useEffect(() => stopCamera, []);
 
-  async function choose(next: HudBackground) {
+  // the engine (WASM) loads on first use of a tracked view
+  function ensureTracker(sim: boolean) {
+    const ref = sim ? simTrackerRef : trackerRef;
+    if (ref.current || loadingRef.current) return;
+    loadingRef.current = true;
+    OpticalTracker.create()
+      .then((tr) => {
+        tr.onMessage = say;
+        if (sim) {
+          const rig = DEFAULT_RIG;
+          tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height);
+          tr.extraInfo = (r) => {
+            const st = truthAt(tNowRef.current % RUN_TIME);
+            const tn = truthNav(tr.engine, rig, disturb(st.hold, tNowRef.current % RUN_TIME, st.phase, DEFAULT_DISTURBANCE), st.targetIndex).nav;
+            return r.nav ? ` · true ${tn.angleErrDeg.toFixed(2)}° est ${r.nav.angleErrDeg.toFixed(2)}°` : "";
+          };
+        }
+        ref.current = tr;
+      })
+      .catch(() => say("ENGINE FAILED TO LOAD"))
+      .finally(() => (loadingRef.current = false));
+  }
+
+  async function choose(next: View) {
     if (next === "camera") {
       if (!navigator.mediaDevices?.getUserMedia) {
         say("NO CAMERA");
@@ -74,6 +107,10 @@ export default function HudScreen() {
         localStorage.setItem("hud-bg", next);
       } catch {}
       say(SURF_LABEL[next].toUpperCase());
+      if (next === "simcam") {
+        ensureTracker(true);
+        restartRef.current = true;
+      }
     }
     bgRef.current = next;
     setBg(next);
@@ -103,21 +140,45 @@ export default function HudScreen() {
       if (restartRef.current) {
         restartRef.current = false;
         t = 0;
+        simTrackerRef.current?.cancelCalibration();
       }
+      tNowRef.current = t;
       const w = canvas.width;
       const h = canvas.height;
       if (w <= 0 || h <= 0) return;
       const v = videoRef.current;
       if (bgRef.current === "camera" && v && v.readyState >= 2) {
         // 100% optical: markers -> pose -> drill state
-        trackerRef.current ??= new OpticalTracker();
-        const r = trackerRef.current.update(v, t);
+        ensureTracker(false);
+        const r = trackerRef.current?.update(v, t);
         if (r) {
           drawHud(ctx, r.state, w, h, false, { background: "camera", video: v, overlay: r.overlay });
           return;
         }
       }
-      drawHud(ctx, simulate(t), w, h, false, { background: bgRef.current, video: v });
+      if (bgRef.current === "simcam") {
+        ensureTracker(true);
+        const tr = simTrackerRef.current;
+        if (tr) {
+          const rig = DEFAULT_RIG;
+          const ts = t % RUN_TIME;
+          const st = truthAt(ts);
+          const codes = (codesRef.current ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList));
+          // lighter than the test bench (no blur, 1 sample per pixel) to keep the phone responsive
+          const img = renderHold(tr.engine, rig, codes, ts, st.phase, st.hold, { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, 1 + Math.round(ts * 1000), { ss: 1 });
+          const c = (simCanvasRef.current ??= document.createElement("canvas"));
+          if (c.width !== img.width || c.height !== img.height) {
+            c.width = img.width;
+            c.height = img.height;
+          }
+          c.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0);
+          const r = tr.process(img, t);
+          drawHud(ctx, r.state, w, h, false, { background: "camera", video: c, overlay: r.overlay });
+          return;
+        }
+      }
+      const bgNow = bgRef.current === "simcam" ? "grid" : bgRef.current;
+      drawHud(ctx, simulate(t), w, h, false, { background: bgNow, video: v });
     };
     raf = requestAnimationFrame(tick);
     return () => {
@@ -165,16 +226,32 @@ export default function HudScreen() {
           <SurfIcon />
         </RoundButton>
         {bg === "camera" ? (
-          <RoundButton
-            label="A2"
-            caption="Calibrate"
-            onClick={() => {
-              const ok = trackerRef.current?.calibrateTipOn("A2");
-              say(ok ? "TIP CALIBRATED ON A2" : "POINT AT THE MARKERS");
-            }}
-          >
-            <CalIcon />
-          </RoundButton>
+          <>
+            <RoundButton
+              label="A2"
+              caption="Calibrate"
+              onClick={() => {
+                const tr = trackerRef.current;
+                if (!tr) return say("ENGINE LOADING");
+                tr.startToolCalibration(tNowRef.current);
+                say("TIP ON A2 · CIRCLE, THEN TWIST");
+              }}
+            >
+              <CalIcon />
+            </RoundButton>
+            <RoundButton
+              label=""
+              caption="Lens"
+              onClick={() => {
+                const tr = trackerRef.current;
+                if (!tr) return say("ENGINE LOADING");
+                tr.startCameraCalibration(tNowRef.current);
+                say("MOVE OVER THE SHEET · 20 S");
+              }}
+            >
+              <LensIcon />
+            </RoundButton>
+          </>
         ) : (
           <RoundButton
             label=""
@@ -253,6 +330,14 @@ function CalIcon() {
     <svg {...ico}>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
+    </svg>
+  );
+}
+function LensIcon() {
+  return (
+    <svg {...ico}>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3.5" />
     </svg>
   );
 }

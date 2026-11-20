@@ -491,13 +491,13 @@ pub unsafe extern "C" fn st_rig_pose(yaw: f64, pitch: f64, twist: f64, tip_world
     1
 }
 
-/// Render a simulated camera frame. `cfg` (32 `f64`):
+/// Render a simulated camera frame. `cfg` (64 `f64`):
 /// 0 wall, 1 paper, 2 ink, 3 crosses (0/1), 4 gain, 5 vignette, 6 gradient, 7 noise, 8 seed,
 /// 9 bit on (0/1), 10-12 bit tip_cam, 13-15 bit axis_cam, 16 bit length, 17 bit radius,
-/// 18 occluder count (<= 4), 19-30 occluders (cx, cy, r) in pixels.
+/// 18 occluder count (<= 14), 19-60 occluders (cx, cy, r) in pixels.
 ///
 /// # Safety
-/// `cam`: 7, `poses`: `13n`, `codes`: `36 * board::MARKER_COUNT` bytes (36 bits per id), `cfg`: 32,
+/// `cam`: 7, `poses`: `13n`, `codes`: `36 * board::MARKER_COUNT` bytes (36 bits per id), `cfg`: 64,
 /// `out`: `width * height * 4` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn st_render(
@@ -514,8 +514,8 @@ pub unsafe extern "C" fn st_render(
     if cam.is_null() || poses.is_null() || codes.is_null() || cfg.is_null() || out.is_null() || n == 0 || width == 0 || height == 0 {
         return -1;
     }
-    let c = slice::from_raw_parts(cfg, 32);
-    let occ: Vec<Occluder> = (0..(c[18] as usize).min(4)).map(|k| Occluder { cx: c[19 + k * 3], cy: c[20 + k * 3], r: c[21 + k * 3] }).collect();
+    let c = slice::from_raw_parts(cfg, 64);
+    let occ: Vec<Occluder> = (0..(c[18] as usize).min(14)).map(|k| Occluder { cx: c[19 + k * 3], cy: c[20 + k * 3], r: c[21 + k * 3] }).collect();
     let ps = read_poses(poses, n);
     let spec = RenderSpec {
         camera: read_cam(cam),
@@ -558,4 +558,31 @@ pub unsafe extern "C" fn st_board_info(out: *mut f64, cap: usize) -> i32 {
         o[3 + MARKER_COUNT * 2 + k * 2] = t.y;
     }
     need as i32
+}
+
+/// Robust per-frame solve: drops markers (4 points each) whose corners disagree with the rest.
+/// Writes the pose (13), 1/0 per marker in `keep_out` (may be null) and returns the number of
+/// markers kept (0 = no solution).
+///
+/// # Safety
+/// `world`, `img`: `n` points each (`n` a multiple of 4). `out`: 13 `f64`. `keep_out`: `n / 4` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn st_solve_pose_robust(world: *const f64, img: *const f64, n: usize, f: f64, cx: f64, cy: f64, min_px: f64, out: *mut f64, keep_out: *mut u8) -> i32 {
+    let (Some(w), Some(i)) = (points(world, n), points(img, n)) else { return -1 };
+    if out.is_null() || !n.is_multiple_of(4) {
+        return -1;
+    }
+    match pose::solve_pose_robust(&w, &i, &Intrinsics { f, cx, cy }, 4, min_px) {
+        Some((p, keep)) => {
+            write_pose(out, &p);
+            if !keep_out.is_null() {
+                let k = slice::from_raw_parts_mut(keep_out, keep.len());
+                for (d, s) in k.iter_mut().zip(&keep) {
+                    *d = *s as u8;
+                }
+            }
+            keep.iter().filter(|&&k| k).count() as i32
+        }
+        None => 0,
+    }
 }

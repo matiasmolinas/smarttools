@@ -7,10 +7,14 @@ later, on our own camera module.
 | Module | Contents |
 |---|---|
 | `geom` | Fixed-size vectors and 3×3 matrices, Rodrigues, Gauss-Jordan solve |
-| `pose` | Normalised DLT homography, pose from homography, Gauss-Newton refinement, focal self-calibration |
+| `pose` | Normalised DLT homography, pose from homography, Gauss-Newton, focal from a homography, robust solve (drops inconsistent markers) |
 | `subpix` | Sub-pixel marker corners (edge line fit at the 50 % crossing, side intersection) |
-| `board` | Geometry of the printable A4 marker sheet (`/markers`) |
-| `ffi` | C ABI for WebAssembly: `st_solve_pose`, `st_refine_corners`, … (wrapped by `lib/engine.ts`) |
+| `camera` | Pinhole + Brown-Conrady distortion (k1, k2, p1, p2), undistortion, projection |
+| `calib` | Camera calibration (Levenberg-Marquardt over intrinsics and all views, drops bad views), pivot (tip), twist (axis) |
+| `nav` | Navigation state, One Euro filter, steadiness, the go / no-go gate |
+| `sim` | Scene simulator: renders the sheet through the lens with the bit, blur, light, noise and occluders |
+| `board` | Geometry of the printable A4 marker sheet v2 (`/markers`) |
+| `ffi` | C ABI for WebAssembly (`st_*`), wrapped by `lib/engine.ts` |
 
 Frames: world = the marker sheet (origin at its centre, X right, Y up, Z out of the surface, metres);
 camera = OpenCV (x right, y down, z forward), `x_cam = R · X_world + t`.
@@ -19,8 +23,9 @@ camera = OpenCV (x right, y down, z forward), `x_cam = R · X_world + t`.
 
 ```bash
 rustup target add wasm32-unknown-unknown
-npm run engine:build   # cargo build → public/engine/nav_core.wasm (~50 KB)
-npm run engine:test    # cargo test + parity against the TypeScript prototype
+npm run engine:build   # cargo build → public/engine/nav_core.wasm (~100 KB)
+npm run engine:test    # cargo test (24 tests) + parity against the TypeScript prototype
+npm run scene:test     # the whole pipeline on simulated camera frames, against ground truth
 ```
 
 `scripts/engine-parity.mts` runs 300 random camera views (24 noisy corners each) and 60 anti-aliased

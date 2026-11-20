@@ -1,234 +1,229 @@
-// Optical tracker: printed ArUco markers -> 6-DoF camera pose -> drill state for the HUD.
-// 100% optical: no IMU. The phone camera is rigid with the drill (dock), so the bit tip and axis
-// are fixed in the camera frame (calibrated once on a known mark).
+// Browser side of the navigation: camera (or simulated) frames -> NavPipeline (js-aruco2 + Rust core)
+// -> HUD state. Keeps the calibrations (lens, dock) in localStorage and runs the calibration flows.
+// 100% optical: no IMU.
 
 import { AR } from "./aruco";
-import { BIT_LEN, ANGLE_TOL_DEG, DEPTH_TARGET_MM, OFFSET_TOL_MM, type SimState } from "./sim";
-import { BOARD_TARGETS, DICTIONARY, markerCorners } from "./board";
-import { refineCorners } from "./subpix";
-import {
-  dirToWorld,
-  focalFromHomography,
-  homography,
-  poseFromHomography,
-  project,
-  refinePose,
-  toWorld,
-  type Intrinsics,
-  type Pose,
-  type V3,
-} from "./pose";
+import { BIT_LEN, type SimState } from "./sim";
+import { BOARD_TARGETS, DICTIONARY } from "./board";
+import { NavCore, cameraFromHfov, type Camera, type ToolCalib } from "./engine";
+import { NavPipeline, PIPELINE_LIMITS, gateMessage, type PipelineResult, type Rgba } from "./navpipeline";
 import type { Overlay } from "./hud";
 
-const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
-const DEFAULT_TIP_CAM: V3 = [0, 0.055, 0.17]; // tip below (y+) and ahead (z+) of the lens, metres
-const AXIS_CAM: V3 = [0, 0, 1]; // dock keeps the bit parallel to the optical axis
+export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
+export const DEFAULT_TOOL: ToolCalib = { tipCam: [0, 0.055, 0.17], axisCam: [0, 0, 1] };
+const MAX_SIDE = 960; // detection resolution
+
+export type CalStep = "pivot" | "roll" | "camera";
+const CAL_SECONDS: Record<CalStep, number> = { pivot: 5, roll: 5, camera: 20 };
+const CAL_TEXT: Record<CalStep, string> = {
+  pivot: "Tip on A2 · circle the drill",
+  roll: "Tip on A2 · twist the drill",
+  camera: "Move the phone over the sheet",
+};
 
 export interface TrackResult {
   state: SimState;
   overlay: Overlay;
-  ok: boolean;
-  focalPx: number;
-  rmsPx: number;
+  result: PipelineResult;
 }
 
-export class OpticalTracker {
-  private det = new AR.Detector({ dictionaryName: DICTIONARY });
-  private work = typeof document !== "undefined" ? document.createElement("canvas") : null;
-  private wctx = this.work?.getContext("2d", { willReadFrequently: true }) ?? null;
-  private fSamples: number[] = [];
-  private fAuto: number | null = null;
-  private fLocked = false;
-  tipCam: V3 = load("st-tipcam") ?? DEFAULT_TIP_CAM;
-  private smooth: { tip: V3; axis: V3 } | null = null;
-  private lastPose: Pose | null = null;
-  private lastSeen = -1;
-  private targetIndex = 0;
-  private drilled = BOARD_TARGETS.map(() => false);
-  private doneAt: number | null = null;
-  private lastK: Intrinsics | null = null;
+type Stored<T> = { v: 1; width: number; height: number; value: T };
 
-  /** process one video frame; t in seconds */
-  update(video: HTMLVideoElement, t: number): TrackResult | null {
-    if (!this.wctx || !this.work || video.readyState < 2 || !video.videoWidth) return null;
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-    // detect on a downscaled frame for speed, keep corners in video px
-    const ds = Math.min(1, 960 / Math.max(vw, vh));
-    const w = Math.round(vw * ds);
-    const h = Math.round(vh * ds);
+export class OpticalTracker {
+  private core: NavCore;
+  private pipe: NavPipeline | null = null;
+  private work: HTMLCanvasElement = document.createElement("canvas");
+  private wctx = this.work.getContext("2d", { willReadFrequently: true })!;
+  private size = { w: 0, h: 0 };
+  private cal: { step: CalStep; until: number; then: CalStep | null; t0: number } | null = null;
+  /** messages for the UI (toasts) */
+  onMessage: (m: string) => void = () => {};
+  /** set by the caller for simulated runs: the calibration is known, nothing is stored */
+  ephemeral = false;
+  extraInfo: (r: PipelineResult) => string = () => "";
+
+  private constructor(core: NavCore) {
+    this.core = core;
+  }
+
+  static async create(): Promise<OpticalTracker> {
+    return new OpticalTracker(await NavCore.load());
+  }
+
+  get engine() {
+    return this.core;
+  }
+
+  /** Use a known calibration (simulation) instead of the stored one. */
+  useCalibration(camera: Camera, tool: ToolCalib, width: number, height: number) {
+    this.ephemeral = true;
+    this.size = { w: width, h: height };
+    this.pipe?.dispose();
+    this.pipe = new NavPipeline(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), {
+      camera,
+      cameraCalibrated: true,
+      tool,
+      toolCalibrated: true,
+      limits: PIPELINE_LIMITS,
+    });
+  }
+
+  private ensurePipeline(w: number, h: number) {
+    if (this.pipe && this.size.w === w && this.size.h === h) return this.pipe;
+    this.size = { w, h };
+    const cam = load<Camera>("st-camera", w, h, scaleCamera);
+    const tool = load<ToolCalib>("st-tool", w, h, (t) => t);
+    this.pipe?.dispose();
+    this.pipe = new NavPipeline(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), {
+      camera: cam ?? cameraFromHfov(w, h, DEFAULT_HFOV_DEG),
+      cameraCalibrated: !!cam,
+      tool: tool ?? DEFAULT_TOOL,
+      toolCalibrated: !!tool,
+      limits: PIPELINE_LIMITS,
+    });
+    return this.pipe;
+  }
+
+  get calibrated() {
+    return { camera: !!this.pipe?.opts.cameraCalibrated, tool: !!this.pipe?.opts.toolCalibrated };
+  }
+
+  /** Dock calibration: wobble around the tip on A2 (tip), then twist around the bit (axis). */
+  startToolCalibration(t: number) {
+    if (!this.pipe) return;
+    this.pipe.beginCapture("pivot");
+    this.cal = { step: "pivot", until: t + CAL_SECONDS.pivot, then: "roll", t0: t };
+  }
+  /** Lens calibration: 20 s of varied views of the sheet. */
+  startCameraCalibration(t: number) {
+    if (!this.pipe) return;
+    this.pipe.beginCapture("camera");
+    this.cal = { step: "camera", until: t + CAL_SECONDS.camera, then: null, t0: t };
+  }
+  cancelCalibration() {
+    this.pipe?.cancelCapture();
+    this.cal = null;
+  }
+  forgetCalibration() {
+    try {
+      localStorage.removeItem("st-camera");
+      localStorage.removeItem("st-tool");
+    } catch {}
+    this.pipe = null;
+  }
+
+  private stepCalibration(t: number) {
+    const c = this.cal;
+    if (!c || !this.pipe || t < c.until) return;
+    const r = this.pipe.endCapture();
+    if ("error" in r) {
+      this.onMessage(r.error.toUpperCase());
+      this.cal = null;
+      return;
+    }
+    if (r.kind === "camera" && "camera" in r) {
+      if (!this.ephemeral) save("st-camera", this.size, r.camera);
+      this.onMessage(`LENS OK · ${r.views} VIEWS · ${r.rms.toFixed(2)} PX`);
+    }
+    if (r.kind === "pivot" && "tipCam" in r) this.onMessage(`TIP OK · ${r.rmsMm.toFixed(2)} MM`);
+    if (r.kind === "roll" && "axisCam" in r) {
+      if (!this.ephemeral) save("st-tool", this.size, this.pipe.opts.tool);
+      this.onMessage("DOCK CALIBRATED");
+    }
+    if (c.then) {
+      this.pipe.beginCapture(c.then);
+      this.cal = { step: c.then, until: t + CAL_SECONDS[c.then], then: null, t0: t };
+    } else this.cal = null;
+  }
+
+  /** Process one frame from a <video> or <canvas>; t in seconds. */
+  update(source: HTMLVideoElement | HTMLCanvasElement, t: number): TrackResult | null {
+    const sw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const sh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+    if (!sw || !sh || (source instanceof HTMLVideoElement && source.readyState < 2)) return null;
+    const ds = Math.min(1, MAX_SIDE / Math.max(sw, sh));
+    const w = Math.round(sw * ds);
+    const h = Math.round(sh * ds);
     if (this.work.width !== w || this.work.height !== h) {
       this.work.width = w;
       this.work.height = h;
     }
-    this.wctx.drawImage(video, 0, 0, w, h);
-    const img = this.wctx.getImageData(0, 0, w, h);
-    const markers = this.det.detect(img);
-
-    const world: { x: number; y: number }[] = [];
-    const pix: { x: number; y: number }[] = [];
-    const quads: { x: number; y: number }[][] = [];
-    for (const m of markers) {
-      const wc = markerCorners(m.id);
-      if (!wc) continue;
-      const rc = refineCorners(img, m.corners).map((p) => ({ x: p.x / ds, y: p.y / ds }));
-      quads.push(rc);
-      for (let i = 0; i < 4; i++) {
-        world.push(wc[i]);
-        pix.push(rc[i]);
-      }
-    }
-
-    const fDefault = vw / 2 / Math.tan(((DEFAULT_HFOV_DEG / 2) * Math.PI) / 180);
-    const K: Intrinsics = { f: this.fAuto ?? fDefault, cx: vw / 2, cy: vh / 2 };
-    this.lastK = K;
-
-    let pose: Pose | null = null;
-    if (world.length >= 4) {
-      const H = homography(world, pix);
-      if (H) {
-        const p0 = poseFromHomography(H, K);
-        // self-calibrate focal length, only from clearly tilted views (frontal views are ill-conditioned),
-        // median of 30 samples, then frozen
-        if (p0 && !this.fLocked) {
-          const tilt = (Math.acos(Math.min(1, Math.abs(dirToWorld(p0, AXIS_CAM)[2]))) * 180) / Math.PI;
-          const fe = tilt > 20 ? focalFromHomography(H, K.cx, K.cy) : null;
-          if (fe && fe > fDefault * 0.6 && fe < fDefault * 1.6) {
-            this.fSamples.push(fe);
-            if (this.fSamples.length >= 30) {
-              const sorted = [...this.fSamples].sort((a, b) => a - b);
-              this.fAuto = sorted[Math.floor(sorted.length / 2)];
-              this.fLocked = true;
-            }
-          }
-        }
-        if (p0) pose = refinePose(p0, world, pix, K);
-      }
-    }
-    if (pose && pose.rms < 4) {
-      this.lastPose = pose;
-      this.lastSeen = t;
-    }
-    const fresh = this.lastPose && t - this.lastSeen < 0.35;
-    const P = fresh ? this.lastPose! : null;
-
-    // tool state in world (sheet) frame
-    let tip: V3 = [0, 0, 0.2];
-    let axis: V3 = [0, 0, -1];
-    if (P) {
-      const tipW = toWorld(P, this.tipCam);
-      const axW = dirToWorld(P, AXIS_CAM);
-      if (this.smooth) {
-        const a = 0.45;
-        this.smooth.tip = lerp3(this.smooth.tip, tipW, a);
-        this.smooth.axis = norm3(lerp3(this.smooth.axis, axW, a));
-      } else this.smooth = { tip: tipW, axis: axW };
-      tip = this.smooth.tip;
-      axis = this.smooth.axis;
-    }
-
-    // where the axis meets the surface (z = 0)
-    const k = axis[2] < -1e-6 ? -tip[2] / axis[2] : 0;
-    const aim: V3 = [tip[0] + axis[0] * k, tip[1] + axis[1] * k, 0];
-
-    // current target: keep until drilled, then the nearest remaining one
-    if (this.drilled[this.targetIndex]) {
-      const left = BOARD_TARGETS.map((b, i) => ({ i, d: Math.hypot(b.x - aim[0], b.y - aim[1]) })).filter((o) => !this.drilled[o.i]);
-      if (left.length) this.targetIndex = left.sort((a, b) => a.d - b.d)[0].i;
-      else this.drilled = BOARD_TARGETS.map(() => false);
-    }
-    const target = BOARD_TARGETS[this.targetIndex];
-
-    const yawDeg = (Math.atan2(axis[0], -axis[2]) * 180) / Math.PI;
-    const pitchDeg = (Math.atan2(axis[1], -axis[2]) * 180) / Math.PI;
-    const angleErrDeg = (Math.acos(Math.min(1, Math.max(-1, -axis[2]))) * 180) / Math.PI;
-    const offsetMm = Math.hypot(aim[0] - target.x, aim[1] - target.y) * 1000;
-    const gapMm = Math.max(0, tip[2] * 1000);
-    const depthMm = Math.max(0, -tip[2] * 1000);
-
-    let phase: SimState["phase"];
-    if (depthMm >= DEPTH_TARGET_MM - 0.2) {
-      phase = "hold";
-      this.drilled[this.targetIndex] = true;
-      this.doneAt = t;
-    } else if (depthMm > 0.3) phase = "drill";
-    else if (this.doneAt != null && t - this.doneAt < 1.5) phase = "retract";
-    else if (gapMm > 0.8 || offsetMm > OFFSET_TOL_MM) phase = "approach";
-    else phase = "align";
-
-    const state: SimState = {
-      t,
-      phase,
-      targetIndex: this.targetIndex,
-      target: { x: target.x, y: target.y },
-      tip: { x: tip[0], y: tip[1], z: tip[2] },
-      chuck: { x: tip[0] - axis[0] * BIT_LEN, y: tip[1] - axis[1] * BIT_LEN, z: tip[2] - axis[2] * BIT_LEN },
-      axis: { x: axis[0], y: axis[1], z: axis[2] },
-      yawDeg,
-      pitchDeg,
-      angleErrDeg,
-      offsetMm,
-      gapMm,
-      depthMm,
-      aligned: angleErrDeg < ANGLE_TOL_DEG,
-      onTarget: offsetMm < OFFSET_TOL_MM,
-      drilled: [...this.drilled],
-      bitSpin: 0,
-      label: target.label,
-    };
-
-    const aimPx = P ? project(aim, P, K) : null;
-    const markPx = P ? project([target.x, target.y, 0], P, K) : null;
-    const overlay: Overlay = {
-      lost: !P,
-      aim: aimPx,
-      mark: markPx,
-      quads,
-      info: P ? `${quads.length} tag${quads.length === 1 ? "" : "s"} · f ${Math.round(K.f)}${this.fLocked ? "" : "?"}` : "searching",
-    };
-    return { state, overlay, ok: !!P, focalPx: K.f, rmsPx: P?.rms ?? 0 };
+    this.wctx.drawImage(source, 0, 0, w, h);
+    return this.process(this.wctx.getImageData(0, 0, w, h), t, 1 / ds);
   }
 
-  /** Dock calibration: the tip is resting on mark A2 (sheet centre). Stores the tip in the camera frame. */
-  calibrateTipOn(label = "A2"): boolean {
-    const P = this.lastPose;
-    const tg = BOARD_TARGETS.find((b) => b.label === label);
-    if (!P || !tg || !this.lastK) return false;
-    const R = P.R;
-    const w: V3 = [tg.x, tg.y, 0];
-    this.tipCam = [
-      R[0] * w[0] + R[1] * w[1] + R[2] * w[2] + P.t[0],
-      R[3] * w[0] + R[4] * w[1] + R[5] * w[2] + P.t[1],
-      R[6] * w[0] + R[7] * w[1] + R[8] * w[2] + P.t[2],
-    ];
-    this.smooth = null;
-    save("st-tipcam", this.tipCam);
-    return true;
+  /** Process an RGBA frame directly (simulation). `scale` maps frame px to source px. */
+  process(img: Rgba, t: number, scale = 1): TrackResult {
+    const pipe = this.pipe && this.ephemeral ? this.pipe : this.ensurePipeline(img.width, img.height);
+    const r = pipe.process(img, t);
+    this.stepCalibration(t);
+    return { state: toState(r, t), overlay: this.overlay(r, t, scale), result: r };
   }
 
-  reset() {
-    this.drilled = BOARD_TARGETS.map(() => false);
-    this.targetIndex = 0;
-    this.doneAt = null;
+  private overlay(r: PipelineResult, t: number, s: number): Overlay {
+    const px = (p: { x: number; y: number } | null) => (p ? { x: p.x * s, y: p.y * s } : null);
+    const cal = this.cal;
+    const c = this.calibrated;
+    return {
+      lost: !r.fresh,
+      aim: px(r.aimPx),
+      mark: px(r.markPx),
+      quads: r.quads.map((q) => q.map((p) => ({ x: p.x * s, y: p.y * s }))),
+      info: r.fresh
+        ? `${r.markers} tags · ${c.camera ? "lens ✓" : `f ${Math.round(r.focalPx)}${r.focalLocked ? "" : "?"}`} · ${c.tool ? "dock ✓" : "dock ?"}${this.extraInfo(r)}`
+        : "searching",
+      gate: { ready: r.ready, message: gateMessage(r.gate) },
+      calibrating: cal
+        ? { text: CAL_TEXT[cal.step], progress: Math.min(1, (t - cal.t0) / CAL_SECONDS[cal.step]), count: r.captured }
+        : null,
+    };
   }
 }
 
-const lerp3 = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
-const norm3 = (v: V3): V3 => {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-};
+function toState(r: PipelineResult, t: number): SimState {
+  const n = r.nav;
+  const tg = BOARD_TARGETS[r.targetIndex];
+  const tip = n?.tip ?? [0, 0, 0.2];
+  const axis = n?.axis ?? [0, 0, -1];
+  return {
+    t,
+    phase: r.phase,
+    targetIndex: r.targetIndex,
+    target: { x: tg.x, y: tg.y },
+    tip: { x: tip[0], y: tip[1], z: tip[2] },
+    chuck: { x: tip[0] - axis[0] * BIT_LEN, y: tip[1] - axis[1] * BIT_LEN, z: tip[2] - axis[2] * BIT_LEN },
+    axis: { x: axis[0], y: axis[1], z: axis[2] },
+    yawDeg: n?.yawDeg ?? 0,
+    pitchDeg: n?.pitchDeg ?? 0,
+    angleErrDeg: n?.angleErrDeg ?? 90,
+    offsetMm: n?.offsetMm ?? 1e3,
+    gapMm: n?.gapMm ?? 200,
+    depthMm: n?.depthMm ?? 0,
+    aligned: !!n && n.angleErrDeg < PIPELINE_LIMITS.maxAngleDeg,
+    onTarget: !!n && n.offsetMm < PIPELINE_LIMITS.maxOffsetMm,
+    drilled: r.drilled,
+    bitSpin: 0,
+    label: tg.label,
+  };
+}
 
-function load(key: string): V3 | null {
+function scaleCamera(c: Camera, k: number): Camera {
+  return { ...c, f: c.f * k, cx: c.cx * k, cy: c.cy * k };
+}
+
+function load<T>(key: string, w: number, h: number, rescale: (v: T, k: number) => T): T | null {
   try {
-    const v = JSON.parse(localStorage.getItem(key) ?? "null");
-    return Array.isArray(v) && v.length === 3 ? (v as V3) : null;
+    const s = JSON.parse(localStorage.getItem(key) ?? "null") as Stored<T> | null;
+    if (!s || s.v !== 1) return null;
+    const k = w / s.width;
+    if (Math.abs(h / s.height - k) > 0.01) return null; // different aspect ratio: recalibrate
+    return rescale(s.value, k);
   } catch {
     return null;
   }
 }
-function save(key: string, v: V3) {
+function save<T>(key: string, size: { w: number; h: number }, value: T) {
   try {
-    localStorage.setItem(key, JSON.stringify(v));
+    localStorage.setItem(key, JSON.stringify({ v: 1, width: size.w, height: size.h, value } satisfies Stored<T>));
   } catch {}
 }

@@ -11,7 +11,7 @@ modelos.
 | Largo del teléfono (apaisado) | 140–175 mm (mordaza deslizante + tuerca mariposa M4) |
 | Espesor del teléfono | hasta 12 mm, con funda fina |
 | Cuerpo del taladro | Ø 38–68 mm aprox. (abrazadera partida: dos V de 90° enfrentadas, goma y 2 tornillos M5 con mariposa) |
-| Inclinación de la cámara | ±15° (bisagra M5 con ranura en arco), para dejarla paralela a la mecha |
+| Inclinación de la cámara | ±15° (bisagra M5 con ranura en arco). Recomendado: unos 10–12° hacia abajo, para que la punta quede dentro de la imagen |
 
 Los topes del lado de la cámara son bajos (12 mm), así que la cámara queda libre en cualquier modelo.
 
@@ -44,8 +44,11 @@ Los topes del lado de la cámara son bajos (12 mm), así que la cámara queda li
    Opcional: pasá una correa de velcro por un túnel como respaldo.
 3. Meté la lengüeta del brazo entre las orejas: el M5 de adelante es la bisagra y el de atrás va por la ranura en arco (traba).
 4. Apoyá el teléfono apaisado en el riel, con la pantalla hacia vos y la cámara hacia la mecha, contra el tope fijo. Acercá la mordaza y apretá la mariposa M4.
-5. Ajustá la inclinación hasta que la cámara quede paralela a la mecha y apretá la mariposa de la traba.
-6. En la app: imprimí `/markers`, abrí `/hud` → **Cam**, apoyá la punta en **A2** y tocá **Calibrate**.
+5. Inclina la cámara unos 10–12° hacia abajo (la punta de la mecha tiene que verse en el tercio inferior de la imagen, no
+   en el borde) y apretá la mariposa de la traba. No hace falta que quede paralela a la mecha: la app mide el ángulo real.
+6. En la app: imprimí `/markers` y abrí `/hud` → **Cam**. Una vez por teléfono, tocá **Lens** y mové el teléfono sobre la
+   hoja durante 20 s. Después apoyá la punta en **A2**, tocá **Calibrate**, describí círculos con el taladro alrededor de
+   la punta durante 5 s y giralo sobre la mecha durante otros 5 s.
 
 ## Antes de mandar a imprimir: medí tu taladro
 
@@ -70,5 +73,8 @@ El script también verifica que las piezas no se interfieran (inclinación de 0�
 ## Limitaciones conocidas (v0.2)
 
 - **No está probado físicamente.** Es la primera iteración: imprimí una y probala antes de hacer más.
-- El software supone que la cámara queda paralela a la mecha. La traba de inclinación permite ajustarlo a ojo; la calibración automática del eje es el próximo paso.
+- La cámara no tiene que quedar paralela a la mecha: **Calibrate** mide la posición de la punta (círculos alrededor de la
+  punta) y el eje de la mecha (giro sobre la mecha). En el simulador de escena los dos salen con menos de 0,1 mm y 0,05° de
+  error. Con la cámara paralela, la punta queda en el borde inferior de la imagen; inclinándola 12° se vieron 12 marcadores
+  en lugar de 9.
 - Las vibraciones pueden aflojar las mariposas: usá arandelas de presión y revisá el ajuste antes de cada sesión. En la app, apoyá la punta en A2 para verificar la calibración: si el dock se movió, recalibrá.

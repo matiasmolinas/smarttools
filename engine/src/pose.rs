@@ -242,6 +242,79 @@ pub fn solve_pose(world: &[P2], img: &[P2], k: &Intrinsics) -> Option<Pose> {
     Some(refine_pose(&p0, world, img, k, 8))
 }
 
+/// Per-marker reprojection RMS (pixels) for correspondences grouped `group` points per marker.
+pub fn group_rms(pose: &Pose, world: &[P2], img: &[P2], k: &Intrinsics, group: usize) -> Vec<f64> {
+    world
+        .chunks(group)
+        .zip(img.chunks(group))
+        .map(|(w, m)| {
+            let e: f64 = w
+                .iter()
+                .zip(m)
+                .map(|(w, m)| project([w.x, w.y, 0.0], pose, k).map_or(1e6, |q| (q.x - m.x).powi(2) + (q.y - m.y).powi(2)))
+                .sum();
+            (e / w.len() as f64).sqrt()
+        })
+        .collect()
+}
+
+/// Like [`solve_pose`], but drops markers whose corners disagree with the rest (a marker partly
+/// hidden by the drill bit, a reflection) and solves again. `group` = points per marker (4).
+/// Each marker is tested by leaving it out: if, under the pose of the others, its RMS exceeds both
+/// `min_px` and 4x theirs, the most inconsistent one is dropped (up to 3 times, keeping >= 2 markers).
+/// Returns the pose and which markers were kept.
+pub fn solve_pose_robust(world: &[P2], img: &[P2], k: &Intrinsics, group: usize, min_px: f64) -> Option<(Pose, Vec<bool>)> {
+    let group = group.max(1);
+    let n = world.len() / group;
+    let subset = |keep: &[bool]| -> (Vec<P2>, Vec<P2>) {
+        world
+            .chunks(group)
+            .zip(img.chunks(group))
+            .zip(keep)
+            .filter(|(_, &k)| k)
+            .flat_map(|((w, m), _)| w.iter().copied().zip(m.iter().copied()))
+            .unzip()
+    };
+    let mut keep = vec![true; n];
+    let (w, m) = subset(&keep);
+    let mut pose = solve_pose(&w, &m, k)?;
+    for _ in 0..3 {
+        if keep.iter().filter(|&&k| k).count() < 3 {
+            break;
+        }
+        let rms = group_rms(&pose, world, img, k, group);
+        if (0..n).filter(|&i| keep[i]).all(|i| rms[i] <= min_px) {
+            break;
+        }
+        // leave each marker out in turn; the one the others disagree with most is the suspect
+        let mut best: Option<(f64, usize, Pose)> = None;
+        for i in (0..n).filter(|&i| keep[i]) {
+            let mut trial = keep.clone();
+            trial[i] = false;
+            let (w, m) = subset(&trial);
+            let Some(p2) = solve_pose(&w, &m, k) else { continue };
+            let r2 = group_rms(&p2, world, img, k, group);
+            let mut rest: Vec<f64> = (0..n).filter(|&j| trial[j]).map(|j| r2[j]).collect();
+            rest.sort_by(f64::total_cmp);
+            let rest_med = rest[rest.len() / 2].max(0.05);
+            if r2[i] > min_px && r2[i] > 4.0 * rest_med {
+                let score = r2[i] / rest_med;
+                if best.as_ref().is_none_or(|b| score > b.0) {
+                    best = Some((score, i, p2));
+                }
+            }
+        }
+        match best {
+            Some((_, i, p2)) => {
+                keep[i] = false;
+                pose = p2;
+            }
+            None => break,
+        }
+    }
+    Some((pose, keep))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +380,27 @@ mod tests {
         let tip = [0.0, 0.055, 0.17];
         let e = crate::geom::len(sub3(s.to_world(tip), p.to_world(tip)));
         assert!(e < 1e-3, "tip error {e} m");
+    }
+
+    #[test]
+    fn a_bad_marker_is_dropped() {
+        let (p, k) = truth();
+        // 4 markers of 4 corners
+        let mut w = Vec::new();
+        for (cx, cy) in [(-0.06, 0.04), (0.06, 0.04), (-0.06, -0.04), (0.06, -0.04)] {
+            for (dx, dy) in [(-0.012, 0.012), (0.012, 0.012), (0.012, -0.012), (-0.012, -0.012)] {
+                w.push(P2::new(cx + dx, cy + dy));
+            }
+        }
+        let mut img: Vec<P2> = w.iter().map(|q| project([q.x, q.y, 0.0], &p, &k).unwrap()).collect();
+        // marker 1 partly covered by the bit: two of its corners land on the bit's edge
+        img[4].x += 3.0;
+        img[5].y -= 2.5;
+        let plain = solve_pose(&w, &img, &k).unwrap();
+        let (robust, keep) = solve_pose_robust(&w, &img, &k, 4, 0.8).unwrap();
+        assert_eq!(keep, vec![true, false, true, true]);
+        let err = |q: &Pose| crate::geom::len(sub3(q.t, p.t));
+        assert!(err(&robust) < 1e-9 && err(&plain) > 1e-5, "robust {} plain {}", err(&robust), err(&plain));
     }
 
     #[test]

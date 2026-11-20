@@ -56,7 +56,7 @@ fn perturb(p: &Pose, d: &[f64]) -> Pose {
     Pose { r: mul(&rodrigues([d[0], d[1], d[2]]), &p.r), t: [p.t[0] + d[3], p.t[1] + d[4], p.t[2] + d[5]], rms: 0.0 }
 }
 
-fn total_error(cam: &Camera, poses: &[Pose], views: &[View], buf: &mut Vec<f64>) -> Option<f64> {
+fn total_error(cam: &Camera, poses: &[Pose], views: &[&View], buf: &mut Vec<f64>) -> Option<f64> {
     let mut e = 0.0;
     for (p, v) in poses.iter().zip(views) {
         buf.resize(v.world.len() * 2, 0.0);
@@ -69,15 +69,34 @@ fn total_error(cam: &Camera, poses: &[Pose], views: &[View], buf: &mut Vec<f64>)
 }
 
 /// Calibrate the camera from >= 3 views (more and more varied is better: tilt the phone 20-40°
-/// in different directions and fill the corners of the image).
+/// in different directions and fill the corners of the image). Views that disagree with the rest
+/// (RMS > 0.5 px and > 4x the median) are dropped and the fit is repeated, up to twice.
 pub fn calibrate_camera(views: &[View], init: Camera, opts: CameraCalibOptions) -> Option<CameraCalib> {
+    let mut active: Vec<usize> = (0..views.len()).collect();
+    for _ in 0..3 {
+        let subset: Vec<&View> = active.iter().map(|&i| &views[i]).collect();
+        let r = calibrate_subset(&subset, init, opts)?;
+        let mut rms: Vec<f64> = r.poses.iter().map(|p| p.rms).collect();
+        rms.sort_by(f64::total_cmp);
+        let median = rms[rms.len() / 2];
+        let bad: Vec<usize> = r.poses.iter().enumerate().filter(|(_, p)| p.rms > 0.5 && p.rms > 4.0 * median).map(|(k, _)| k).collect();
+        if bad.is_empty() || active.len() - bad.len() < 3 {
+            return Some(r);
+        }
+        active = active.iter().enumerate().filter(|(k, _)| !bad.contains(k)).map(|(_, &i)| i).collect();
+    }
+    let subset: Vec<&View> = active.iter().map(|&i| &views[i]).collect();
+    calibrate_subset(&subset, init, opts)
+}
+
+fn calibrate_subset(views: &[&View], init: Camera, opts: CameraCalibOptions) -> Option<CameraCalib> {
     if views.len() < 3 || views.iter().any(|v| v.world.len() < 4 || v.world.len() != v.img.len()) {
         return None;
     }
     let mut cam = Camera { k1: 0.0, k2: 0.0, p1: 0.0, p2: 0.0, ..init };
     // initial poses on the pinhole model
     let mut poses = Vec::with_capacity(views.len());
-    for v in views {
+    for v in views.iter() {
         let h = homography(&v.world, &v.img)?;
         let p0 = pose_from_homography(&h, &cam.intrinsics())?;
         poses.push(refine_pose(&p0, &v.world, &v.img, &cam.intrinsics(), 8));
@@ -186,7 +205,7 @@ pub fn calibrate_camera(views: &[View], init: Camera, opts: CameraCalibOptions) 
     }
     let n: usize = views.iter().map(|v| v.world.len()).sum();
     let rms = (err / n as f64).sqrt();
-    for (p, v) in poses.iter_mut().zip(views) {
+    for (p, v) in poses.iter_mut().zip(views.iter()) {
         let mut r = vec![0.0; v.world.len() * 2];
         view_residuals(&cam, p, v, &mut r);
         p.rms = (r.iter().map(|x| x * x).sum::<f64>() / v.world.len() as f64).sqrt();
@@ -375,8 +394,14 @@ mod tests {
             let img: Vec<P2> = world.iter().map(|w| truth.project([w.x, w.y, 0.0], &p).unwrap()).collect();
             views.push(View { world: world.clone(), img });
         }
+        // one view with a corrupted marker (half hidden by the bit)
+        let mut bad = View { world: views[3].world.clone(), img: views[3].img.clone() };
+        bad.img[5].x += 6.0;
+        bad.img[6].y -= 5.0;
+        views.push(bad);
         let init = Camera::from_hfov(1280.0, 720.0, 66.0);
         let c = calibrate_camera(&views, init, CameraCalibOptions::default()).unwrap();
+        assert_eq!(c.poses.len(), 12, "the corrupted view is dropped");
         assert!(c.rms < 1e-4, "rms {}", c.rms);
         assert!((c.camera.f - truth.f).abs() < 0.05, "f {}", c.camera.f);
         assert!((c.camera.cx - truth.cx).abs() < 0.05 && (c.camera.cy - truth.cy).abs() < 0.05);

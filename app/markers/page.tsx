@@ -87,8 +87,12 @@ export default function MarkersPage() {
             point at the sheet.
           </li>
           <li>
-            With the phone in the dock, rest the bit tip on <b>A2</b> and tap <b>Calibrate</b>: wobble the drill around
-            the tip, then twist it around the bit.
+            Once per phone: tap <b>Lens</b> and move the phone over the sheet for 20 s, tilting it in different
+            directions.
+          </li>
+          <li>
+            With the phone in the dock, rest the bit tip on <b>A2</b> and tap <b>Calibrate</b>: circle the drill around
+            the tip for 5 s, then twist it around the bit for 5 s.
           </li>
         </ol>
         <PrintButton />

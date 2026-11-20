@@ -7,9 +7,9 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { NavCore, cameraFromHfov, type Camera, type ToolCalib } from "../lib/engine.ts";
-import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, markerCodes, renderHold, runFrame, truthNav, type Disturbance, type Hold } from "../lib/scene.ts";
+import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, markerCodes, renderHold, runFrame, tiltedRig, truthNav, type Disturbance, type Hold } from "../lib/scene.ts";
 import { NavPipeline, REQUIREMENT } from "../lib/navpipeline.ts";
-import { BOARD_TARGETS } from "../lib/board.ts";
+import { BOARD_MARKERS, BOARD_TARGETS } from "../lib/board.ts";
 import type { V3 } from "../lib/pose.ts";
 
 const args = process.argv.slice(2);
@@ -21,7 +21,9 @@ const { AR } = require("js-aruco2");
 const core = await NavCore.load(readFileSync(new URL("../public/engine/nav_core.wasm", import.meta.url)));
 const codes = markerCodes(new AR.Dictionary("ARUCO_MIP_36h12").codeList);
 const detector = () => new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" });
-const rig = DEFAULT_RIG;
+const TILT = args.includes("--tilt") ? Number(args[args.indexOf("--tilt") + 1]) : 0;
+const rig = TILT ? tiltedRig(TILT) : DEFAULT_RIG;
+if (TILT) console.log(`dock camera tilted ${TILT}° down`);
 const W = rig.width, H = rig.height;
 
 // what the app assumes before any calibration
@@ -74,7 +76,7 @@ if ("camera" in cal) {
 } else check("camera calibration", false, cal.error);
 
 // ------------------------------------------------------------------------------------------------
-console.log("\n2. Dock calibration on A2 (true dock: tip (3, 58, 172) mm, axis 1.4° off the optical axis)");
+console.log(`\n2. Dock calibration on A2 (true dock: tip (${rig.tool.tipCam.map((v) => (v * 1000).toFixed(0)).join(", ")}) mm, axis ${angleBetween(rig.tool.axisCam, [0, 0, 1]).toFixed(1)}° off the optical axis)`);
 const pTool = new NavPipeline(core, detector(), { camera, cameraCalibrated: true, tool: GUESS_TOOL, toolCalibrated: false });
 const wobbleD: Disturbance = { ...CALM, tremorDeg: 0.04, noise: 2 };
 pTool.beginCapture("pivot");
@@ -126,7 +128,7 @@ for (let i = 0; i * (1 / FPS) < RUN_TIME; i++) {
     e.tip.push(dist(r.nav.tip, tr.tip) * 1000);
     e.rawTip.push(dist(r.raw.tip, tr.tip) * 1000);
     e.rawAxis.push(angleBetween(r.raw.axis, tr.axis));
-    (e.byPhase[fr.truth.phase] ??= []).push(dist(r.nav.tip, tr.tip) * 1000);
+    (e.byPhase[fr.truth.phase] ??= []).push(angleBetween(r.raw.axis, tr.axis));
     if (fr.truth.phase === "align" || fr.truth.phase === "approach") e.rawAim.push(Math.hypot(r.raw.aim.x - tr.aim.x, r.raw.aim.y - tr.aim.y) * 1000);
     if (fr.truth.phase === "drill" || fr.truth.phase === "hold") e.rawDepth.push(Math.abs(r.raw.depthMm - tr.depthMm));
     e.axis.push(angleBetween(r.nav.axis, tr.axis));
@@ -148,7 +150,7 @@ for (let i = 0; i * (1 / FPS) < RUN_TIME; i++) {
   const e = E.calibrated;
   check("tracking continuity", e.lost / e.frames < 0.02, `${e.lost}/${e.frames} frames without a pose, markers seen min ${Math.min(...e.markers)} median ${pct(e.markers, 50)}`);
   console.log(`      raw (unfiltered) measurement: tip p50 ${f2(pct(e.rawTip, 50))} p95 ${f2(pct(e.rawTip, 95))} mm, angle p95 ${pct(e.rawAxis, 95).toFixed(3)}°, aim p95 ${f2(pct(e.rawAim, 95))} mm, depth p95 ${f2(pct(e.rawDepth, 95))} mm`);
-  console.log(`      filtered tip p95 by phase: ${Object.entries(e.byPhase).map(([k, v]) => `${k} ${f2(pct(v, 95))}`).join(", ")} mm`);
+  console.log(`      raw angle p95 by phase: ${Object.entries(e.byPhase).map(([k, v]) => `${k} ${pct(v, 95).toFixed(3)}`).join(", ")} °`);
   check("tip position p95", pct(e.tip, 95) < 1.0, `p50 ${f2(pct(e.tip, 50))} mm, p95 ${f2(pct(e.tip, 95))} mm, max ${f2(Math.max(...e.tip))} mm`);
   check("bit angle p95", pct(e.axis, 95) < 0.25, `p50 ${pct(e.axis, 50).toFixed(3)}°, p95 ${pct(e.axis, 95).toFixed(3)}°, max ${Math.max(...e.axis).toFixed(3)}°`);
   check("aim point on the surface p95", pct(e.aim, 95) < 0.6, `p50 ${f2(pct(e.aim, 50))} mm, p95 ${f2(pct(e.aim, 95))} mm`);
@@ -175,9 +177,9 @@ console.log("\n4. Safety: occlusion, lost markers, uncalibrated dock");
   for (let i = 0; i < 12; i++) readyBefore += feed(p, hold, i / FPS, CALM, "align").ready ? 1 : 0;
   // project marker centres to find where to put fingers
   const { pose } = truthNav(core, rig, hold, 1);
-  // a hand over the sheet: cover everything above the tip except a sliver
-  const tipPx = core.projectPoints(rig.camera, pose, [[0, -0.02, 0]])[0]!;
-  const occluded: Disturbance = { ...CALM, occluders: [{ cx: tipPx.x - 260, cy: tipPx.y - 260, r: 300 }, { cx: tipPx.x + 260, cy: tipPx.y - 260, r: 300 }] };
+  // a hand over the sheet: every marker but one covered
+  const centres = core.projectPoints(rig.camera, pose, BOARD_MARKERS.map((m) => [m.x, m.y, 0] as V3)).filter((c) => c && c.x > -40 && c.x < W + 40 && c.y > -40 && c.y < H + 40) as { x: number; y: number }[];
+  const occluded: Disturbance = { ...CALM, occluders: centres.slice(1).slice(0, 14).map((c) => ({ cx: c.x, cy: c.y, r: 60 })) };
   let readyAfter = 0;
   let reasons = 0;
   for (let i = 12; i < 24; i++) {

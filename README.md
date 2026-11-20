@@ -20,22 +20,23 @@ your hands.
 | Page | What it is |
 |---|---|
 | [`/`](https://smarttools-nav.vercel.app) | Landing page with a three.js line scene of the drill, wall, markers and docked phone, plus the 2D HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only, for demos. Simulated (wall, wood, grid) or with an experimental rear-camera preview (**Cam**) |
-| [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet with 6 ArUco markers and 3 targets (A1–A3) |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Lens** and **Calibrate**) |
+| [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
 
 ## How the demo works
 
 The website includes a browser prototype of the optical tracking, built to illustrate the idea in the demo. It is
 not the SmartTools application, which will be published separately.
 
-1. **Markers.** Print `/markers` at 100 % and tape it where you'll drill. Six ArUco markers (ARUCO_MIP_36h12, 40 mm)
-   surround three targets.
+1. **Markers.** Print `/markers` at 100 % and tape it where you'll drill. A grid of 28 ArUco markers (ARUCO_MIP_36h12,
+   24 mm) with three targets in the gaps: the docked camera only sees a ~22 × 12 cm strip above the bit tip, so the grid
+   keeps 5–12 markers in view on every target.
 2. **Pose.** The rear camera detects the markers ([js-aruco2](https://github.com/damianofalcioni/js-aruco2)). Corners
    are refined to sub-pixel accuracy, then a normalized DLT homography gives an initial pose, which Gauss-Newton refines.
    The focal length self-calibrates from tilted views.
-3. **Tool.** The dock keeps the camera rigid with the drill. One calibration (tip resting on A2) stores the bit tip in
-   the camera frame, so every frame gives the tip position, the bit axis, the aim point on the surface, the angle error
-   and the depth.
+3. **Tool.** The dock keeps the camera rigid with the drill. Two calibrations: the lens (once per phone) and the dock (tip
+   on A2: circle, then twist). Then every frame gives the tip position, the bit axis, the aim point on the surface, the
+   angle error and the depth.
 4. **HUD.** Two rings, tip and chuck: when they are concentric on the mark, you're on target and square. One short
    instruction at a time (*Tip to the mark → Line up the rings → Ready · drill → Stop · 35 mm*).
 
@@ -62,23 +63,51 @@ npm install
 npm run dev                                   # website at http://localhost:3000
 node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
 npm run engine:test                           # Rust core: cargo test + parity with TypeScript
+npm run scene:test                            # full pipeline on simulated camera frames (add -- --tilt 12 or -- --quick)
 ```
 
 The camera preview in `/hud` needs HTTPS or `localhost`. To try it on a phone, deploy (for example to Vercel) or use
 an HTTPS tunnel.
 
-## Navigation engine (Rust)
+## Navigation engine (Rust) and scene simulator
 
-[`engine/`](engine/) is the start of the navigation core in Rust (`smarttools-nav-core`): homography,
-pose, Gauss-Newton refinement, focal self-calibration and sub-pixel corners, compiled to a 50 KB
-WebAssembly module (`public/engine/nav_core.wasm`, wrapped by `lib/engine.ts`). A parity test checks it
-against the TypeScript prototype. See the [engine README](engine/README.md).
+[`engine/`](engine/) is the navigation core in Rust (`smarttools-nav-core`), compiled to a ~100 KB WebAssembly
+module (`public/engine/nav_core.wasm`, wrapped by `lib/engine.ts`):
+
+- **Pose:** sub-pixel corners, normalised DLT homography, Gauss-Newton refinement, and a robust solve that drops
+  markers half hidden by the drill bit.
+- **Lens:** Brown-Conrady distortion and camera calibration (focal length, principal point, k1, k2).
+- **Dock calibration:** the bit tip by circling around it (pivot), the bit axis by twisting around it, so the camera
+  does not have to be parallel to the bit.
+- **Navigation:** tip, axis, aim point, angle, offset, depth, a One Euro filter, steadiness, and a deterministic
+  go / no-go gate (calibrated, enough markers, good fit, steady, square within 0.4°, on the mark within 0.75 mm).
+- **Scene simulator:** renders what the docked camera sees: the marker sheet through a distorting lens, the bit in view,
+  hand tremor, motor vibration, motion blur, uneven light, sensor noise and a hand over the markers.
+
+`lib/navpipeline.ts` is the one pipeline used by the phone and by the tests. `npm run scene:test` runs it on simulated
+frames and checks everything against the ground truth: lens and dock calibration, three holes with tremor and
+vibration, occlusion, an uncalibrated dock and a shaking hand. It currently passes 17/17 (15 fps):
+
+| | Result |
+|---|---|
+| Lens calibration | focal length within 0.01 %, k1 within 0.001 |
+| Dock calibration | tip within 0.1 mm, axis within 0.05° |
+| Drilling (p95) | angle 0.08–0.10°, aim 0.09–0.11 mm, depth 0.06 mm |
+| Gate | no false "ready" (truth outside 0.5° / 1 mm), "ready" reached on every hole |
+| Without calibration | angle error 3.4° (parallel dock) to 13° (tilted dock) |
+
+These are simulated results: they show the method and the software work, not how a real phone performs (rolling
+shutter, compression, autofocus, a real hand). `/hud` → **Sim cam** shows the same simulation running in the browser.
+See the [engine README](engine/README.md).
 
 ## Code map (website)
 
 | Path | Contents |
 |---|---|
-| `lib/tracker.ts` | Tracking prototype: markers → pose → drill state + overlay |
+| `lib/navpipeline.ts` | The navigation pipeline: frame → markers → pose → navigation → gate (phone and tests) |
+| `lib/tracker.ts` | Browser side: camera or simulated frames, calibration flows, stored calibration, HUD state |
+| `lib/scene.ts` | Scene simulator: the rig, the drilling motion, tremor, vibration, rendered frames |
+| `lib/engine.ts` | TypeScript wrapper for the Rust core |
 | `lib/pose.ts` | Homography, pose from homography, Gauss-Newton refinement, focal estimate |
 | `lib/subpix.ts` | Sub-pixel corner refinement |
 | `lib/board.ts` | Marker sheet geometry and targets |

@@ -145,6 +145,7 @@ interface Exports {
   st_rig_pose(yaw: number, pitch: number, twist: number, tipWorld: number, tipCam: number, axisCam: number, out: number): number;
   st_render(cam: number, poses: number, n: number, w: number, h: number, ss: number, codes: number, cfg: number, out: number): number;
   st_board_info(out: number, cap: number): number;
+  st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
 export const ENGINE_ABI = 2;
@@ -234,6 +235,20 @@ export class NavCore {
       this.putPts(w, world);
       this.putPts(i, img);
       return this.x.st_solve_pose(w, i, n, K.f, K.cx, K.cy, o) === 1 ? this.getPose(o) : null;
+    });
+  }
+
+  /** Per-frame solve that drops markers (4 points each) inconsistent with the rest (e.g. half hidden by the bit). */
+  solvePoseRobust(world: P[], img: P[], K: Intrinsics, minPx = 0.8): { pose: Pose; kept: number; keep: boolean[] } | null {
+    const n = world.length;
+    if (n < 4 || img.length !== n || n % 4) return null;
+    return this.with([n * 16, n * 16, 104, n / 4], ([w, i, o, k]) => {
+      this.putPts(w, world);
+      this.putPts(i, img);
+      const kept = this.x.st_solve_pose_robust(w, i, n, K.f, K.cx, K.cy, minPx, o, k);
+      if (kept <= 0) return null;
+      const keep = Array.from(new Uint8Array(this.x.memory.buffer, k, n / 4), (v) => v === 1);
+      return { pose: this.getPose(o), kept, keep };
     });
   }
 
@@ -439,17 +454,17 @@ export class NavCore {
   /** Render a simulated camera frame (RGBA). Several poses = motion blur over the exposure. */
   render(cam: Camera, poses: Pose[], o: RenderOptions): Uint8ClampedArray {
     const bytes = o.width * o.height * 4;
-    return this.with([56, poses.length * 104, o.codes.length, 256, bytes], ([c, ps, cd, cfg, out]) => {
+    return this.with([56, poses.length * 104, o.codes.length, 512, bytes], ([c, ps, cd, cfg, out]) => {
       this.putCam(c, cam);
       this.putPoses(ps, poses);
       new Uint8Array(this.x.memory.buffer, cd, o.codes.length).set(o.codes);
-      const occ = (o.occluders ?? []).slice(0, 4);
+      const occ = (o.occluders ?? []).slice(0, 14);
       const b = o.bit;
-      const v = new Array(32).fill(0);
+      const v = new Array(64).fill(0);
       v.splice(0, 19, o.wall ?? 150, o.paper ?? 232, o.ink ?? 22, o.crosses === false ? 0 : 1, o.gain ?? 1, o.vignette ?? 0.25, o.gradient ?? 0.15, o.noise ?? 3, o.seed ?? 1,
         b ? 1 : 0, ...(b ? b.tipCam : [0, 0, 0]), ...(b ? b.axisCam : [0, 0, 1]), b?.length ?? 0, b?.radius ?? 0, occ.length);
       occ.forEach((q, i) => v.splice(19 + i * 3, 3, q.cx, q.cy, q.r));
-      this.f64(cfg, 32).set(v);
+      this.f64(cfg, 64).set(v);
       this.x.st_render(c, ps, poses.length, o.width, o.height, o.ss ?? 2, cd, cfg, out);
       return new Uint8ClampedArray(this.x.memory.buffer.slice(out, out + bytes));
     });

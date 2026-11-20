@@ -30,10 +30,15 @@ export interface Overlay {
   mark: { x: number; y: number } | null; // video px: the planned hole
   quads: { x: number; y: number }[][]; // video px: detected markers
   info: string;
+  /** the engine's go / no-go gate (lib/navpipeline.ts) */
+  gate?: { ready: boolean; message: string | null };
+  /** a calibration capture in progress */
+  calibrating?: { text: string; progress: number; count: number } | null;
 }
 export interface HudOptions {
   background?: HudBackground;
-  video?: HTMLVideoElement | null;
+  /** live camera <video>, or a <canvas> with simulated camera frames */
+  video?: HTMLVideoElement | HTMLCanvasElement | null;
   overlay?: Overlay | null;
 }
 
@@ -63,11 +68,14 @@ export function drawHud(
   // ---------- background ----------
   const bg = opts.background ?? "grid";
   const video = opts.video;
-  const camLive = bg === "camera" && !!video && video.readyState >= 2 && video.videoWidth > 0;
+  const isVideo = typeof HTMLVideoElement !== "undefined" && video instanceof HTMLVideoElement;
+  const srcW = !video ? 0 : isVideo ? (video as HTMLVideoElement).videoWidth : video.width;
+  const srcH = !video ? 0 : isVideo ? (video as HTMLVideoElement).videoHeight : video.height;
+  const camLive = bg === "camera" && !!video && (!isVideo || (video as HTMLVideoElement).readyState >= 2) && srcW > 0;
   let vmap: ((p: { x: number; y: number }) => { x: number; y: number }) | null = null;
   if (camLive) {
-    const vw = video!.videoWidth;
-    const vh = video!.videoHeight;
+    const vw = srcW;
+    const vh = srcH;
     const sc = Math.max(w / vw, h / vh);
     const offX = (w - vw * sc) / 2;
     const offY = (h - vh * sc) / 2;
@@ -102,7 +110,9 @@ export function drawHud(
   L.lastT = s.t;
   const onMark = s.onTarget && s.gapMm < 0.5;
   const square = s.aligned;
-  if (onMark && square) L.since ??= s.t;
+  // with the engine, "ready" also needs its gate (calibrated, enough markers, good fit, steady)
+  const gateOk = !ov?.gate || ov.gate.ready;
+  if (onMark && square && gateOk) L.since ??= s.t;
   else L.since = null;
   const lockAge = L.since == null ? -1 : s.t - L.since;
   const ready = lockAge >= LOCK_TIME;
@@ -206,14 +216,24 @@ export function drawHud(
   ctx.restore();
 
   // ---------- Athos card: one step, one instruction ----------
-  const cue = instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost) });
+  const cue = ov?.calibrating
+    ? {
+        text: ov.calibrating.text,
+        color: AMBER,
+        step: "CAL",
+        pass: false,
+        check: `${Math.round(ov.calibrating.progress * 100)} % · ${ov.calibrating.count} samples`,
+      }
+    : instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost), gate: ov?.gate?.message ?? null });
   const panelW = landscape ? Math.min(w * 0.62, u * 130) : w - u * 8;
   const pad = u * 3.4;
   const titleSize = u * (compact ? 6 : 5.4);
   const smallSize = u * (compact ? 3.4 : 2.9);
   const panelH = pad * 2 + smallSize * 1.3 + titleSize * 1.35 + (compact ? 0 : smallSize * 1.5);
   const px = landscape ? u * 4 : u * 4;
-  const py = h - panelH - u * 4;
+  // the docked camera sees the tip near the bottom of the image: keep the card off the rings
+  const ringLow = tracked && rc.y > h * 0.5;
+  const py = ringLow ? u * 9 : h - panelH - u * 4;
   ctx.fillStyle = "rgba(10,12,16,0.62)";
   roundRect(ctx, px, py, panelW, panelH, u * 2.6);
   ctx.fill();
@@ -240,9 +260,11 @@ export function drawHud(
 // ---------- what to say at each moment ----------
 function instruction(
   s: SimState,
-  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean; lost: boolean },
+  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean; lost: boolean; gate: string | null },
 ): { text: string; color: string; step: string; pass: boolean; check: string } {
-  if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least one marker in view" };
+  if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least two markers in view" };
+  if (c.gate === "Calibrate first" && (s.phase === "approach" || s.phase === "align"))
+    return { text: "Calibrate first", color: AMBER, step: "0/3", pass: false, check: "tap Calibrate with the tip on A2" };
   if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
   if (s.phase === "hold") return { text: `Stop · ${DEPTH_TARGET_MM} mm`, color: GREEN, step: "3/3", pass: true, check: `depth ${s.depthMm.toFixed(1)} mm · err ${s.angleErrDeg.toFixed(2)}°` };
   if (s.phase === "retract") return { text: `Done · next ${s.label}`, color: GREEN, step: "1/3", pass: true, check: "hole logged" };
@@ -256,6 +278,7 @@ function instruction(
     return { text: "Rest on the mark", color: AMBER, step: "1/3", pass: false, check: "tip touching the surface" };
   }
   if (!c.square) return { text: "Line up the rings", color: AMBER, step: "2/3", pass: false, check: `square to the surface ±${ANGLE_TOL_DEG}°` };
+  if (c.gate && !c.locking && !c.ready) return { text: c.gate, color: AMBER, step: "2/3", pass: false, check: "the engine's go / no-go check" };
   if (c.locking) return { text: "Hold steady", color: GREEN, step: "2/3", pass: false, check: "hold 0.75 s" };
   return { text: "Ready · drill", color: GREEN, step: "2/3", pass: true, check: `square ±${ANGLE_TOL_DEG}° · on the mark` };
 }

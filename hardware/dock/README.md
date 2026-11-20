@@ -12,7 +12,7 @@ facing the user. Designed for the Ingco CDLI20022 and the Xiaomi Redmi Note 13, 
 | Phone length (landscape) | 140–175 mm (sliding jaw + M4 wing nut) |
 | Phone thickness | up to 12 mm, slim case included |
 | Drill body | approx. Ø 38–68 mm (split clamp: two facing 90° V-blocks, rubber pads and 2 M5 bolts with wing nuts) |
-| Camera tilt | ±15° (M5 hinge with an arc slot), to set the camera parallel to the bit |
+| Camera tilt | ±15° (M5 hinge with an arc slot). Recommended: about 10–12° down, so the bit tip is inside the image |
 
 The stops on the camera side are low (12 mm), so the camera stays clear on any phone model.
 
@@ -48,8 +48,11 @@ The stops on the camera side are low (12 mm), so the camera stays clear on any p
 3. Insert the arm's tongue between the ears: the front M5 is the hinge, the rear one goes through the arc slot (lock).
 4. Put the phone in landscape on the rail, screen toward you and camera toward the bit, against the fixed jaw. Slide the
    moving jaw in and tighten the M4 wing nut.
-5. Adjust the tilt until the camera is parallel to the bit and tighten the lock wing nut.
-6. In the app: print `/markers`, open `/hud` → **Cam**, rest the tip on **A2** and tap **Calibrate**.
+5. Tilt the camera about 10–12° down (the bit tip should appear in the lower third of the image, not at the edge) and
+   tighten the lock wing nut. It does not need to be parallel to the bit: the app measures the real angle.
+6. In the app: print `/markers`, open `/hud` → **Cam**. Once per phone, tap **Lens** and move the phone over the sheet
+   for 20 s. Then rest the tip on **A2**, tap **Calibrate**, circle the drill around the tip for 5 s and twist it
+   around the bit for 5 s.
 
 ## Before printing: measure your drill
 
@@ -77,8 +80,9 @@ length needed and writes `preview.png`.
 ## Known limitations (v0.2)
 
 - **Not physically tested yet.** This is the first iteration: print one and test it before making more.
-- The software assumes the camera is parallel to the bit. The tilt lock lets you set this by eye; automatic axis
-  calibration is the next step.
+- The camera does not need to be parallel to the bit: **Calibrate** measures the tip position (circling around the tip)
+  and the bit axis (twisting around the bit). In the scene simulator both come out within 0.1 mm and 0.05°. With the
+  camera parallel, the tip sits at the bottom edge of the image; tilting it 12° down kept 12 markers in view instead of 9.
 - Vibration can loosen wing nuts: use lock washers and check the clamp before each session. In the app, rest the tip on
   A2 to check the calibration: if the dock moved, recalibrate.
 
