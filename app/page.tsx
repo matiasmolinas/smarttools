@@ -1,4 +1,5 @@
 import NavDemo from "@/components/NavDemo";
+import ScenarioGallery from "@/components/gallery/ScenarioGallery";
 
 const REPOS = [
   {
@@ -90,6 +91,8 @@ export default function Home() {
           <Legend color="var(--green)" title="One Athos step at a time" body="The card shows only the current step and its check. Green means the check passed; the depth arc stops you at 35 mm." />
         </div>
       </section>
+
+      <ScenarioGallery />
 
       <section className="py-16">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">How it works</h2>

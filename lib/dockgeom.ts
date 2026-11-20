@@ -38,6 +38,17 @@ export const DOCK = {
     147.2,
     0.0
   ],
+  "rail": {
+    "chX": -52.0,
+    "fixFace": -15.0,
+    "baseZ1": -26.0,
+    "camProtrude": 1.0,
+    "phoneLength": [
+      140.0,
+      175.0
+    ],
+    "phoneThicknessMax": 12.0
+  },
   "tipInSaddle": [
     190.0,
     0.0,

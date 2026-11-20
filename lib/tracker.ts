@@ -16,9 +16,12 @@ import type { Xf } from "./xform";
 import type { Overlay } from "./hud";
 import type { SimState } from "./sim";
 import { hudView } from "./render/hudview";
+import { DEFAULT_PHONE_ID, PHONES, phoneById, type PhoneProfile } from "./phones";
+import { checkCalibration, dockRig } from "./dockrig";
 
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
-export const DEFAULT_TOOL: ToolCalib = { tipCam: [0, 0.055, 0.17], axisCam: [0, 0, 1] };
+/** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
+const SANITY_MM = 15;
 const MAX_SIDE = 960; // detection resolution
 
 const CAL_SECONDS: Record<CaptureKind, number> = { pivot: 5, roll: 5, camera: 20 };
@@ -46,6 +49,8 @@ export class BrowserNav {
   extraInfo: () => string = () => "";
   /** tracker frames processed, for the stats line */
   frames = 0;
+  /** the phone in the dock; calibrations are stored per phone */
+  phone: PhoneProfile = phoneById(readPhoneId());
 
   private constructor(core: NavCore) {
     this.core = core;
@@ -85,14 +90,16 @@ export class BrowserNav {
   private ensureSession(w: number, h: number, t0: number) {
     if (this.session && (this.ephemeral || (this.size.w === w && this.size.h === h))) return this.session;
     this.size = { w, h };
-    const cam = load<Camera>("st-camera", w, h, (c, k) => ({ ...c, f: c.f * k, cx: c.cx * k, cy: c.cy * k }));
-    const tool = load<ToolCalib>("st-tool", w, h, (t) => t);
+    migrateLegacy(this.phone.id);
+    const cam = load<Camera>(key("camera", this.phone.id), w, h, (c, k) => ({ ...c, f: c.f * k, cx: c.cx * k, cy: c.cy * k }));
+    const tool = load<ToolCalib>(key("tool", this.phone.id), w, h, (t) => t);
     this.session?.dispose();
     const camera = cam ?? cameraFromHfov(w, h, DEFAULT_HFOV_DEG);
     this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), {
       camera,
       cameraCalibrated: !!cam,
-      tool: tool ?? DEFAULT_TOOL,
+      // before calibrating, what the phone profile predicts at mid tilt (the gate stays closed anyway)
+      tool: tool ?? dockRig({ phone: this.phone, tiltDeg: 8 }).tool,
       toolCalibrated: !!tool,
       t0,
     });
@@ -171,10 +178,46 @@ export class BrowserNav {
     this.client?.terminate();
     this.client = null;
   }
+  /** Switch phones: its own calibrations are loaded on the next frame. */
+  setPhone(id: string) {
+    this.phone = phoneById(id);
+    try {
+      localStorage.setItem("st-phone", this.phone.id);
+    } catch {}
+    this.forgetCalibrationSilently();
+  }
+  nextPhone() {
+    const i = PHONES.findIndex((p) => p.id === this.phone.id);
+    this.setPhone(PHONES[(i + 1) % PHONES.length].id);
+    return this.phone;
+  }
+
+  /** This phone's profile and calibrations as JSON (to keep, share or move to another browser). */
+  exportProfile(): string {
+    const read = (k: string) => {
+      try {
+        return JSON.parse(localStorage.getItem(k) ?? "null");
+      } catch {
+        return null;
+      }
+    };
+    return JSON.stringify({ kind: "smarttools-phone", v: 1, phone: this.phone, camera: read(key("camera", this.phone.id)), tool: read(key("tool", this.phone.id)), exported: new Date().toISOString() }, null, 2);
+  }
+  importProfile(json: string): string {
+    const d = JSON.parse(json);
+    if (d?.kind !== "smarttools-phone" || !d.phone?.id) throw new Error("not a SmartTools phone file");
+    try {
+      if (d.camera) localStorage.setItem(key("camera", d.phone.id), JSON.stringify(d.camera));
+      if (d.tool) localStorage.setItem(key("tool", d.phone.id), JSON.stringify(d.tool));
+    } catch {}
+    this.setPhone(d.phone.id);
+    return phoneById(d.phone.id).name;
+  }
+
   forgetCalibration() {
     try {
-      localStorage.removeItem("st-camera");
-      localStorage.removeItem("st-tool");
+      localStorage.removeItem(key("camera", this.phone.id));
+      localStorage.removeItem(key("tool", this.phone.id));
     } catch {}
     this.session?.dispose();
     this.session = null;
@@ -199,13 +242,19 @@ export class BrowserNav {
       return;
     }
     if ("camera" in r) {
-      if (!this.ephemeral) save("st-camera", this.size, r.camera);
+      if (!this.ephemeral) save(key("camera", this.phone.id), this.size, r.camera);
       this.onMessage(`LENS OK · ${r.views} VIEWS · ${r.rms.toFixed(2)} PX`);
     }
     if ("tipCam" in r) this.onMessage(`TIP OK · ${r.rmsMm.toFixed(2)} MM`);
     if ("axisCam" in r) {
-      if (!this.ephemeral) save("st-tool", this.size, s.tool);
-      this.onMessage("DOCK CALIBRATED");
+      if (!this.ephemeral) save(key("tool", this.phone.id), this.size, s.tool);
+      // sanity check against the phone profile and the dock's geometry
+      const chk = checkCalibration(s.tool, { phone: this.phone });
+      this.onMessage(
+        chk.distanceMm > SANITY_MM
+          ? `CHECK THE PHONE: TIP ${Math.round(chk.distanceMm)} MM FROM THE ${this.phone.name.toUpperCase()} PROFILE`
+          : `DOCK CALIBRATED · TILT ≈ ${chk.tiltDeg.toFixed(0)}°`,
+      );
     }
     if (c.then) {
       this.client?.beginCapture(c.then);
@@ -228,5 +277,24 @@ function load<T>(key: string, w: number, h: number, rescale: (v: T, k: number) =
 function save<T>(key: string, size: { w: number; h: number }, value: T) {
   try {
     localStorage.setItem(key, JSON.stringify({ v: 1, width: size.w, height: size.h, value } satisfies Stored<T>));
+  } catch {}
+}
+
+const key = (what: "camera" | "tool", phoneId: string) => `st-${what}:${phoneId}`;
+function readPhoneId(): string {
+  try {
+    return localStorage.getItem("st-phone") ?? DEFAULT_PHONE_ID;
+  } catch {
+    return DEFAULT_PHONE_ID;
+  }
+}
+/** Calibrations saved before phone profiles existed belong to the phone in use. */
+function migrateLegacy(phoneId: string) {
+  try {
+    for (const w of ["camera", "tool"] as const) {
+      const old = localStorage.getItem(`st-${w}`);
+      if (old && !localStorage.getItem(key(w, phoneId))) localStorage.setItem(key(w, phoneId), old);
+      localStorage.removeItem(`st-${w}`);
+    }
   } catch {}
 }

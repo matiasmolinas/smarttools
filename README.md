@@ -19,8 +19,8 @@ your hands.
 
 | Page | What it is |
 |---|---|
-| [`/`](https://smarttools-nav.vercel.app) | Landing page with a three.js line scene of the drill, wall, markers and docked phone, plus the 2D HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Lens** and **Calibrate**) |
+| [`/`](https://smarttools-nav.vercel.app) | Landing page with a three.js line scene of the drill, wall, markers and docked phone, plus the 2D HUD, and a [gallery of scenarios](https://smarttools-nav.vercel.app/#scenarios) running the real engine in 3D + 2D |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Phone**, **Lens**, **Calibrate**, export / import) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
 
 ## How the demo works
@@ -49,6 +49,42 @@ loop.
 pipeline, and compares the result with ground truth. It passes at < 1 mm and < 0.1°, and typically measures
 0.06–0.21 mm and ≤ 0.03°. Real-camera accuracy (lens distortion, vibration) has not been measured, so these figures describe the prototype
 under ideal conditions, not the SmartTools application.
+
+## Scenario gallery
+
+The home page has a gallery of nine scenarios. Each one runs the real engine (WASM) on scripted tool motion and is
+drawn three ways from the same snapshots:
+
+- a 3D scene (the scene definition's `visual3d`: STL dock, drill, sheet);
+- a 2D view (the phone HUD over the simulated camera image, or a plan from `visual2d`);
+- a panel with the numbers the engine decides with.
+
+| Scenario | What it shows |
+|---|---|
+| The core loop | Three holes, square and to depth |
+| Calibrate | Circle around the tip, then twist: the gate opens only after |
+| Angled hole | A mark planned 15° off the normal, no special case |
+| The gate says no | Covered markers, a shaking hand, a tilted bit while drilling |
+| What the camera sees | Dock v0.2 (tip out of view, no markers) vs v0.3 |
+| One dock, any phone | Redmi Note 13 vs Redmi 15 profiles in the same dock |
+| athos (planned) | The recipe as When / Do / Check / Because steps, each Check passed by the engine |
+| contract-gatekeeper (planned) | An agent-written tool plugin fast-tracked, another rejected for touching the geometry core |
+| agentvcs (planned) | One step record per hole from live engine events; blame / bisect across versions (illustrative) |
+
+The code is in `lib/gallery/` (scenarios and a headless runner) and `components/gallery/`. `tests/gallery.test.mts`
+runs every scenario on the engine and checks what each one claims.
+
+## Phone profiles
+
+The printed dock is the same for every phone. A profile (`lib/phones.ts`) gives the phone's size and the position of
+its main lens. With it, the simulator, the 3D view and the rig check place the camera correctly. On the phone,
+`/hud` → **Phone** selects the profile. Lens and dock calibrations are stored per phone, and **Export** / **Import**
+move them as JSON.
+
+After **Calibrate**, the app compares the measured tip with what the profile predicts across the tilt range. It warns
+if they differ by more than 15 mm, which usually means the phone is the wrong way round, the dock moved or the profile
+is wrong. The Redmi 15 profile is provisional until measured. To check a phone's rig before printing, run
+`npm run test:e2e -- --phone redmi-15 --only rig`.
 
 ## Hardware
 
@@ -106,7 +142,7 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 43 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 20 tests (transforms, engine wrapper, scene definitions, dock geometry, session, renderers)
+npm run test:unit     # TypeScript: 31 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, session, renderers, gallery)
 npm run test:e2e      # 9 end-to-end scenarios, 34 checks on the dock v0.3 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 
@@ -136,6 +172,7 @@ shutter, compression, autofocus, a real hand).
 | `components/NavDemo.tsx` | three.js line scene on the landing page |
 | `components/HudScreen.tsx` | Full-screen phone HUD (`/hud`): camera, simulated camera, calibration flows |
 | `components/EngineLab.tsx` | `/engine`: the engine drawn in 3D, as a 2D plan and as the HUD |
+| `components/gallery/` | The home-page scenario gallery (player + cards) |
 | `lib/sim.ts` | Scripted drilling animation for the landing page |
 | `lib/board.ts` | Marker sheet geometry and targets |
 

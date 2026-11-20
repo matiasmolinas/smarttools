@@ -19,6 +19,7 @@ const QUICK = args.includes("--quick");
 const ONLY = args.includes("--only") ? args[args.indexOf("--only") + 1].split(",") : null;
 const TILT = args.includes("--tilt") ? Number(args[args.indexOf("--tilt") + 1]) : 0;
 const RIG_NAME = args.includes("--rig") ? args[args.indexOf("--rig") + 1] : "dock";
+const PHONE = args.includes("--phone") ? args[args.indexOf("--phone") + 1] : undefined;
 const CAM_FPS = QUICK ? 8 : 15;
 
 const require = createRequire(import.meta.url);
@@ -28,7 +29,7 @@ const codes = markerCodes(new AR.Dictionary("ARUCO_MIP_36h12").codeList);
 const detector = () => new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" });
 // dock: the real dock v0.3 (hardware/dock/dock.py), tilted on its hinge with --tilt
 // ideal: the idealised rig of the first simulations; v02: dock v0.2 as it was designed
-const RIGS: Record<string, () => Rig> = { dock: () => (TILT ? dockRigAt(TILT) : DEFAULT_RIG), ideal: () => (TILT ? tiltedRig(TILT) : IDEAL_RIG), v02: () => V02_RIG };
+const RIGS: Record<string, () => Rig> = { dock: () => (TILT || PHONE ? dockRigAt(TILT, DEFAULT_RIG, PHONE) : DEFAULT_RIG), ideal: () => (TILT ? tiltedRig(TILT) : IDEAL_RIG), v02: () => V02_RIG };
 if (!RIGS[RIG_NAME]) throw new Error(`unknown rig ${RIG_NAME}`);
 const rig = RIGS[RIG_NAME]();
 const W = rig.width, H = rig.height;
@@ -142,7 +143,7 @@ let calibrated = { camera: false, tool: false };
 const t0 = performance.now();
 
 // =============================================================================================
-await scenario("rig", `Rig geometry (${RIG_NAME}${TILT ? `, tilt ${TILT}°` : ""}): the bit tip in the image, markers in view on every mark`, () => {
+await scenario("rig", `Rig geometry (${RIG_NAME}${PHONE ? `, ${PHONE}` : ""}${TILT ? `, tilt ${TILT}°` : ""}): the bit tip in the image, markers in view on every mark`, () => {
   const v = tipInView(rig.tool);
   const halfV = (Math.atan2(rig.height / 2, rig.camera.f) * 180) / Math.PI;
   const halfH = (Math.atan2(rig.width / 2, rig.camera.f) * 180) / Math.PI;
@@ -347,10 +348,10 @@ await scenario("decoupled", "Rendering decoupled: a 20 Hz renderer and a 300 ms 
   s.dispose();
 });
 
-await scenario("reorder", "Out-of-order delivery: frames arrive with 0 to 2.5 frame intervals of random latency", () => {
+await scenario("reorder", "Out-of-order delivery: frames arrive with 0 to 170 ms of random latency", () => {
   const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool });
   const { m, onTick } = metricsFor(s);
-  drive({ session: s, toolAt: runToolAt(DEFAULT_DISTURBANCE), from: 0, to: QUICK ? 6 : 11, latency: 0.0, jitter: 2.5 / CAM_FPS, onTick: (x, w) => onTick(x, w), seed: 9 });
+  drive({ session: s, toolAt: runToolAt(DEFAULT_DISTURBANCE), from: 0, to: QUICK ? 6 : 11, latency: 0.0, jitter: 2.5 / 15, onTick: (x, w) => onTick(x, w), seed: 9 });
   const st = s.snapshot!.stats;
   check("late frames are merged, not dropped", st.lateMerged > 0 && st.lateDropped === 0, `${st.lateMerged} merged, ${st.lateDropped} dropped of ${st.measurements}`);
   // stress case: data up to ~230 ms old while drilling at ~14 mm/s, beyond the 120 ms prediction cap
@@ -437,7 +438,7 @@ await scenario("safety", "Safety: markers hidden, uncalibrated dock, shaking han
 
 // =============================================================================================
 const failed = rows.filter((r) => !r.pass);
-console.log(`\n${rows.length - failed.length}/${rows.length} checks passed in ${((performance.now() - t0) / 1000).toFixed(0)} s (rig ${RIG_NAME}${TILT ? `, tilt ${TILT}°` : ""})`);
+console.log(`\n${rows.length - failed.length}/${rows.length} checks passed in ${((performance.now() - t0) / 1000).toFixed(0)} s (rig ${RIG_NAME}${PHONE ? `, phone ${PHONE}` : ""}${TILT ? `, tilt ${TILT}°` : ""})`);
 for (const f of failed) console.log(`  FAILED [${f.scenario}] ${f.name}: ${f.detail}`);
 console.log(failed.length ? "E2E FAIL" : "E2E PASS");
 process.exit(failed.length ? 1 : 0);

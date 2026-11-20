@@ -227,6 +227,9 @@ def rig_geometry(body_d=BODY_D_REF, tip_x=TIP_X_REF, phone_len=PHONE_REF_LEN):
         "cameraInArm": cam_arm,
         "phoneCentreInArm": [CH_X, FIX_FACE + phone_len / 2, BASE_Z1 + PHONE_REF_H / 2],
         "slidingJawInArm": [0.0, FIX_FACE + phone_len, 0.0],
+        # the rail, to place any phone in the same dock (lib/phones.ts, lib/dockrig.ts)
+        "rail": {"chX": CH_X, "fixFace": FIX_FACE, "baseZ1": BASE_Z1, "camProtrude": CAM_PROTRUDE,
+                 "phoneLength": [PHONE_LEN_MIN, PHONE_LEN_MAX], "phoneThicknessMax": PHONE_THICK_MAX},
         "tipInSaddle": [tip_x, 0.0, axis_z],
         "lowerJawInSaddle": [0.0, 0.0, 2 * axis_z],
     }

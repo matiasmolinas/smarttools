@@ -454,6 +454,8 @@ Each phase ends with the scene test passing 17/17 (plus its new checks), so noth
 | Scene definitions and visual representations (§17) | `lib/scenedef.ts` | `tests/scenedef.test.mts` |
 | Renderers | `lib/render/render3d.ts` (three.js), `lib/render/render2d.ts` (plan), `lib/render/hudview.ts` + `lib/hud.ts` (phone HUD) | `tests/render.test.mts`, `tests/session.test.mts` |
 | §12 E2E with the simulator | `scripts/e2e.mts` (scenarios below), simulator in `lib/scene.ts` + `engine/src/sim.rs` | 34 checks on the dock v0.3 at 0° and 10° of tilt |
+| Phone profiles (one dock, any phone) | `lib/phones.ts`, `dockRig({ phone })` in `lib/dockrig.ts`; per-phone calibration storage, export / import and the calibration sanity check in `lib/tracker.ts` | `tests/phones.test.mts`, E2E `--phone` |
+| Home-page scenario gallery | `lib/gallery/` (scenarios + headless runner on the engine), `components/gallery/` | `tests/gallery.test.mts` |
 | Rig geometry from the hardware | `hardware/dock/dock.py` → `rig.json`, `lib/dockgeom.ts`; transforms in `lib/dockrig.ts`; used by the simulator (`DEFAULT_RIG`), the 3D view and the tests | `tests/scenedef.test.mts` (dock and drill from one geometry), E2E `rig` |
 
 ### 16.2 Differences from the first draft, with the reason
