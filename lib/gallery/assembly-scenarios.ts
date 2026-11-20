@@ -20,7 +20,7 @@ const seg: Segment = { from: 0, rig, label: "dock v0.4" };
 const SCENE = () => assemblyScene({ tool: rig.tool });
 const REAL = assemblyScene({ tool: rig.tool, basePose: BASE_ON_BENCH });
 const PHONE_HIDDEN = ["camera", "dock", "dock-lower", "dock-arm", "dock-jaw", "tool"];
-const GHOST = ["base", "bracket"];
+const GHOST = ["base", "bracket", BASE_BODY.name];
 const VIEW = { pos: [0.6, -0.5, 0.42] as V3, target: [0.16, -0.01, 0.04] as V3, up: [0, 0, 1] as V3 };
 const fmt = (x: number, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : "–");
 

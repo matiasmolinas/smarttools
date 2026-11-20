@@ -120,6 +120,18 @@ function material(m: Material): THREE.Material {
     opacity: m.opacity ?? 1,
   });
   mat.userData.baseOpacity = m.opacity ?? 1;
+  // Depth order for surfaces that coincide (the CAD ghost over the real part, edge lines over faces): solid
+  // faces are pushed slightly back and the ghost slightly forward, so the same one always wins. Without it the
+  // GPU picks per pixel and the phone's moving camera shows it as flickering stripes (z-fighting).
+  mat.polygonOffset = true;
+  if (m === GHOST) {
+    mat.polygonOffsetFactor = -1;
+    mat.polygonOffsetUnits = -4;
+    mat.depthWrite = false;
+  } else {
+    mat.polygonOffsetFactor = 1;
+    mat.polygonOffsetUnits = 1;
+  }
   if (m.xray) {
     mat.depthTest = false;
     mat.depthWrite = false;
@@ -198,6 +210,8 @@ function buildVisual(v: Visual3D, o: Scene3DOptions, into: THREE.Object3D, brigh
       return null;
     }
     case "markerPatch": {
+      // a ghost of a sticker is not drawn: the real sticker is (two copies at one place would fight)
+      if (bright) return null;
       // paper + markers drawn into a texture (crisp at any zoom, one mesh)
       const ppm = 2400; // pixels per metre
       const c = document.createElement("canvas");
