@@ -8,14 +8,23 @@
 //! - **World** = the marker sheet: origin at its centre, X right, Y up, Z out of the surface (metres).
 //! - **Camera** (OpenCV convention): x right, y down, z forward. `x_cam = R * X_world + t`.
 //!
-//! This is a port of the TypeScript prototype (`lib/pose.ts`, `lib/subpix.ts`, `lib/board.ts`).
+//! Modules: [`pose`] (homography, pose, refinement), [`subpix`] (corners), [`camera`] (lens
+//! distortion), [`calib`] (camera, tip and axis calibration), [`nav`] (navigation state, filtering,
+//! the go / no-go gate) and [`sim`] (the scene simulator used to test all of it).
+//!
+//! The pose and corner code is a port of the TypeScript prototype (`lib/pose.ts`, `lib/subpix.ts`, `lib/board.ts`).
 //! `scripts/engine-parity.mts` checks that both give the same results.
 
 pub mod board;
+pub mod calib;
+pub mod camera;
 pub mod ffi;
 pub mod geom;
+pub mod nav;
 pub mod pose;
+pub mod sim;
 pub mod subpix;
 
 pub use geom::{M3, P2, V3};
+pub use camera::Camera;
 pub use pose::{Intrinsics, Pose};

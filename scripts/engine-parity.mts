@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { NavCore } from "../lib/engine.ts";
 import { homography, poseFromHomography, refinePose, focalFromHomography, project, type M3, type Pose, type V3 } from "../lib/pose.ts";
 import { refineCorners } from "../lib/subpix.ts";
+import { BOARD_MARKERS, BOARD_TARGETS, MARKER_SIZE } from "../lib/board.ts";
 
 const core = await NavCore.load(readFileSync(new URL("../public/engine/nav_core.wasm", import.meta.url)));
 
@@ -91,6 +92,19 @@ for (let c = 0; c < 60; c++) {
   worst.corners = Math.max(worst.corners, maxDiff(a.flatMap((p) => [p.x, p.y]), b.flatMap((p) => [p.x, p.y])));
 }
 
+// ---- the marker sheet compiled into the core must match lib/board.ts ----
+{
+  const b = core.boardInfo();
+  const same =
+    b.markerSize === MARKER_SIZE &&
+    b.markers.length === BOARD_MARKERS.length &&
+    BOARD_MARKERS.every((m) => b.markers[m.id].x === m.x && b.markers[m.id].y === m.y) &&
+    b.targets.length === BOARD_TARGETS.length &&
+    BOARD_TARGETS.every((t, i) => b.targets[i].x === t.x && b.targets[i].y === t.y);
+  console.log(`${same ? "ok  " : "FAIL"} board    ${b.markers.length} markers of ${b.markerSize * 1000} mm, ${b.targets.length} targets`);
+  if (!same) process.exitCode = 1;
+}
+
 const LIMITS = { H: 1e-9, pose0: 1e-9, refined: 1e-7, focal: 1e-9, corners: 1e-9 };
 let ok = true;
 for (const k of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
@@ -101,4 +115,4 @@ for (const k of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
 console.log(`${compared} pose cases (Gauss-Newton moved the pose in ${improved}), 60 corner cases (refined in ${refinedCorners})`);
 ok &&= improved > compared * 0.9 && refinedCorners > 50;
 console.log(ok ? "PARITY PASS" : "PARITY FAIL");
-process.exit(ok ? 0 : 1);
+process.exit(ok && !process.exitCode ? 0 : 1);

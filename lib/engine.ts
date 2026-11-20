@@ -1,9 +1,118 @@
 // TypeScript wrapper for the Rust navigation core (engine/, compiled to public/engine/nav_core.wasm).
-// Same types and results as lib/pose.ts and lib/subpix.ts; scripts/engine-parity.mts checks it.
+// Pose and corner functions give the same results as lib/pose.ts and lib/subpix.ts
+// (scripts/engine-parity.mts); the rest (lens model, calibration, navigation, gate, simulator) is
+// tested end to end by scripts/scene-test.mts.
 
-import type { Intrinsics, M3, Pose } from "./pose";
+import type { Intrinsics, M3, Pose, V3 } from "./pose";
 
 type P = { x: number; y: number };
+
+/** Pinhole + Brown-Conrady distortion. */
+export interface Camera {
+  f: number;
+  cx: number;
+  cy: number;
+  k1: number;
+  k2: number;
+  p1: number;
+  p2: number;
+}
+export const pinhole = (f: number, cx: number, cy: number): Camera => ({ f, cx, cy, k1: 0, k2: 0, p1: 0, p2: 0 });
+export const cameraFromHfov = (w: number, h: number, hfovDeg: number): Camera =>
+  pinhole(w / 2 / Math.tan(((hfovDeg / 2) * Math.PI) / 180), w / 2, h / 2);
+
+/** Where the bit is relative to the camera (dock calibration). */
+export interface ToolCalib {
+  tipCam: V3;
+  axisCam: V3;
+}
+
+export interface NavState {
+  tip: V3;
+  axis: V3;
+  aim: P;
+  yawDeg: number;
+  pitchDeg: number;
+  angleErrDeg: number;
+  offsetMm: number;
+  gapMm: number;
+  depthMm: number;
+}
+
+export interface GateInput {
+  calibrated: boolean;
+  poseAgeS: number;
+  rmsPx: number;
+  markers: number;
+  angleErrDeg: number;
+  offsetMm: number;
+  jitterMm: number;
+  jitterDeg: number;
+}
+export interface GateLimits {
+  maxAngleDeg: number;
+  maxOffsetMm: number;
+  maxRmsPx: number;
+  minMarkers: number;
+  maxPoseAgeS: number;
+  maxJitterMm: number;
+  maxJitterDeg: number;
+}
+export const GATE_DEFAULTS: GateLimits = {
+  maxAngleDeg: 0.5,
+  maxOffsetMm: 1.0,
+  maxRmsPx: 1.5,
+  minMarkers: 2,
+  maxPoseAgeS: 0.15,
+  maxJitterMm: 0.4,
+  maxJitterDeg: 0.25,
+};
+export const GATE_REASONS = {
+  NOT_CALIBRATED: 1,
+  STALE: 2,
+  POOR_FIT: 4,
+  FEW_MARKERS: 8,
+  TILTED: 16,
+  OFF_TARGET: 32,
+  UNSTEADY: 64,
+} as const;
+export function gateReasonNames(bits: number): string[] {
+  return Object.entries(GATE_REASONS)
+    .filter(([, b]) => bits & b)
+    .map(([k]) => k);
+}
+
+export interface RenderOptions {
+  width: number;
+  height: number;
+  /** supersampling per axis */
+  ss?: number;
+  /** 36 bits per marker id, 1 = white (scene.markerCodes) */
+  codes: Uint8Array;
+  wall?: number;
+  paper?: number;
+  ink?: number;
+  crosses?: boolean;
+  gain?: number;
+  vignette?: number;
+  gradient?: number;
+  noise?: number;
+  seed?: number;
+  bit?: { tipCam: V3; axisCam: V3; length: number; radius: number } | null;
+  occluders?: { cx: number; cy: number; r: number }[];
+}
+
+export interface PoseFilterHandle {
+  step(t: number, tip: V3, axis: V3): { tip: V3; axis: V3 };
+  reset(): void;
+  free(): void;
+}
+export interface SteadinessHandle {
+  push(t: number, tip: V3, axis: V3): void;
+  jitter(): { mm: number; deg: number; span: number };
+  reset(): void;
+  free(): void;
+}
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -16,9 +125,29 @@ interface Exports {
   st_solve_pose(world: number, img: number, n: number, f: number, cx: number, cy: number, out: number): number;
   st_focal_from_homography(h: number, cx: number, cy: number): number;
   st_refine_corners(rgba: number, width: number, height: number, corners: number, out: number): number;
+  st_undistort_points(cam: number, pts: number, n: number, out: number): number;
+  st_project_points(cam: number, pose: number, world: number, n: number, out: number): number;
+  st_calibrate_camera(init: number, nViews: number, counts: number, world: number, img: number, flags: number, outCam: number, outRms: number): number;
+  st_pivot(poses: number, n: number, out: number): number;
+  st_axis_from_roll(poses: number, n: number, out: number): number;
+  st_nav_evaluate(pose: number, tool: number, target: number, out: number): number;
+  st_nav_evaluate_world(tip: number, axis: number, target: number, out: number): number;
+  st_gate(input: number, limits: number): number;
+  st_filter_new(tipMin: number, tipBeta: number, axisMin: number, axisBeta: number, dCut: number): number;
+  st_filter_step(h: number, t: number, tip: number, axis: number, out: number): void;
+  st_filter_reset(h: number): void;
+  st_filter_free(h: number): void;
+  st_steady_new(window: number): number;
+  st_steady_push(h: number, t: number, tip: number, axis: number): void;
+  st_steady_jitter(h: number, out: number): void;
+  st_steady_reset(h: number): void;
+  st_steady_free(h: number): void;
+  st_rig_pose(yaw: number, pitch: number, twist: number, tipWorld: number, tipCam: number, axisCam: number, out: number): number;
+  st_render(cam: number, poses: number, n: number, w: number, h: number, ss: number, codes: number, cfg: number, out: number): number;
+  st_board_info(out: number, cap: number): number;
 }
 
-export const ENGINE_ABI = 1;
+export const ENGINE_ABI = 2;
 export const ENGINE_URL = "/engine/nav_core.wasm";
 
 export class NavCore {
@@ -125,6 +254,216 @@ export class NavCore {
       if (this.x.st_refine_corners(d, img.width, img.height, c, o) !== 1) return corners;
       const a = this.f64(o, 8);
       return [0, 1, 2, 3].map((k) => ({ x: a[k * 2], y: a[k * 2 + 1] }));
+    });
+  }
+
+  // ---- staged image: copy a frame into WASM memory once, refine every marker on it ----
+  private img = { ptr: 0, bytes: 0 };
+  private stage(img: { width: number; height: number; data: Uint8ClampedArray }) {
+    const bytes = img.width * img.height * 4;
+    if (bytes > this.img.bytes) {
+      if (this.img.ptr) this.x.st_free(this.img.ptr, this.img.bytes);
+      this.img = { ptr: this.x.st_alloc(bytes), bytes };
+    }
+    new Uint8Array(this.x.memory.buffer, this.img.ptr, bytes).set(img.data);
+  }
+  /** Sub-pixel corners of several markers on one frame (one copy of the image). */
+  refineMany(img: { width: number; height: number; data: Uint8ClampedArray }, quads: P[][]): P[][] {
+    this.stage(img);
+    return this.with([64, 64], ([c, o]) =>
+      quads.map((q) => {
+        this.putPts(c, q);
+        if (this.x.st_refine_corners(this.img.ptr, img.width, img.height, c, o) !== 1) return q;
+        const a = this.f64(o, 8);
+        return [0, 1, 2, 3].map((k) => ({ x: a[k * 2], y: a[k * 2 + 1] }));
+      }),
+    );
+  }
+
+  // ---- lens model ----
+  private putCam(ptr: number, c: Camera) {
+    this.f64(ptr, 7).set([c.f, c.cx, c.cy, c.k1, c.k2, c.p1, c.p2]);
+  }
+  private putV3(ptr: number, v: V3) {
+    this.f64(ptr, 3).set(v);
+  }
+  undistortPoints(cam: Camera, pts: P[]): P[] {
+    const n = pts.length;
+    if (!n) return [];
+    return this.with([56, n * 16], ([c, p]) => {
+      this.putCam(c, cam);
+      this.putPts(p, pts);
+      this.x.st_undistort_points(c, p, n, p);
+      const a = this.f64(p, n * 2);
+      return pts.map((_, i) => ({ x: a[i * 2], y: a[i * 2 + 1] }));
+    });
+  }
+  /** World points -> pixels with distortion (null behind the camera). */
+  projectPoints(cam: Camera, pose: Pose, world: V3[]): (P | null)[] {
+    const n = world.length;
+    if (!n) return [];
+    return this.with([56, 104, n * 24, n * 16], ([c, ps, w, o]) => {
+      this.putCam(c, cam);
+      this.putPose(ps, pose);
+      this.f64(w, n * 3).set(world.flat());
+      this.x.st_project_points(c, ps, w, n, o);
+      const a = this.f64(o, n * 2);
+      return world.map((_, i) => (Number.isNaN(a[i * 2]) ? null : { x: a[i * 2], y: a[i * 2 + 1] }));
+    });
+  }
+
+  // ---- calibration ----
+  calibrateCamera(views: { world: P[]; img: P[] }[], init: Camera, opts: { fixPrincipalPoint?: boolean; k1Only?: boolean } = {}): { camera: Camera; rms: number } | null {
+    const n = views.reduce((s, v) => s + v.world.length, 0);
+    return this.with([56, views.length * 4, n * 16, n * 16, 56, 8], ([ci, cnt, w, im, oc, orms]) => {
+      this.putCam(ci, init);
+      new Uint32Array(this.x.memory.buffer, cnt, views.length).set(views.map((v) => v.world.length));
+      this.putPts(w, views.flatMap((v) => v.world));
+      this.putPts(im, views.flatMap((v) => v.img));
+      const flags = (opts.fixPrincipalPoint ? 1 : 0) | (opts.k1Only ? 2 : 0);
+      if (this.x.st_calibrate_camera(ci, views.length, cnt, w, im, flags, oc, orms) !== 1) return null;
+      const a = this.f64(oc, 7);
+      return { camera: { f: a[0], cx: a[1], cy: a[2], k1: a[3], k2: a[4], p1: a[5], p2: a[6] }, rms: this.f64(orms, 1)[0] };
+    });
+  }
+  private putPoses(ptr: number, poses: Pose[]) {
+    poses.forEach((p, i) => this.putPose(ptr + i * 104, p));
+  }
+  /** Tip in the camera frame from a wobble around a fixed point. */
+  pivot(poses: Pose[]): { tipCam: V3; pivotWorld: V3; rmsM: number; spreadDeg: number } | null {
+    return this.with([Math.max(1, poses.length) * 104, 64], ([ps, o]) => {
+      this.putPoses(ps, poses);
+      if (this.x.st_pivot(ps, poses.length, o) !== 1) return null;
+      const a = this.f64(o, 8);
+      return { tipCam: [a[0], a[1], a[2]], pivotWorld: [a[3], a[4], a[5]], rmsM: a[6], spreadDeg: a[7] };
+    });
+  }
+  /** Bit axis in the camera frame from a twist around the bit. */
+  axisFromRoll(poses: Pose[]): { axisCam: V3; spreadDeg: number; rms: number } | null {
+    return this.with([Math.max(1, poses.length) * 104, 40], ([ps, o]) => {
+      this.putPoses(ps, poses);
+      if (this.x.st_axis_from_roll(ps, poses.length, o) !== 1) return null;
+      const a = this.f64(o, 5);
+      return { axisCam: [a[0], a[1], a[2]], spreadDeg: a[3], rms: a[4] };
+    });
+  }
+
+  // ---- navigation ----
+  private getNav(ptr: number): NavState {
+    const a = this.f64(ptr, 14);
+    return {
+      tip: [a[0], a[1], a[2]],
+      axis: [a[3], a[4], a[5]],
+      aim: { x: a[6], y: a[7] },
+      yawDeg: a[8],
+      pitchDeg: a[9],
+      angleErrDeg: a[10],
+      offsetMm: a[11],
+      gapMm: a[12],
+      depthMm: a[13],
+    };
+  }
+  navEvaluate(pose: Pose, tool: ToolCalib, target: P): NavState {
+    return this.with([104, 48, 16, 112], ([ps, tl, tg, o]) => {
+      this.putPose(ps, pose);
+      this.f64(tl, 6).set([...tool.tipCam, ...tool.axisCam]);
+      this.f64(tg, 2).set([target.x, target.y]);
+      this.x.st_nav_evaluate(ps, tl, tg, o);
+      return this.getNav(o);
+    });
+  }
+  navEvaluateWorld(tip: V3, axis: V3, target: P): NavState {
+    return this.with([24, 24, 16, 112], ([t, a, tg, o]) => {
+      this.putV3(t, tip);
+      this.putV3(a, axis);
+      this.f64(tg, 2).set([target.x, target.y]);
+      this.x.st_nav_evaluate_world(t, a, tg, o);
+      return this.getNav(o);
+    });
+  }
+  /** Go / no-go: 0 = ready, otherwise GATE_REASONS bits. */
+  gate(i: GateInput, l: GateLimits = GATE_DEFAULTS): number {
+    return this.with([64, 56], ([pi, pl]) => {
+      this.f64(pi, 8).set([i.calibrated ? 1 : 0, i.poseAgeS, i.rmsPx, i.markers, i.angleErrDeg, i.offsetMm, i.jitterMm, i.jitterDeg]);
+      this.f64(pl, 7).set([l.maxAngleDeg, l.maxOffsetMm, l.maxRmsPx, l.minMarkers, l.maxPoseAgeS, l.maxJitterMm, l.maxJitterDeg]);
+      return this.x.st_gate(pi, pl) >>> 0;
+    });
+  }
+  /** One Euro filter on tip (m) and axis; defaults tuned with the scene simulator. */
+  createFilter(p = { tipMinCutoff: 2, tipBeta: 3000, axisMinCutoff: 2, axisBeta: 300, dCutoff: 1 }): PoseFilterHandle {
+    const h = this.x.st_filter_new(p.tipMinCutoff, p.tipBeta, p.axisMinCutoff, p.axisBeta, p.dCutoff);
+    return {
+      step: (t, tip, axis) =>
+        this.with([24, 24, 48], ([a, b, o]) => {
+          this.putV3(a, tip);
+          this.putV3(b, axis);
+          this.x.st_filter_step(h, t, a, b, o);
+          const r = this.f64(o, 6);
+          return { tip: [r[0], r[1], r[2]] as V3, axis: [r[3], r[4], r[5]] as V3 };
+        }),
+      reset: () => this.x.st_filter_reset(h),
+      free: () => this.x.st_filter_free(h),
+    };
+  }
+  createSteadiness(windowS = 0.3): SteadinessHandle {
+    const h = this.x.st_steady_new(windowS);
+    return {
+      push: (t, tip, axis) =>
+        this.with([24, 24], ([a, b]) => {
+          this.putV3(a, tip);
+          this.putV3(b, axis);
+          this.x.st_steady_push(h, t, a, b);
+        }),
+      jitter: () =>
+        this.with([24], ([o]) => {
+          this.x.st_steady_jitter(h, o);
+          const r = this.f64(o, 3);
+          return { mm: r[0], deg: r[1], span: r[2] };
+        }),
+      reset: () => this.x.st_steady_reset(h),
+      free: () => this.x.st_steady_free(h),
+    };
+  }
+
+  // ---- simulator ----
+  /** Camera pose of the docked phone for a tool held at yaw/pitch/twist (deg) with its tip at tipWorld. */
+  rigPose(yawDeg: number, pitchDeg: number, twistDeg: number, tipWorld: V3, tool: ToolCalib): Pose {
+    return this.with([24, 24, 24, 104], ([tw, tc, ac, o]) => {
+      this.putV3(tw, tipWorld);
+      this.putV3(tc, tool.tipCam);
+      this.putV3(ac, tool.axisCam);
+      this.x.st_rig_pose(yawDeg, pitchDeg, twistDeg, tw, tc, ac, o);
+      return this.getPose(o);
+    });
+  }
+  /** Render a simulated camera frame (RGBA). Several poses = motion blur over the exposure. */
+  render(cam: Camera, poses: Pose[], o: RenderOptions): Uint8ClampedArray {
+    const bytes = o.width * o.height * 4;
+    return this.with([56, poses.length * 104, o.codes.length, 256, bytes], ([c, ps, cd, cfg, out]) => {
+      this.putCam(c, cam);
+      this.putPoses(ps, poses);
+      new Uint8Array(this.x.memory.buffer, cd, o.codes.length).set(o.codes);
+      const occ = (o.occluders ?? []).slice(0, 4);
+      const b = o.bit;
+      const v = new Array(32).fill(0);
+      v.splice(0, 19, o.wall ?? 150, o.paper ?? 232, o.ink ?? 22, o.crosses === false ? 0 : 1, o.gain ?? 1, o.vignette ?? 0.25, o.gradient ?? 0.15, o.noise ?? 3, o.seed ?? 1,
+        b ? 1 : 0, ...(b ? b.tipCam : [0, 0, 0]), ...(b ? b.axisCam : [0, 0, 1]), b?.length ?? 0, b?.radius ?? 0, occ.length);
+      occ.forEach((q, i) => v.splice(19 + i * 3, 3, q.cx, q.cy, q.r));
+      this.f64(cfg, 32).set(v);
+      this.x.st_render(c, ps, poses.length, o.width, o.height, o.ss ?? 2, cd, cfg, out);
+      return new Uint8ClampedArray(this.x.memory.buffer.slice(out, out + bytes));
+    });
+  }
+
+  /** Board geometry compiled into the core (for parity with lib/board.ts). */
+  boardInfo(): { markerSize: number; markers: P[]; targets: P[] } {
+    return this.with([8 * 256], ([o]) => {
+      const n = this.x.st_board_info(o, 256);
+      if (n < 0) throw new Error("board info buffer too small");
+      const a = this.f64(o, n);
+      const count = a[0];
+      const pts = (from: number, k: number) => Array.from({ length: k }, (_, i) => ({ x: a[from + i * 2], y: a[from + i * 2 + 1] }));
+      return { markerSize: a[1], markers: pts(2, count), targets: pts(2 + count * 2, (n - 2 - count * 2) / 2) };
     });
   }
 }

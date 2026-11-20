@@ -36,33 +36,30 @@ function Sheet() {
                 <rect key={i} x={x0 + cell * (1 + (i % 6))} y={y0 + cell * (1 + Math.floor(i / 6))} width={cell} height={cell} fill="#fff" />
               ) : null,
             )}
-            <text x={x0} y={y0 + mm(MARKER_SIZE) + 4} fontSize="2.6" fontFamily="monospace" fill="#888">
-              id {m.id}
-            </text>
           </g>
         );
       })}
       {BOARD_TARGETS.map((t) => (
         <g key={t.label} stroke="#111" strokeWidth="0.3" fill="none">
-          <circle cx={sx(t.x)} cy={sy(t.y)} r="4" />
-          <line x1={sx(t.x) - 9} y1={sy(t.y)} x2={sx(t.x) + 9} y2={sy(t.y)} />
-          <line x1={sx(t.x)} y1={sy(t.y) - 9} x2={sx(t.x)} y2={sy(t.y) + 9} />
-          <text x={sx(t.x) + 6} y={sy(t.y) - 5} fontSize="4" fontFamily="sans-serif" fill="#111" stroke="none">
+          <circle cx={sx(t.x)} cy={sy(t.y)} r="3" />
+          <line x1={sx(t.x) - 5.5} y1={sy(t.y)} x2={sx(t.x) + 5.5} y2={sy(t.y)} />
+          <line x1={sx(t.x)} y1={sy(t.y) - 5.5} x2={sx(t.x)} y2={sy(t.y) + 5.5} />
+          <text x={sx(t.x) + 3.2} y={sy(t.y) - 3.2} fontSize="2.6" fontFamily="sans-serif" fill="#111" stroke="none">
             {t.label}
           </text>
         </g>
       ))}
-      {/* 50 mm scale check */}
+      {/* 50 mm scale check, in the left margin, clear of the markers' quiet zones */}
       <g stroke="#111" strokeWidth="0.3">
-        <line x1="80" y1="288" x2="130" y2="288" />
-        <line x1="80" y1="285.5" x2="80" y2="290.5" />
-        <line x1="130" y1="285.5" x2="130" y2="290.5" />
+        <line x1="14" y1="123.5" x2="14" y2="173.5" />
+        <line x1="11.5" y1="123.5" x2="16.5" y2="123.5" />
+        <line x1="11.5" y1="173.5" x2="16.5" y2="173.5" />
       </g>
-      <text x="105" y="284" fontSize="3" fontFamily="monospace" textAnchor="middle" fill="#111">
-        50 mm — measure to check the print scale
+      <text x="0" y="0" fontSize="3" fontFamily="monospace" textAnchor="middle" fill="#111" transform="translate(9 148.5) rotate(-90)">
+        50 mm: measure to check the print scale
       </text>
       <text x="105" y="8" fontSize="3.2" fontFamily="monospace" textAnchor="middle" fill="#666">
-        SmartTools · {DICTIONARY} · markers {MARKER_SIZE * 1000} mm · print at 100%
+        SmartTools sheet v2 · {DICTIONARY} · {BOARD_MARKERS.length} markers of {MARKER_SIZE * 1000} mm · print at 100%
       </text>
     </svg>
   );
@@ -83,19 +80,22 @@ export default function MarkersPage() {
         </p>
         <ol className="list-decimal space-y-2 pl-5 text-sm text-white/70">
           <li>Print on A4 at <b>100% / actual size</b> (no “fit to page”).</li>
-          <li>Measure the 50 mm line at the bottom. If it is not 50 mm, print again.</li>
+          <li>Measure the 50 mm line in the left margin. If it is not 50 mm, print again.</li>
           <li>Tape the sheet flat on the wall or board. The crosshairs A1–A3 are where the holes go.</li>
           <li>
             Open <a className="underline" href="/hud">/hud</a> on the phone, tap <b>View</b> until <b>Cam</b>, and
             point at the sheet.
           </li>
           <li>
-            With the phone in the dock, rest the bit tip on <b>A2</b> and tap <b>Calibrate</b> once.
+            With the phone in the dock, rest the bit tip on <b>A2</b> and tap <b>Calibrate</b>: wobble the drill around
+            the tip, then twist it around the bit.
           </li>
         </ol>
         <PrintButton />
         <p className="font-mono text-[11px] text-white/40">
-          Dictionary {DICTIONARY} · {BOARD_MARKERS.length} markers · {MARKER_SIZE * 1000} mm
+          Sheet v2 · dictionary {DICTIONARY} · {BOARD_MARKERS.length} markers · {MARKER_SIZE * 1000} mm. Dense grid: the
+          docked camera only sees a strip about 22 × 12 cm above the bit tip, so several markers stay in view on every
+          mark.
         </p>
       </section>
       <div className="sheet-wrap w-full max-w-[520px] shrink-0 overflow-hidden rounded-md border border-white/10 shadow-2xl [&_.sheet]:h-auto [&_.sheet]:w-full">
