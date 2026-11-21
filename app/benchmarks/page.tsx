@@ -4,7 +4,12 @@
 import type { Metadata } from "next";
 import SiteNav from "@/components/site/SiteNav";
 import SiteFooter from "@/components/site/SiteFooter";
+import dynamic from "next/dynamic";
 import BenchmarksView from "@/components/BenchmarksView";
+
+const CalibrationScene = dynamic(() => import("@/components/CalibrationScene"), {
+  loading: () => <div className="h-[420px] rounded-2xl border border-white/10 sm:h-[480px]" />,
+});
 
 export const metadata: Metadata = {
   title: "SmartTools benchmarks: motor off vs motor on, measured",
@@ -84,7 +89,7 @@ export default function Benchmarks() {
               bit&apos;s length or the mount&apos;s angle.
             </p>
           </div>
-          <CalibrationDiagram />
+          <CalibrationScene />
         </div>
       </section>
 
@@ -107,47 +112,5 @@ export default function Benchmarks() {
 
       <SiteFooter />
     </main>
-  );
-}
-
-function CalibrationDiagram() {
-  const c = { cyan: "#5ad8ff", green: "#3dffa8", amber: "#ffb547", ink: "rgba(233,242,255,0.75)", dim: "rgba(233,242,255,0.35)" };
-  return (
-    <svg viewBox="0 0 520 360" className="w-full rounded-2xl border border-white/10 bg-white/[0.02]" role="img" aria-label="Calibration: the drill circles around the tip on A2 (pivot), then twists around its bit (roll)">
-      {/* the sheet, in perspective */}
-      <path d="M40 300 L300 300 L480 250 L220 250 Z" fill="rgba(255,255,255,0.06)" stroke={c.dim} />
-      {[0, 1, 2, 3].map((i) => (
-        <rect key={i} x={110 + i * 70} y={268} width={22} height={14} fill={c.dim} opacity={0.6} transform="skewX(-35)" />
-      ))}
-      <circle cx={260} cy={276} r={5} fill="none" stroke={c.amber} strokeWidth={2} />
-      <text x={272} y={296} fill={c.amber} fontSize={12} fontFamily="monospace">
-        A2 (the tip rests here)
-      </text>
-      {/* pivot cone: three drill positions around the tip */}
-      {[-24, 0, 24].map((deg, i) => (
-        <g key={deg} transform={`rotate(${deg} 260 276)`} opacity={i === 1 ? 1 : 0.45}>
-          <line x1={260} y1={276} x2={260} y2={130} stroke={c.ink} strokeWidth={3} />
-          <rect x={244} y={92} width={32} height={40} rx={4} fill="none" stroke={c.ink} />
-          <rect x={276} y={60} width={16} height={42} rx={3} fill="none" stroke={c.cyan} />
-          <circle cx={284} cy={92} r={4} fill={c.cyan} />
-        </g>
-      ))}
-      <path d="M190 190 A 80 30 0 0 0 330 190" fill="none" stroke={c.green} strokeWidth={2} strokeDasharray="5 4" />
-      <text x={334} y={188} fill={c.green} fontSize={12} fontFamily="monospace">
-        1 · pivot: circle around the tip
-      </text>
-      {/* roll arrow around the bit */}
-      <path d="M244 160 A 18 7 0 1 0 278 160" fill="none" stroke={c.green} strokeWidth={2} />
-      <path d="M278 160 l-7 -4 m7 4 l-7 4" stroke={c.green} strokeWidth={2} />
-      <text x={20} y={150} fill={c.green} fontSize={12} fontFamily="monospace">
-        2 · roll: twist around the bit
-      </text>
-      <text x={296} y={50} fill={c.cyan} fontSize={12} fontFamily="monospace">
-        phone camera
-      </text>
-      <text x={20} y={340} fill={c.dim} fontSize={11} fontFamily="monospace">
-        what stays still: the tip (pivot), the bit&apos;s axis (roll)
-      </text>
-    </svg>
   );
 }
