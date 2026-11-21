@@ -64,6 +64,23 @@ export const SHEET_PLAN: Plan = {
   holes: BOARD_TARGETS.map((t) => ({ label: t.label, x: t.x * 1000, y: t.y * 1000, depthMm: 35, diameterMm: 6 })),
 };
 
+/** A demo job: four holes on a 40 × 40 mm square (a bracket pattern), 20 mm deep, in the sheet's gaps between
+ * markers, clear of A2 (the calibration and check target) and with 8 or more markers in view at every hole.
+ * Tape the sheet on a board at least 30 mm thick. */
+export const DEMO_PLAN: Plan = {
+  ...newPlan("Demo: 4 holes, 40 mm square, 20 mm deep", { kind: "manual", name: "SmartTools" }, "2026-11-21T00:00:00.000Z"),
+  id: "demo-4-holes",
+  holes: [
+    [0, 60],
+    [40, 60],
+    [40, 20],
+    [0, 20],
+  ].map(([x, y], i) => ({ label: `D${i + 1}`, x, y, depthMm: 20, diameterMm: 6 })),
+};
+
+/** The plans the app always has, before any of the person's own. */
+export const BUILT_IN_PLANS: Plan[] = [SHEET_PLAN, DEMO_PLAN];
+
 export type Checked = { ok: true; plan: Plan } | { ok: false; errors: string[] };
 
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);

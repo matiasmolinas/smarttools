@@ -18,7 +18,9 @@ import type { SimState } from "./sim";
 import { hudView } from "./render/hudview";
 import { DEFAULT_PHONE_ID, PHONES, phoneById, type PhoneProfile } from "./phones";
 import { checkCalibration, dockRig } from "./dockrig";
-import { smartToolsScene } from "./scenedef";
+import { smartToolsScene, toolLocal } from "./scenedef";
+import { BenchRecorder, filteredPose, toolPose } from "./bench";
+import { compose, fromPose, inverse } from "./xform";
 import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
 import { JobRecorder, defaultContext, type JobRecord } from "./jobrecord";
 
@@ -58,6 +60,10 @@ export class BrowserNav {
   plan: Plan = SHEET_PLAN;
   /** the job in progress: every hole of the plan, as the engine measures it */
   recorder: JobRecorder | null = null;
+  /** the bench lab (motor off / on): raw and filtered poses of every tracker frame, when open */
+  bench: BenchRecorder | null = null;
+  /** the engine's One Euro pose filter on (default) or off (raw poses on screen, for comparison) */
+  filterOn = true;
 
   private constructor(core: NavCore) {
     this.core = core;
@@ -73,6 +79,7 @@ export class BrowserNav {
     this.session?.dispose();
     this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), { camera, cameraCalibrated: true, tool, toolCalibrated: true, t0 });
     this.attachWorker(camera, true);
+    this.applyFilter();
   }
 
   private attachWorker(camera: Camera, calibrated: boolean) {
@@ -86,6 +93,7 @@ export class BrowserNav {
     this.scale = r.scale;
     this.session?.pushTrackerFrame(r.frame);
     this.frames++;
+    this.benchSample(r);
     if (r.pixels) this.onSimImage(new ImageData(new Uint8ClampedArray(r.pixels), r.width, r.height));
   }
 
@@ -114,6 +122,7 @@ export class BrowserNav {
       t0,
     });
     this.attachWorker(camera, !!cam);
+    this.applyFilter();
     this.startJob(t0);
     return this.session;
   }
@@ -146,6 +155,41 @@ export class BrowserNav {
     if (n > 0 && s.snapshot) this.recorder?.feed(s.snapshot);
     this.stepCalibration(tWall);
     return n;
+  }
+
+  // ---------------- the bench lab ----------------
+  private benchSample(r: WorkerResult) {
+    const b = this.bench, s = this.session;
+    if (!b || !s) return;
+    const f = r.frame;
+    const now = performance.now() / 1000;
+    // raw: this frame's marker pose and the tool calibration, nothing else (sheet = world)
+    const raw = f.pose ? toolPose(compose(inverse(fromPose(f.pose)), toolLocal(s.tool))) : null;
+    const nav = s.scene.def.navigation;
+    const filtered = filteredPose(s.snapshot, s.id(nav.tool), s.id(nav.tracked));
+    b.add(now, { raw, filtered, markers: f.markers, rmsPx: f.rmsPx ?? 0, latencyMs: Math.max(0, (now - f.tCapture) * 1000) });
+  }
+  /** The engine's pose filter: on (One Euro, the default) or off (every frame as measured). */
+  setFilter(on: boolean) {
+    this.filterOn = on;
+    this.applyFilter();
+  }
+  /** Open the bench lab: samples are recorded, and prediction is turned off so that the "filtered" pose is
+   * the one the gate decides with (filtered, not extrapolated to the display time). */
+  openBench(on: boolean) {
+    this.bench = on ? (this.bench ?? new BenchRecorder()) : null;
+    this.applyFilter();
+  }
+  filterConfig() {
+    const d = ENGINE_DEFAULTS;
+    const predict = d.predict && !this.bench;
+    return this.filterOn
+      ? { posMinCutoff: d.posMinCutoff, posBeta: d.posBeta, rotMinCutoff: d.rotMinCutoff, rotBeta: d.rotBeta, dCutoff: d.dCutoff, predict }
+      : // a cutoff far above the camera rate: the filter passes every measurement through
+        { posMinCutoff: 1000, posBeta: 0, rotMinCutoff: 1000, rotBeta: 0, dCutoff: d.dCutoff, predict };
+  }
+  private applyFilter() {
+    this.session?.engine.configure(this.filterConfig());
   }
 
   // ---------------- plans and jobs ----------------
