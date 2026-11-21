@@ -43,10 +43,10 @@ export function buildReport(job: string, records: ScrewRecord[], planned: number
   return { job, date, screws, summary, verdict };
 }
 
-export function reportHtml(r: JobReport): string {
+export function reportHtml(r: JobReport, source: "camera" | "simulation" = "simulation"): string {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
   const rows = r.screws
     .map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.face)}</td><td>${esc(s.size)}</td><td>${s.seatedMm.toFixed(1)} / ${s.plannedMm} mm</td><td>${s.maxAngleDeg.toFixed(2)}°</td><td class="${s.grade}">${s.grade}${s.flagged ? ` (${esc(s.flagged)})` : ""}</td></tr>`)
     .join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(r.job)} report</title><style>body{font:14px system-ui;margin:2rem;color:#111}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}.good{color:#0a7a45}.fair{color:#a86400}.redo{color:#b00020;font-weight:600}</style></head><body><h1>${esc(r.job)}</h1><p>${esc(r.date)} · SmartTools navigation (simulated run)</p><p><b>${esc(r.verdict)}</b></p><table><tr><th>screw</th><th>face</th><th>size</th><th>seated</th><th>max angle</th><th>grade</th></tr>${rows}</table></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(r.job)} report</title><style>body{font:14px system-ui;margin:2rem;color:#111}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}.good{color:#0a7a45}.fair{color:#a86400}.redo{color:#b00020;font-weight:600}</style></head><body><h1>${esc(r.job)}</h1><p>${esc(r.date)} · SmartTools navigation (${source === "camera" ? "measured with the phone's camera" : "simulated run"})</p><p><b>${esc(r.verdict)}</b></p><table><tr><th>screw</th><th>face</th><th>size</th><th>seated</th><th>max angle</th><th>grade</th></tr>${rows}</table></body></html>`;
 }

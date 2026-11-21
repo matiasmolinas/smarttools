@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import BenchPanel from "./BenchPanel";
 import { simulate, type SimState } from "@/lib/sim";
 import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { drawHud, type HudBackground, type Overlay } from "@/lib/hud";
@@ -11,7 +12,7 @@ import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerC
 import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { toXf } from "@/lib/scenedef";
 import type { Xf } from "@/lib/xform";
-import { SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
+import { BUILT_IN_PLANS, SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
 import { activePlanId, browserMemory, setActivePlanId } from "@/lib/memory";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
@@ -50,6 +51,9 @@ export default function HudScreen() {
   const [draft, setDraft] = useState<Plan | null>(null);
   const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
   const [done, setDone] = useState(0);
+  const [benchOpen, setBenchOpen] = useState(false);
+  // the tracker of the view in use (camera or the simulated camera), stable for the bench panel
+  const benchTracker = useCallback(() => (bgRef.current === "simcam" ? simTrackerRef.current : trackerRef.current), []);
 
   function say(t: string) {
     setToast(t);
@@ -99,7 +103,10 @@ export default function HudScreen() {
           if (id)
             browserMemory()
               .plan(id)
-              .then((p) => p && applyPlan(p, tr, false))
+              .then((p) => {
+                const plan = p ?? BUILT_IN_PLANS.find((b) => b.id === id);
+                if (plan) applyPlan(plan, tr, false);
+              })
               .catch(() => {});
         }
         if (sim) {
@@ -168,7 +175,7 @@ export default function HudScreen() {
     const tr = trackerRef.current;
     if (!tr) return say("ENGINE LOADING");
     const saved = (await browserMemory().plans().catch(() => [])).map((r) => r.value);
-    const all = [SHEET_PLAN, ...saved];
+    const all = [...BUILT_IN_PLANS, ...saved];
     const i = all.findIndex((p) => p.id === plan.id);
     applyPlan(all[(i + 1) % all.length]);
   }
@@ -351,6 +358,8 @@ export default function HudScreen() {
         </div>
       )}
 
+      {benchOpen && (bg === "camera" || bg === "simcam") && <BenchPanel tracker={benchTracker} say={say} onClose={() => setBenchOpen(false)} />}
+
       {/* plan and job bar, bottom (camera only): plan with the tool as a pointer, choose a plan, end the job */}
       {bg === "camera" && (
         <div className="absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] flex justify-center px-20">
@@ -442,6 +451,21 @@ export default function HudScreen() {
             }}
           >
             <RestartIcon />
+          </RoundButton>
+        )}
+        {(bg === "camera" || bg === "simcam") && (
+          <RoundButton
+            label=""
+            caption="Bench"
+            active={benchOpen}
+            onClick={async () => {
+              // iOS asks for permission to read the accelerometer, from a tap
+              const DM = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<string> } }).DeviceMotionEvent;
+              if (!benchOpen && DM?.requestPermission) await DM.requestPermission().catch(() => "denied");
+              setBenchOpen(!benchOpen);
+            }}
+          >
+            <BenchIcon />
           </RoundButton>
         )}
         <RoundButton
@@ -568,6 +592,15 @@ function RoundButton({
 }
 
 const ico = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+
+function BenchIcon() {
+  return (
+    <svg {...ico}>
+      <path d="M3 20h18" />
+      <path d="M6 16l3-5 3 3 3-7 3 5" />
+    </svg>
+  );
+}
 
 function SoundIcon() {
   return (

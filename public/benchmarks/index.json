@@ -1,0 +1,5 @@
+{
+  "runs": [
+    { "id": "sim-reference", "file": "sim-reference.json", "source": "simulation", "title": "Simulated reference: motor off vs motor on (modelled vibration), then the tip on A2" }
+  ]
+}

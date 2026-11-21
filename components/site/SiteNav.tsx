@@ -14,7 +14,7 @@ const MENUS = {
     { href: "/developers#athos", label: "athos" },
     { href: "/developers#gatekeeper", label: "gatekeeper" },
     { href: "/developers#agentvcs", label: "agentvcs" },
-    { href: "/developers#scenarios", label: "All demos" },
+    { href: "/benchmarks", label: "Benchmarks" },
   ],
   architecture: [
     { href: "/architecture#diagram", label: "In 3D" },

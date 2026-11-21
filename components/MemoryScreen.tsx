@@ -5,11 +5,12 @@
 // cloud (F2) does not have yet.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SHEET_PLAN, type Plan } from "@/lib/plan";
+import { BUILT_IN_PLANS, SHEET_PLAN, type Plan } from "@/lib/plan";
 import type { JobRecord } from "@/lib/jobrecord";
 import { activePlanId, browserMemory, setActivePlanId, type Row } from "@/lib/memory";
 import { reportHtml } from "@/lib/report";
 import { jobLedger } from "@/lib/ledger";
+import { PHASES, type BenchRun } from "@/lib/bench";
 
 function download(name: string, text: string, type: string) {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -25,6 +26,7 @@ const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "med
 export default function MemoryScreen() {
   const [plans, setPlans] = useState<Row<Plan>[] | null>(null);
   const [jobs, setJobs] = useState<Row<JobRecord>[] | null>(null);
+  const [bench, setBench] = useState<Row<BenchRun>[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [outbox, setOutbox] = useState(0);
   const [persisted, setPersisted] = useState<boolean | null>(null);
@@ -37,6 +39,7 @@ export default function MemoryScreen() {
       const [p, j, o] = await Promise.all([m.plans(), m.jobs(), m.outbox()]);
       setPlans(p);
       setJobs(j);
+      setBench(await m.benchRuns().catch(() => []));
       setOutbox(o.plans.length + o.jobs.length);
     } catch {
       setPlans([]);
@@ -105,10 +108,10 @@ export default function MemoryScreen() {
           </div>
         </div>
         <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {[{ id: SHEET_PLAN.id, value: SHEET_PLAN, updated: SHEET_PLAN.updated, synced: true } as Row<Plan>, ...(plans ?? [])].map((r) => {
+          {[...BUILT_IN_PLANS.map((p) => ({ id: p.id, value: p, updated: p.updated, synced: true }) as Row<Plan>), ...(plans ?? [])].map((r) => {
             const p = r.value;
             const isActive = (active ?? SHEET_PLAN.id) === p.id;
-            const builtIn = p.id === SHEET_PLAN.id;
+            const builtIn = BUILT_IN_PLANS.some((b) => b.id === p.id);
             return (
               <li key={r.id} className={`${card} p-5 ${isActive ? "border-[var(--green)]/50" : ""}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -122,7 +125,7 @@ export default function MemoryScreen() {
                 <p className="mt-2 text-xs text-white/55">{p.holes.map((h) => `${h.label} ${h.depthMm} mm`).join(" · ")}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {!isActive && (
-                    <button className={btn} onClick={() => use(builtIn ? null : p.id)}>
+                    <button className={btn} onClick={() => use(p.id === SHEET_PLAN.id ? null : p.id)}>
                       Use
                     </button>
                   )}
@@ -141,6 +144,48 @@ export default function MemoryScreen() {
                       Delete
                     </button>
                   )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-xl font-semibold">Bench runs</h2>
+          <a href="/benchmarks" className={btn}>
+            See the charts →
+          </a>
+        </div>
+        {bench.length === 0 && <p className="mt-3 text-sm text-white/50">No runs yet. On the phone, open /hud, turn on the camera and tap Bench.</p>}
+        <ul className="mt-4 space-y-3">
+          {bench.map((r) => {
+            const b = r.value;
+            return (
+              <li key={r.id} className={`${card} p-5`}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="font-semibold">{b.title}</h3>
+                  <span className="font-mono text-[11px] text-white/45">
+                    {when(b.created)} · {b.phone.name} · {b.mount}
+                  </span>
+                </div>
+                <p className="mt-1 font-mono text-[11px] text-white/55">
+                  {b.summary.map((s) => `${PHASES[s.phase].label}: ${s.raw?.angleJitterDeg.toFixed(3) ?? "–"}° raw / ${s.filtered?.angleJitterDeg.toFixed(3) ?? "–"}° filtered${s.a2 ? `, A2 ${s.a2.distanceMm} mm` : ""}`).join(" · ")}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button className={btn} onClick={() => download(`smarttools-bench-${b.created.slice(0, 16).replace(/[:T]/g, "-")}.json`, JSON.stringify(b), "application/json")}>
+                    Download run
+                  </button>
+                  <button
+                    className={`${btn} text-white/50`}
+                    onClick={async () => {
+                      await browserMemory().deleteBenchRun(b.id);
+                      void load();
+                    }}
+                  >
+                    Delete
+                  </button>
                 </div>
               </li>
             );
@@ -169,7 +214,7 @@ export default function MemoryScreen() {
                   {j.holes.map((h) => `${h.name} ${h.seatedMm.toFixed(1)}/${h.plannedMm} mm ${h.maxAngleDeg.toFixed(2)}°`).join(" · ")}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button className={btn} onClick={() => download(`${slug(j.plan.name)}-report.html`, reportHtml(j.report), "text/html")}>
+                  <button className={btn} onClick={() => download(`${slug(j.plan.name)}-report.html`, reportHtml(j.report, j.context.source), "text/html")}>
                     Report (HTML)
                   </button>
                   <button className={btn} onClick={() => download(`${slug(j.plan.name)}-job.json`, JSON.stringify(j, null, 2), "application/json")}>

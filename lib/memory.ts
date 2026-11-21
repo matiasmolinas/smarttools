@@ -5,8 +5,9 @@
 
 import { validatePlan, type Plan } from "./plan.ts";
 import { JOB_KIND, type JobRecord } from "./jobrecord.ts";
+import { isBenchRun, type BenchRun } from "./bench.ts";
 
-export type Store = "plans" | "jobs";
+export type Store = "plans" | "jobs" | "bench";
 export interface Row<T> {
   id: string;
   value: T;
@@ -24,7 +25,7 @@ export interface Backend {
 }
 
 export class MemBackend implements Backend {
-  private data: Record<Store, Map<string, Row<unknown>>> = { plans: new Map(), jobs: new Map() };
+  private data: Record<Store, Map<string, Row<unknown>>> = { plans: new Map(), jobs: new Map(), bench: new Map() };
   async all<T>(s: Store) {
     return [...this.data[s].values()].map((r) => structuredClone(r)) as Row<T>[];
   }
@@ -41,7 +42,7 @@ export class MemBackend implements Backend {
 }
 
 const DB = "smarttools";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // 2: the bench lab's runs
 
 export class IdbBackend implements Backend {
   private db: Promise<IDBDatabase>;
@@ -49,7 +50,7 @@ export class IdbBackend implements Backend {
     this.db = new Promise((resolve, reject) => {
       const req = idb.open(DB, DB_VERSION);
       req.onupgradeneeded = () => {
-        for (const s of ["plans", "jobs"]) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: "id" });
+        for (const s of ["plans", "jobs", "bench"]) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: "id" });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -114,6 +115,17 @@ export class LocalMemory {
   }
   deleteJob(id: string) {
     return this.backend.del("jobs", id);
+  }
+
+  async benchRuns(): Promise<Row<BenchRun>[]> {
+    return newest(await this.backend.all<BenchRun>("bench"));
+  }
+  async saveBenchRun(r: BenchRun) {
+    if (!isBenchRun(r)) throw new Error("not a SmartTools bench run");
+    await this.backend.put("bench", { id: r.id, value: r, updated: r.created, synced: false });
+  }
+  deleteBenchRun(id: string) {
+    return this.backend.del("bench", id);
   }
 
   /** What the cloud does not have yet (F2 uploads it, then calls markSynced). */

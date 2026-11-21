@@ -24,6 +24,7 @@ export default function SiteFooter() {
         <span className="font-mono text-[11px] uppercase tracking-wider text-white/35">Developers</span>
         <a className={a} href="/developers">The engine and the stack</a>
         <a className={a} href="/architecture">Architecture</a>
+        <a className={a} href="/benchmarks">Benchmarks</a>
         <a className={a} href="/engine">Engine lab</a>
         <a className={a} href="https://github.com/matiasmolinas/smarttools/blob/main/docs/ENGINE_SPEC.md">Engine spec ↗</a>
         <a className={a} href="https://github.com/matiasmolinas/smarttools">Source code ↗</a>
