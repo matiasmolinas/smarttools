@@ -1,254 +1,249 @@
-# Prueba de campo: el teléfono en un taladro real
+# Field test: the phone on a real drill
 
-Guía para la primera prueba física de SmartTools: un atornillador/taladro INGCO 20V, un soporte provisorio y el
-Redmi 15. Mide tres cosas y deja un registro de cada una:
+A guide to the first physical test of SmartTools: an INGCO 20V drill/driver, a provisional mount and a Redmi 15.
+It measures three things and keeps a record of each:
 
-1. **Exactitud en un punto.** La punta apoyada en el objetivo impreso A2: ¿a cuántos milímetros la ubica la app?
-2. **Estabilidad con el motor apagado y encendido.** Con el taladro quieto, ¿cuánto tiembla la dirección medida
-   de la mecha? Se mide sin filtro (cada cuadro tal cual) y con el filtro (la pose con la que decide el freno).
-3. **Un trabajo completo de 4 agujeros.** Lo que registró la app frente a lo que mide un calibre.
+1. **Accuracy at one point.** With the tip resting on the printed target A2, how many millimetres from A2 does the
+   app place it?
+2. **Stability, motor off and motor on.** With the drill held still, how much does the measured direction of the
+   bit shake? Measured without the filter (each frame as it is) and with it (the pose the go/no-go gate decides
+   with).
+3. **A complete 4-hole job.** What the app recorded, against what a caliper measures.
 
-La app graba todo y lo exporta como archivos. Las corridas se publican en
-[/benchmarks](https://smarttools-nav.vercel.app/benchmarks) junto a la corrida **simulada** de referencia, para
-comparar.
+The app records everything and exports it as files. The runs are published on
+[/benchmarks](https://smarttools-nav.vercel.app/benchmarks), next to the **simulated** reference run, for comparison.
 
-> **Precisión no es exactitud.** La prueba 2 mide cuánto tiembla la medición (precisión); no dice si la mecha
-> apunta a donde la app cree. Para eso están la prueba 1 (un punto conocido) y la 3 (el calibre). En los
-> resultados, cada cosa se nombra por lo que es.
+> **Precision is not accuracy.** Test 2 measures how much the measurement shakes (precision); it does not say whether
+> the bit points where the app thinks it does. That is what test 1 (a known point) and test 3 (the caliper) are for.
+> In the results, each one is named for what it is.
 
-Tiempo estimado: 2 horas, incluido el montaje.
-
----
-
-## 0. Antes de empezar
-
-### Materiales
-
-- [ ] El atornillador INGCO 20V con la batería cargada, y una **mecha para madera de 6 mm**.
-- [ ] El **Redmi 15**, cargado, con la funda que vas a usar.
-- [ ] **La hoja de marcadores** (https://smarttools-nav.vercel.app/markers) impresa en A4 al **100 %**. Medí la
-      línea de 50 mm del margen: si no mide 50 mm, imprimila de nuevo.
-- [ ] **Una tabla de madera de al menos 30 mm de espesor** (pino sirve), de unos 30 × 40 cm, y cinta de
-      papel para pegar la hoja bien plana.
-- [ ] **Para el soporte provisorio:** 2 o 3 abrazaderas metálicas o bridas plásticas gruesas, un taco de
-      madera, goma o cinta doble faz, y cinta americana.
-- [ ] **Para fijar el taladro en la prueba 2:** una morsa, o 2 sargentos que lo sujeten de la empuñadura al
-      borde de una mesa.
-- [ ] **Para medir:** un calibre con varilla de profundidad, una escuadra o un taco escuadrado, y una regla.
-- [ ] **Un segundo teléfono** para filmar (para el video).
-- [ ] **Seguridad:** anteojos de protección, y la tabla bien sujeta antes de perforar.
-
-### En el teléfono
-
-1. Abrí https://smarttools-nav.vercel.app/hud en Chrome y agregala a la pantalla de inicio (⋮ → *Instalar
-   app*). Abrila desde el ícono: queda a pantalla completa y funciona sin conexión.
-2. Tocá **View** hasta que diga **Cam** y aceptá el permiso de cámara.
-3. Tocá **Phone** hasta que diga **Redmi 15**.
-4. Brillo de pantalla alto. Activá **No molestar**, para que ninguna notificación interrumpa una grabación.
-
-### La hoja
-
-Pegá la hoja plana sobre la tabla, sin arrugas ni burbujas, con cinta en los cuatro bordes. La luz tiene que
-ser pareja: sin reflejos sobre la hoja y sin la sombra del taladro tapando muchos marcadores.
+Estimated time: 2 hours, including the mount.
 
 ---
 
-## 1. Calibrar el lente (antes de montar el teléfono)
+## 0. Before you start
 
-Se hace una sola vez por teléfono, con el teléfono en la mano.
+### Materials
 
-1. En **Cam**, tocá **Lens**.
-2. Durante 20 s mové el teléfono sobre la hoja: de cerca y de lejos, inclinándolo hacia los cuatro lados.
-   Siempre con muchos marcadores a la vista.
-3. Al terminar, la app muestra `LENS OK · N VIEWS · X PX`. **Anotá X.** Por debajo de 1 px está muy bien.
-   Si da error o X pasa de 2 px, repetilo con mejor luz.
+- [ ] The INGCO 20V drill/driver with a charged battery, and a **6 mm wood drill bit**.
+- [ ] The **Redmi 15**, charged, in the case you will use.
+- [ ] **The marker sheet** (https://smarttools-nav.vercel.app/markers) printed on A4 at **100 %**. Measure the
+      50 mm line in the margin: if it is not 50 mm, print it again.
+- [ ] **A wooden board at least 30 mm thick** (pine is fine), about 30 × 40 cm, and masking tape to stick the sheet
+      down flat.
+- [ ] **For the provisional mount:** 2 or 3 hose clamps or heavy cable ties, a wooden block, rubber or double-sided
+      foam tape, and duct tape.
+- [ ] **To hold the drill still in test 2:** a vise, or 2 clamps holding it by the grip to the edge of a table.
+- [ ] **To measure:** a caliper with a depth rod, a square or a squared block, and a ruler.
+- [ ] **A second phone** to film (for the video).
+- [ ] **Safety:** safety glasses, and the board firmly clamped before drilling.
 
----
+### On the phone
 
-## 2. El soporte provisorio
+1. Open https://smarttools-nav.vercel.app/hud in Chrome and add it to the home screen (⋮ → *Install app*). Open it
+   from the icon: it runs full screen and works offline.
+2. Tap **View** until it says **Cam**, and allow the camera.
+3. Tap **Phone** until it says **Redmi 15**.
+4. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
 
-El soporte impreso todavía no está. Este montaje provisorio sirve para medir hoy, si cumple tres cosas:
+### The sheet
 
-1. **Rígido.** El teléfono no se puede mover respecto del taladro: ni al tocar la pantalla ni con el motor en
-   marcha. Si se mueve, toda medida es del soporte y no del sistema. Probalo empujando el teléfono con un dedo:
-   no tiene que ceder.
-2. **La punta de la mecha a la vista**, en la mitad de abajo de la imagen. El teléfono va **apaisado**, con la
-   pantalla hacia vos y la cámara mirando hacia adelante y hacia abajo, a lo largo de la mecha, con unos
-   15° de inclinación.
-3. **Los marcadores a la vista.** El soporte no debe tapar la cámara.
-
-Una forma que funciona:
-- **El taco:** un taco de madera atado al cuerpo del taladro, detrás del anillo de torque, con 2 abrazaderas o
-  bridas gruesas bien apretadas.
-- **El teléfono:** pegado al taco con cinta doble faz más cinta americana, con goma entre teléfono y taco.
-- **Antes de seguir:** mirá la pantalla. La punta de la mecha tiene que aparecer abajo en la imagen, y la
-  hoja con muchos marcadores alrededor.
-
-> En el laboratorio de la app, el botón del montaje tiene que decir **provisional mount**. Queda guardado en
-> cada corrida, porque un montaje provisorio vibra distinto que el soporte impreso.
+Tape the sheet flat on the board, with no wrinkles or bubbles, taped along all four edges. The light must be even:
+no glare on the sheet, and no shadow of the drill covering many markers.
 
 ---
 
-## 3. Calibrar la punta y el eje de la mecha
+## 1. Calibrate the lens (before mounting the phone)
 
-Cada vez que montes o muevas el teléfono:
+Done once per phone, with the phone in your hand.
 
-1. Apoyá la punta de la mecha en el **centro de A2**.
-2. Tocá **Calibrate**:
-   - **primeros 5 s:** girá el taladro en círculos alrededor de la punta, sin despegarla de A2, inclinándolo
-     unos 10–15° hacia todos lados;
-   - **siguientes 5 s:** con la punta en el mismo lugar, girá el taladro sobre su propia mecha, de un lado al
-     otro.
-3. Mensajes esperados:
-   - `TIP OK · X MM` al terminar el primer paso. **Anotá X.** Menos de 0,5 mm está muy bien.
-   - `DOCK CALIBRATED · TILT ≈ N°` al final. Con el soporte provisorio también puede salir
-     `CHECK THE PHONE: TIP … MM FROM THE REDMI 15 PROFILE`. **Es esperable:** el perfil describe el
-     soporte impreso, no tu montaje, y la calibración mide el real igual.
-4. Si algo falla, repetilo con más marcadores a la vista y movimientos más lentos.
+1. In **Cam**, tap **Lens**.
+2. For 20 s, move the phone over the sheet: near and far, tilting it towards all four sides, always with many
+   markers in view.
+3. When it ends, the app shows `LENS OK · N VIEWS · X PX`. **Write down X.** Below 1 px is very good. If it fails or
+   X is above 2 px, repeat with better light.
 
 ---
 
-## 4. Prueba 1: exactitud en A2
+## 2. The provisional mount
 
-Abrí el laboratorio con el botón **Bench**. El panel muestra en vivo:
-- cuántos marcadores ve;
-- el ángulo de la mecha respecto de la hoja;
-- la distancia de la punta a A2;
-- el temblor del último segundo, crudo y filtrado;
-- el acelerómetro.
+The printed dock is not ready yet. A provisional mount works for today's measurements if it meets three conditions:
 
-1. Motor apagado. Apoyá la punta en el centro de A2, con el taladro lo más escuadrado posible (podés
-   apoyarlo contra la escuadra).
-2. Tocá **Check on A2 5s**. Hay una cuenta regresiva de 3 s y después graba 5 s: quedate quieto.
-3. En la tabla del panel aparece `A2 x.xx`: es la distancia media de la punta a A2, en mm.
-4. **Repetilo 3 veces**, levantando el taladro y volviendo a apoyarlo cada vez. Cada toma reemplaza a la
-   anterior en el panel, así que **anotá el valor de cada una** en la tabla de resultados.
+1. **Rigid.** The phone cannot move relative to the drill: not when you touch the screen, not with the motor
+   running. If it moves, every measurement is of the mount, not of the system. Test it by pushing the phone with a
+   finger: it must not give.
+2. **The bit tip in view**, in the lower half of the image. The phone goes **landscape**, screen towards you, with the
+   camera looking forward and down along the bit, tilted about 15°.
+3. **The markers in view.** The mount must not cover the camera.
 
-Para mirar: el objetivo de diseño es **menos de 1 mm**. La columna `bit vs sheet` te dice qué tan escuadrado
-lo tenías.
+One way that works:
+- **The block:** a wooden block strapped to the drill's body, behind the torque collar, with 2 hose clamps or heavy
+  cable ties, tightened hard.
+- **The phone:** stuck to the block with double-sided foam tape plus duct tape, with rubber between the phone and the
+  block.
+- **Before going on:** look at the screen. The bit tip must appear low in the image, with the sheet and many markers
+  around it.
 
----
-
-## 5. Prueba 2: motor apagado y motor encendido (estabilidad)
-
-Para que mida la vibración del motor y no el pulso de tu mano, **el taladro tiene que estar fijo**.
-
-1. **Fijalo:** sujetalo con la morsa o con dos sargentos de la empuñadura al borde de la mesa, con la mecha
-   vertical apuntando a A2 y la **punta a 3–5 mm de la hoja, sin tocarla**. La tabla con la hoja va debajo,
-   también fija.
-2. En el panel Bench, revisá que diga muchos marcadores (más de 8) y que el temblor del último segundo sea
-   chico.
-3. **Motor off 10s:** tocalo y no toques nada durante la cuenta y los 10 s.
-4. **Motor on (free spin) 10s:** tocalo y, durante la cuenta regresiva, apretá el gatillo **a fondo**, en la
-   **velocidad 2** (alta) del selector. Mantenelo hasta que termine. La mecha gira en el aire.
-5. Repetí el paso 4 en **velocidad 1** si querés comparar, guardando una corrida por velocidad (ver más abajo).
-6. Mirá la tabla del panel: `angle σ raw/filt`. Lo esperable es que con el motor encendido el valor crudo
-   suba y el filtrado suba menos.
-7. **El interruptor `filter on/off` cambia solo lo que se ve en pantalla.** Las dos señales, cruda y
-   filtrada, se graban siempre. Usalo en el video para mostrar la diferencia a simple vista.
-8. Tocá **save run**. La corrida queda guardada en el teléfono (en `/memory` y en `/benchmarks`) y además se
-   descarga un archivo `smarttools-bench-….json`.
-
-Si querés, sin el taladro fijo (en la mano), repetí motor apagado y encendido y guardalo como otra corrida. En
-las notas que me pases, aclarame que fue a mano: la diferencia con la corrida fija muestra cuánto es pulso.
-
-> Mientras el panel Bench está abierto, la app no extrapola la pose ("prediction off"). Así lo que se mide como
-> "filtrado" es exactamente lo que usa el freno para decidir.
+> In the app's bench lab, the mount button must say **provisional mount**. It is saved with every run, because a
+> provisional mount vibrates differently from the printed dock.
 
 ---
 
-## 6. Prueba 3: un trabajo de 4 agujeros
+## 3. Calibrate the tip and the bit's axis
 
-1. **El plan:** en la barra de abajo, tocá el nombre del plan hasta que diga
-   **Demo: 4 holes, 40 mm square, 20 mm deep**. Son 4 agujeros de Ø6 mm y 20 mm de profundidad, en un cuadrado
-   de 40 × 40 mm (D1 a D4), en los huecos entre marcadores. **A2 queda libre**, así podés recalibrar después.
-2. Tocá **Sound** para tener el tono de guía.
-3. **Opcional:** con el panel Bench abierto, tocá **Drilling 10s** justo antes de empezar D1 y perforá durante
-   la grabación. Queda medida la vibración con carga real.
-4. **Por cada agujero:**
-   - llevá la punta al anillo que indica la pantalla;
-   - alineá hasta que el freno se ponga en verde (escuadrado y centrado);
-   - perforá hasta que la pantalla indique la profundidad;
-   - retirá.
-   La app registra el agujero sola.
-5. Al terminar los 4, tocá **Finish job**. Aparece `JOB SAVED · …` con el veredicto.
-6. **Medí con el calibre** y anotá:
-   - la **profundidad** real de cada agujero, con la varilla del calibre;
-   - la **separación** entre centros: D1–D2 y D4–D3 (horizontal), D2–D3 y D1–D4 (vertical). Todas deberían dar
-     40,0 mm.
-   - si el agujero quedó **perpendicular**: meté la mecha (o un tornillo) en el agujero y medí con la escuadra
-     cuánto se inclina.
+Every time you mount or move the phone:
+
+1. Rest the bit tip on the **centre of A2**.
+2. Tap **Calibrate**:
+   - **first 5 s:** circle the drill around the tip, keeping the tip on A2, tilting it about 10–15° to every side;
+   - **next 5 s:** with the tip in the same place, twist the drill around its own bit, from one side to the other.
+3. Expected messages:
+   - `TIP OK · X MM` after the first step. **Write down X.** Below 0.5 mm is very good.
+   - `DOCK CALIBRATED · TILT ≈ N°` at the end. With the provisional mount you may also see
+     `CHECK THE PHONE: TIP … MM FROM THE REDMI 15 PROFILE`. **That is expected:** the profile describes the printed
+     dock, not your mount, and the calibration measures the real one anyway.
+4. If something fails, repeat it with more markers in view and slower movements.
 
 ---
 
-## 7. Opcional: planificar con el taladro como puntero
+## 4. Test 1: accuracy at A2
 
-1. Tocá **New plan**. Apoyá la punta en un punto libre de la hoja (entre marcadores) y tocá **Mark hole**.
-   Repetilo en un segundo punto y tocá **Save**.
-2. Perforá esos dos agujeros como en la prueba 3 y tocá **Finish job**.
+Open the lab with the **Bench** button. The panel shows live:
+- how many markers it sees;
+- the bit's angle to the sheet;
+- the tip's distance to A2;
+- the shake over the last second, raw and filtered;
+- the accelerometer.
 
----
+1. Motor off. Rest the tip on the centre of A2, with the drill as square as you can (you can rest it against the
+   square).
+2. Tap **Check on A2 5s**. A 3 s countdown runs, then it records for 5 s: stay still.
+3. The panel's table shows `A2 x.xx`: the tip's mean distance to A2, in mm.
+4. **Repeat 3 times**, lifting the drill and setting it down again each time. Each take replaces the previous one in
+   the panel, so **write down each value** in the results table.
 
-## 8. Exportar y pasarme los archivos
-
-En el teléfono, abrí https://smarttools-nav.vercel.app/memory:
-
-- **Bench runs → Download run**, de cada corrida;
-- **Jobs → Job record (JSON)**, **agentvcs ledger** y **Report (HTML)**, del trabajo de 4 agujeros.
-
-Pasalos a la laptop por WhatsApp, Drive o cable, a una carpeta `~/Downloads/smarttools-field/`. Agregá un
-archivo de texto con tus notas: el montaje, si el taladro estaba fijo o en la mano, la velocidad y tus medidas
-con el calibre.
-
-Con eso, yo:
-1. publico las corridas reales en `/benchmarks`, rotuladas como medidas, junto a la simulada;
-2. agrego al build log lo que encontramos, con los números;
-3. comparo lo que registró la app con tus medidas de calibre.
+What to look for: the design target is **under 1 mm**. The `bit vs sheet` line tells you how square you held it.
 
 ---
 
-## 9. El video
+## 5. Test 2: motor off and motor on (stability)
 
-Con el segundo teléfono, en horizontal y con buena luz. Tomas en orden:
+To measure the motor's vibration and not your hand's tremor, **the drill must be held fixed**.
 
-1. **El montaje** (5 s): el taladro con el teléfono, girándolo para mostrar el soporte.
-2. **La calibración** (10 s): el círculo y el giro sobre A2.
-3. **Motor apagado y encendido** (20 s): la pantalla del teléfono con el panel Bench, y el interruptor del
-   filtro alternando mientras el motor gira.
-4. **Un agujero de principio a fin** (15 s): el anillo, el verde, la perforación, la profundidad.
-5. **El calibre** midiendo un agujero (5 s).
+1. **Fix it:** hold it in the vise, or with two clamps from the grip to the edge of the table, with the bit vertical,
+   pointing at A2, and the **tip 3–5 mm above the sheet, not touching it**. The board with the sheet goes underneath,
+   also fixed.
+2. In the Bench panel, check that it sees many markers (more than 8) and that the shake over the last second is
+   small.
+3. **Motor off 10s:** tap it and touch nothing during the countdown and the 10 s.
+4. **Motor on (free spin) 10s:** tap it and, during the countdown, pull the trigger **all the way**, with the speed
+   selector on **2** (high). Hold it until it ends. The bit spins in the air.
+5. Repeat step 4 at **speed 1** if you want to compare, saving one run per speed (see below).
+6. Look at the panel's table: `angle σ raw/filt`. Expect the raw value to rise with the motor on, and the filtered one
+   to rise less.
+7. **The `filter on/off` switch only changes what the screen shows.** Both signals, raw and filtered, are always
+   recorded. Use it in the video to show the difference to the eye.
+8. Tap **save run**. The run is kept on the phone (in `/memory` and on `/benchmarks`), and a file
+   `smarttools-bench-….json` is downloaded too.
 
-Sin audio de fondo o con el tono de la app. Yo edito el corte final si me pasás los clips.
+If you want, also repeat motor off and motor on with the drill in your hand (not fixed), and save it as another run.
+In your notes, tell me it was handheld: the difference from the fixed run shows how much is hand tremor.
+
+> While the Bench panel is open, the app does not extrapolate the pose ("prediction off"). So what is measured as
+> "filtered" is exactly what the gate uses to decide.
 
 ---
 
-## 10. Si algo falla
+## 6. Test 3: a 4-hole job
 
-| Síntoma | Qué hacer |
+1. **The plan:** in the bar at the bottom, tap the plan's name until it says
+   **Demo: 4 holes, 40 mm square, 20 mm deep**. Four Ø6 mm holes, 20 mm deep, on a 40 × 40 mm square (D1 to D4), in
+   the gaps between markers. **A2 stays free**, so you can recalibrate afterwards.
+2. Tap **Sound** to get the guiding tone.
+3. **Optional:** with the Bench panel open, tap **Drilling 10s** just before starting D1, and drill during the
+   recording. That measures the vibration under real load.
+4. **For each hole:**
+   - bring the tip to the ring the screen shows;
+   - line up until the gate turns green (square and centred);
+   - drill until the screen shows the depth;
+   - pull out.
+   The app records the hole by itself.
+5. When all 4 are done, tap **Finish job**. You will see `JOB SAVED · …` with the verdict.
+6. **Measure with the caliper** and write down:
+   - each hole's real **depth**, with the caliper's depth rod;
+   - the **spacing** between centres: D1–D2 and D4–D3 (horizontal), D2–D3 and D1–D4 (vertical). They should all be
+     40.0 mm.
+   - whether the hole came out **square**: put the bit (or a screw) in the hole and measure its lean with the square.
+
+---
+
+## 7. Optional: plan with the drill as a pointer
+
+1. Tap **New plan**. Rest the tip on a free spot of the sheet (between markers) and tap **Mark hole**. Repeat at a
+   second spot and tap **Save**.
+2. Drill those two holes as in test 3 and tap **Finish job**.
+
+---
+
+## 8. Export and send me the files
+
+On the phone, open https://smarttools-nav.vercel.app/memory:
+
+- **Bench runs → Download run**, for each run;
+- **Jobs → Job record (JSON)**, **agentvcs ledger** and **Report (HTML)**, for the 4-hole job.
+
+Move them to the laptop (WhatsApp, Drive or a cable), into a folder `~/Downloads/smarttools-field/`. Add a text file
+with your notes: the mount, whether the drill was fixed or handheld, the speed, and your caliper measurements.
+
+With that, I:
+1. publish the real runs on `/benchmarks`, labelled as measured, next to the simulated one;
+2. add what we found, with the numbers, to the build log;
+3. compare what the app recorded with your caliper measurements.
+
+---
+
+## 9. The video
+
+With the second phone, landscape, in good light. Shots, in order:
+
+1. **The mount** (5 s): the drill with the phone, turned to show the mount.
+2. **The calibration** (10 s): the circle and the twist on A2.
+3. **Motor off and on** (20 s): the phone's screen with the Bench panel, and the filter switch toggling while the
+   motor spins.
+4. **One hole, start to finish** (15 s): the ring, the green, the drilling, the depth.
+5. **The caliper** measuring a hole (5 s).
+
+No background music, or just the app's tone. I can edit the final cut if you send me the clips.
+
+---
+
+## 10. If something goes wrong
+
+| Symptom | What to do |
 |---|---|
-| Pocos marcadores (menos de 6) | Más luz pareja, sin reflejos. Alejá un poco la cámara (más inclinación) o mové la hoja |
-| La punta no aparece en la imagen | Más inclinación hacia abajo. La punta tiene que verse en la mitad inferior |
-| `TIP OK` con más de 1 mm | Repetir: la punta no se despegó de A2 y el movimiento fue lento y amplio |
-| El acelerómetro dice "no data" | Cerrá y volvé a abrir el panel Bench. El navegador necesita un toque para habilitarlo |
-| El freno no se pone en verde | Leé el mensaje: "Hold steady", "Line up the rings", "Tip to the mark" o "Show more markers" |
-| El teléfono se calienta y la imagen va lenta | Bajá el brillo y cerrá otras apps; dejalo enfriar 5 min |
-| Algo se ve raro después de mover el soporte | Recalibrá la punta (sección 3) |
+| Few markers (under 6) | More even light, no glare. Move the camera back a little (more tilt) or move the sheet |
+| The tip does not show in the image | Tilt further down. The tip must be in the lower half |
+| `TIP OK` above 1 mm | Repeat: the tip must not leave A2, and the movement must be slow and wide |
+| The accelerometer says "no data" | Close the Bench panel and open it again. The browser needs a tap to enable it |
+| The gate does not turn green | Read the message: "Hold steady", "Line up the rings", "Tip to the mark" or "Show more markers" |
+| The phone heats up and the image lags | Lower the brightness and close other apps; let it cool for 5 min |
+| Something looks off after moving the mount | Recalibrate the tip (section 3) |
 
 ---
 
-## 11. Tabla de resultados
+## 11. Results table
 
-| Medida | Valor |
+| Measure | Value |
 |---|---|
-| Lente: error de calibración (px) | |
-| Punta: error de calibración (mm) | |
-| A2, toma 1 / 2 / 3 (mm) | |
-| Motor off: ángulo σ crudo / filtrado (°) | |
-| Motor on (vel. 2): ángulo σ crudo / filtrado (°) | |
-| Motor on (vel. 1): ángulo σ crudo / filtrado (°) | |
-| Acelerómetro off / on (m/s²) | |
-| D1–D4: profundidad registrada por la app (mm) | |
-| D1–D4: profundidad medida con calibre (mm) | |
-| Separaciones D1–D2, D2–D3, D3–D4, D4–D1 (mm) | |
-| Inclinación de los agujeros (°) | |
-| Notas (montaje, fijo / a mano, luz) | |
+| Lens: calibration error (px) | |
+| Tip: calibration error (mm) | |
+| A2, take 1 / 2 / 3 (mm) | |
+| Motor off: angle σ raw / filtered (°) | |
+| Motor on (speed 2): angle σ raw / filtered (°) | |
+| Motor on (speed 1): angle σ raw / filtered (°) | |
+| Accelerometer off / on (m/s²) | |
+| D1–D4: depth recorded by the app (mm) | |
+| D1–D4: depth measured with the caliper (mm) | |
+| Spacings D1–D2, D2–D3, D3–D4, D4–D1 (mm) | |
+| Lean of the holes (°) | |
+| Notes (mount, fixed / handheld, light) | |
