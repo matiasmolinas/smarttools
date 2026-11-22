@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import BenchPanel from "./BenchPanel";
+import SetupWizard from "./SetupWizard";
 import { simulate, type SimState } from "@/lib/sim";
 import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { drawHud, type HudBackground, type Overlay } from "@/lib/hud";
@@ -45,13 +46,16 @@ export default function HudScreen() {
   const [soundOn, setSoundOn] = useState(false);
   const lastCue = useRef({ phase: "", alarms: 0 });
   const [phoneName, setPhoneName] = useState(phoneById(DEFAULT_PHONE_ID).name);
-  const importRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // plans and jobs (F1: planned with the tool as a pointer, kept in the phone's memory)
   const [draft, setDraft] = useState<Plan | null>(null);
   const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
   const [done, setDone] = useState(0);
   const [benchOpen, setBenchOpen] = useState(false);
+  // the guided setup (opens by itself when the drill is not calibrated yet) and the job sheet
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [jobOpen, setJobOpen] = useState(false);
+  const setupDecided = useRef(false);
   // the camera's resolution: 1080p by default, 720p is lighter for slow phones (kept per device)
   const [camRes, setCamRes] = useState<720 | 1080>(1080);
   const camResRef = useRef<720 | 1080>(1080);
@@ -221,6 +225,18 @@ export default function HudScreen() {
     setDone(0);
     say(`JOB SAVED · ${rec.report.verdict.toUpperCase()}`);
   }
+  // open the guided setup once, when the camera is on and the drill is not calibrated
+  useEffect(() => {
+    if (bg !== "camera") return;
+    const iv = setInterval(() => {
+      const tr = trackerRef.current;
+      if (setupDecided.current || !tr?.session) return;
+      setupDecided.current = true;
+      if (!tr.calibrated.tool) setSetupOpen(true);
+    }, 500);
+    return () => clearInterval(iv);
+  }, [bg]);
+
   // holes done in this job, for the bar
   useEffect(() => {
     const iv = setInterval(() => setDone(trackerRef.current?.recorder?.holes.length ?? 0), 500);
@@ -386,40 +402,73 @@ export default function HudScreen() {
           }}
         />}
 
-      {/* plan and job bar, bottom (camera only): plan with the tool as a pointer, choose a plan, end the job */}
-      {bg === "camera" && (
-        <div className="absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] flex justify-center px-20">
-          <div className="flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/20 bg-black/55 p-1.5 font-mono text-[11px] backdrop-blur-md">
-            {draft ? (
-              <>
-                <span className="px-2 text-white/70">Planning · {draft.holes.length} holes</span>
-                <Pill onClick={mark} strong>
-                  Mark hole
-                </Pill>
-                <Pill onClick={() => draft.holes.length && setDraft(removeLastHole(draft))}>Undo</Pill>
-                <Pill onClick={savePlan}>Save</Pill>
-                <Pill onClick={() => setDraft(null)}>Cancel</Pill>
-              </>
-            ) : (
-              <>
-                <Pill onClick={nextPlan}>
-                  {plan.name.length > 18 ? `${plan.name.slice(0, 17)}…` : plan.name} · {done}/{plan.holes.length}
-                </Pill>
-                <Pill
-                  onClick={() => {
-                    setDraft(newPlan(`Plan ${new Date().toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
-                    say("TOUCH THE SURFACE WITH THE TIP · MARK HOLE");
-                  }}
-                >
-                  New plan
-                </Pill>
-                <Pill onClick={finishJob} strong>
-                  Finish job
-                </Pill>
-              </>
-            )}
+      {/* planning with the tool as a pointer: big buttons at the top while a plan is being drawn */}
+      {bg === "camera" && draft && (
+        <div className="absolute inset-x-3 top-[max(2.2rem,env(safe-area-inset-top))] z-10 rounded-2xl border border-white/20 bg-black/75 p-3 text-white backdrop-blur-md">
+          <div className="text-lg font-semibold">Planning · {draft.holes.length} holes</div>
+          <div className="text-base text-white/70">Touch the surface with the tip, then tap Mark hole.</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <BigButton onClick={mark} strong>
+              Mark hole
+            </BigButton>
+            <BigButton onClick={savePlan}>Save plan</BigButton>
+            <BigButton onClick={() => draft.holes.length && setDraft(removeLastHole(draft))}>Undo</BigButton>
+            <BigButton onClick={() => setDraft(null)}>Cancel</BigButton>
           </div>
         </div>
+      )}
+
+      {/* the job: which plan, a new plan, finish (a sheet, so nothing covers the tip while drilling) */}
+      {bg === "camera" && jobOpen && !draft && (
+        <div className="absolute inset-x-0 bottom-0 z-20 rounded-t-3xl border-t border-white/15 bg-[#05080d]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-semibold">Job</h2>
+            <button onClick={() => setJobOpen(false)} className="px-3 text-2xl text-white/60" aria-label="Close">
+              ✕
+            </button>
+          </div>
+          <p className="mt-1 text-lg text-white/70">
+            Plan: <b className="text-white">{plan.name}</b> · {done} of {plan.holes.length} holes done
+          </p>
+          <div className="mt-4 flex flex-col gap-3">
+            <BigButton onClick={nextPlan}>Change plan</BigButton>
+            <BigButton
+              onClick={() => {
+                setDraft(newPlan(`Plan ${new Date().toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
+                setJobOpen(false);
+              }}
+            >
+              New plan with the tool
+            </BigButton>
+            <BigButton
+              strong
+              onClick={async () => {
+                await finishJob();
+                setJobOpen(false);
+              }}
+            >
+              Finish job and save
+            </BigButton>
+            <a href="/memory" className="text-center text-base text-white/60 underline decoration-white/25">
+              See saved plans and jobs
+            </a>
+          </div>
+        </div>
+      )}
+
+      {setupOpen && (bg === "camera" || bg === "simcam") && (
+        <SetupWizard
+          tracker={benchTracker}
+          onClose={() => setSetupOpen(false)}
+          onOpenBench={() => setBenchOpen(true)}
+          phoneName={phoneName}
+          onNextPhone={() => {
+            const tr = trackerRef.current;
+            if (!tr) return;
+            const p = tr.nextPhone();
+            setPhoneName(p.name);
+          }}
+        />
       )}
 
       {/* floating control column, right edge (portrait and landscape) */}
@@ -429,45 +478,20 @@ export default function HudScreen() {
         </RoundButton>
         {bg === "camera" ? (
           <>
-            <RoundButton
-              label="A2"
-              caption="Calibrate"
-              onClick={() => {
-                const tr = trackerRef.current;
-                if (!tr) return say("ENGINE LOADING");
-                tr.startToolCalibration(tNowRef.current);
-                say("TIP ON A2 · CIRCLE, THEN TWIST");
-              }}
-            >
+            <RoundButton label="" caption="Setup" active={setupOpen} onClick={() => (setJobOpen(false), setBenchOpen(false), setSetupOpen(!setupOpen))}>
               <CalIcon />
             </RoundButton>
-            <RoundButton
-              label={phoneName.replace("Redmi ", "")}
-              caption="Phone"
-              onClick={() => {
-                const tr = trackerRef.current;
-                if (!tr) return say("ENGINE LOADING");
-                const p = tr.nextPhone();
-                setPhoneName(p.name);
-                say(`${p.name.toUpperCase()}${p.provisional ? " · PROVISIONAL PROFILE" : ""}`);
-              }}
-            >
-              <PhoneIcon />
-            </RoundButton>
-            <RoundButton
-              label=""
-              caption="Lens"
-              onClick={() => {
-                const tr = trackerRef.current;
-                if (!tr) return say("ENGINE LOADING");
-                tr.startCameraCalibration(tNowRef.current);
-                say("MOVE OVER THE SHEET · 20 S");
-              }}
-            >
-              <LensIcon />
+            <RoundButton label={`${done}/${plan.holes.length}`} caption="Job" active={jobOpen} onClick={() => (setSetupOpen(false), setJobOpen(!jobOpen))}>
+              <JobIcon />
             </RoundButton>
           </>
         ) : (
+          <>
+          {bg === "simcam" && (
+            <RoundButton label="" caption="Setup" active={setupOpen} onClick={() => (setBenchOpen(false), setSetupOpen(!setupOpen))}>
+              <CalIcon />
+            </RoundButton>
+          )}
           <RoundButton
             label=""
             caption="Restart"
@@ -478,6 +502,7 @@ export default function HudScreen() {
           >
             <RestartIcon />
           </RoundButton>
+          </>
         )}
         {(bg === "camera" || bg === "simcam") && (
           <RoundButton
@@ -514,47 +539,6 @@ export default function HudScreen() {
         <RoundButton label="" caption="Full" onClick={fullscreen}>
           <FullIcon />
         </RoundButton>
-        {bg === "camera" && (
-          <div className="flex flex-col items-center gap-1 font-mono text-[10px] text-white/60">
-            <button
-              onClick={() => {
-                const tr = trackerRef.current;
-                if (!tr) return;
-                const url = URL.createObjectURL(new Blob([tr.exportProfile()], { type: "application/json" }));
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `smarttools-${tr.phone.id}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-              className="hover:text-white"
-            >
-              Export
-            </button>
-            <button onClick={() => importRef.current?.click()} className="hover:text-white">
-              Import
-            </button>
-            <input
-              ref={importRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                const tr = trackerRef.current;
-                if (!f || !tr) return;
-                try {
-                  const name = tr.importProfile(await f.text());
-                  setPhoneName(name);
-                  say(`IMPORTED · ${name.toUpperCase()}`);
-                } catch {
-                  say("NOT A SMARTTOOLS PHONE FILE");
-                }
-                e.target.value = "";
-              }}
-            />
-          </div>
-        )}
         <a href="/markers" className="mt-1 font-mono text-[10px] text-white/60 hover:text-white">
           Markers
         </a>
@@ -569,16 +553,25 @@ export default function HudScreen() {
   );
 }
 
-function Pill({ children, onClick, strong }: { children: React.ReactNode; onClick: () => void; strong?: boolean }) {
+function BigButton({ children, onClick, strong }: { children: React.ReactNode; onClick: () => void; strong?: boolean }) {
   return (
-    <button
-      onClick={onClick}
-      className={`rounded-full px-3 py-1.5 transition active:scale-95 ${strong ? "bg-[#3ee59b] font-semibold text-black" : "border border-white/25 text-white/90 hover:border-white/50"}`}
-    >
+    <button onClick={onClick} className={`h-14 rounded-2xl px-4 text-lg font-semibold active:scale-[0.99] ${strong ? "bg-[#3ee59b] text-black" : "border border-white/25 text-white"}`}>
       {children}
     </button>
   );
 }
+
+function JobIcon() {
+  return (
+    <svg {...ico}>
+      <circle cx="7" cy="7" r="2" />
+      <circle cx="17" cy="7" r="2" />
+      <circle cx="17" cy="17" r="2" />
+      <circle cx="7" cy="17" r="2" />
+    </svg>
+  );
+}
+
 
 function RoundButton({
   children,
@@ -650,22 +643,6 @@ function CalIcon() {
     <svg {...ico}>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
-    </svg>
-  );
-}
-function PhoneIcon() {
-  return (
-    <svg {...ico}>
-      <rect x="3" y="7" width="18" height="10" rx="2" />
-      <circle cx="6.5" cy="13.5" r="1.2" />
-    </svg>
-  );
-}
-function LensIcon() {
-  return (
-    <svg {...ico}>
-      <circle cx="12" cy="12" r="8" />
-      <circle cx="12" cy="12" r="3.5" />
     </svg>
   );
 }
