@@ -23,6 +23,17 @@ export interface PhoneProfile {
 
 export const PHONES: PhoneProfile[] = [
   {
+    id: "iphone-15",
+    name: "iPhone 15",
+    length: 147.6,
+    width: 71.6,
+    thickness: 7.8,
+    camFromTop: 14,
+    camFromLeft: 14,
+    provisional: true,
+    note: "size from the spec sheet; the main lens position is approximate: measure it (the tip calibration measures the real mount anyway)",
+  },
+  {
     id: "redmi-note-13",
     name: "Redmi Note 13",
     length: 162.2,
@@ -46,7 +57,7 @@ export const PHONES: PhoneProfile[] = [
   },
 ];
 
-export const DEFAULT_PHONE_ID = "redmi-15";
+export const DEFAULT_PHONE_ID = "iphone-15";
 
 export function phoneById(id: string | null | undefined): PhoneProfile {
   return PHONES.find((p) => p.id === id) ?? PHONES.find((p) => p.id === DEFAULT_PHONE_ID)!;
