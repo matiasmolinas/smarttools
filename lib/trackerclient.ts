@@ -17,6 +17,13 @@ export interface WorkerResult {
   pixels?: ArrayBuffer;
 }
 
+function scaleWhileCopying(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (ua.includes("Macintosh") && (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints! > 1);
+  return !ios && /Chrome\/|Chromium\//.test(ua);
+}
+
 export class TrackerClient {
   private w: Worker;
   private busy = false;
@@ -29,8 +36,10 @@ export class TrackerClient {
   dropped = 0;
 
   private maxSide: number;
-  /** createImageBitmap can scale while it copies (Chrome; not every browser): tried once, then remembered */
-  private resizeOk: boolean | null = null;
+  /** createImageBitmap can scale while it copies. Only on Chromium (desktop and Android): Safari (and every iOS
+   * browser, which runs WebKit) returns the frame scaled into a corner of the bitmap, which silently puts every
+   * detection in the wrong place. Elsewhere the worker scales the full frame. */
+  private resizeOk: boolean | null = scaleWhileCopying() ? null : false;
 
   constructor(camera: Camera, cameraCalibrated: boolean, maxSide = 960) {
     this.maxSide = maxSide;

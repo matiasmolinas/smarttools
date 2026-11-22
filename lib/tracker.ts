@@ -61,7 +61,8 @@ const CAL_TEXT: Record<CaptureKind, string> = {
   camera: "Move the phone over the sheet",
 };
 
-type Stored<T> = { v: 1; width: number; height: number; value: T };
+/** v2: calibrations saved before the iOS frame-scaling fix (v1) may have been measured on a mis-scaled image */
+type Stored<T> = { v: 2; width: number; height: number; value: T };
 
 export class BrowserNav {
   readonly core: NavCore;
@@ -507,7 +508,7 @@ export class BrowserNav {
 function load<T>(key: string, w: number, h: number, rescale: (v: T, k: number) => T): T | null {
   try {
     const s = JSON.parse(localStorage.getItem(key) ?? "null") as Stored<T> | null;
-    if (!s || s.v !== 1) return null;
+    if (!s || s.v !== 2) return null;
     const k = w / s.width;
     if (Math.abs(h / s.height - k) > 0.01) return null;
     return rescale(s.value, k);
@@ -517,7 +518,7 @@ function load<T>(key: string, w: number, h: number, rescale: (v: T, k: number) =
 }
 function save<T>(key: string, size: { w: number; h: number }, value: T) {
   try {
-    localStorage.setItem(key, JSON.stringify({ v: 1, width: size.w, height: size.h, value } satisfies Stored<T>));
+    localStorage.setItem(key, JSON.stringify({ v: 2, width: size.w, height: size.h, value } satisfies Stored<T>));
   } catch {}
 }
 
