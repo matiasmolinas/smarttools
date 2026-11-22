@@ -6,7 +6,7 @@
 // It also keeps the calibrations (lens, dock) in localStorage and runs the calibration flows.
 
 import { AR } from "./aruco";
-import { DICTIONARY } from "./board";
+import { BOARD_TARGETS, DICTIONARY } from "./board";
 import { NavCore, cameraFromHfov, ENGINE_DEFAULTS, type Camera, type ToolCalib } from "./engine";
 import { NavSession } from "./session";
 import type { CaptureKind, CaptureResult } from "./markertracker";
@@ -30,6 +30,12 @@ const SANITY_MM = 15;
 /** detection resolution (longest side, px): a phone setting, kept per device */
 export const DETECT_SIDES = [640, 800, 960] as const;
 const DEFAULT_SIDE = 960;
+
+export type CalResult =
+  | { kind: "camera"; ok: true; rmsPx: number; views: number }
+  | { kind: "pivot"; ok: true; rmsMm: number }
+  | { kind: "roll"; ok: true; tiltDeg: number; offProfileMm: number }
+  | { kind: CaptureKind; ok: false; error: string };
 
 export interface TrackerPerf {
   /** frames processed per second, and dropped because the tracker was still busy */
@@ -70,6 +76,8 @@ export class BrowserNav {
   private cal: { step: CaptureKind; t0: number; until: number; then: CaptureKind | null } | null = null;
   private ephemeral = false;
   onMessage: (m: string) => void = () => {};
+  /** a calibration step finished: what it measured, or why it failed (for the guided setup) */
+  onCalResult: (r: CalResult) => void = () => {};
   extraInfo: () => string = () => "";
   /** tracker frames processed, for the stats line */
   frames = 0;
@@ -186,6 +194,29 @@ export class BrowserNav {
     if (n > 0 && s.snapshot) this.recorder?.feed(s.snapshot);
     this.stepCalibration(tWall);
     return n;
+  }
+
+  // ---------------- for the guided setup ----------------
+  /** The calibration in progress: which step, how far (0..1), frames captured. */
+  calStatus(): { step: CaptureKind; progress: number; captured: number } | null {
+    const c = this.cal, s = this.session;
+    if (!c || !s?.snapshot) return null;
+    return { step: c.step, progress: Math.min(1, (s.snapshot.t - c.t0) / CAL_SECONDS[c.step]), captured: s.tracker.captured };
+  }
+  /** What the camera sees now: markers, and where the calibrated tip is relative to A2. */
+  liveCheck(): { markers: number; tracking: boolean; tipToA2Mm: number | null; tiltDeg: number | null } {
+    const s = this.session, snap = s?.snapshot;
+    if (!s || !snap) return { markers: 0, tracking: false, tipToA2Mm: null, tiltDeg: null };
+    const nav = s.scene.def.navigation;
+    const p = filteredPose(snap, s.id(nav.tool), s.id(nav.tracked));
+    const a2 = BOARD_TARGETS.find((t) => t.label === "A2")!;
+    const tracking = !!p && snap.markers > 0;
+    return {
+      markers: snap.markers,
+      tracking,
+      tipToA2Mm: p ? Math.hypot(p.tip[0] - a2.x * 1000, p.tip[1] - a2.y * 1000, p.tip[2]) : null,
+      tiltDeg: p ? (Math.acos(Math.max(-1, Math.min(1, -p.axis[2]))) * 180) / Math.PI : null,
+    };
   }
 
   // ---------------- tracker speed ----------------
@@ -400,18 +431,24 @@ export class BrowserNav {
     if ("camera" in r) this.client?.setCamera(r.camera, true);
     if ("error" in r) {
       this.onMessage(r.error.toUpperCase());
+      this.onCalResult({ kind: c.step, ok: false, error: r.error });
       this.cal = null;
       return;
     }
     if ("camera" in r) {
       if (!this.ephemeral) save(key("camera", this.phone.id), this.size, r.camera);
       this.onMessage(`LENS OK · ${r.views} VIEWS · ${r.rms.toFixed(2)} PX`);
+      this.onCalResult({ kind: "camera", ok: true, rmsPx: r.rms, views: r.views });
     }
-    if ("tipCam" in r) this.onMessage(`TIP OK · ${r.rmsMm.toFixed(2)} MM`);
+    if ("tipCam" in r) {
+      this.onMessage(`TIP OK · ${r.rmsMm.toFixed(2)} MM`);
+      this.onCalResult({ kind: "pivot", ok: true, rmsMm: r.rmsMm });
+    }
     if ("axisCam" in r) {
       if (!this.ephemeral) save(key("tool", this.phone.id), this.size, s.tool);
       // sanity check against the phone profile and the dock's geometry
       const chk = checkCalibration(s.tool, { phone: this.phone });
+      this.onCalResult({ kind: "roll", ok: true, tiltDeg: chk.tiltDeg, offProfileMm: chk.distanceMm });
       this.onMessage(
         chk.distanceMm > SANITY_MM
           ? `CHECK THE PHONE: TIP ${Math.round(chk.distanceMm)} MM FROM THE ${this.phone.name.toUpperCase()} PROFILE`

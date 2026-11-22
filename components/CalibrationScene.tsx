@@ -55,6 +55,25 @@ function holdAt(t: number) {
   return { tip: [TIP[0], TIP[1], tipZ] as V3, tilt, az, twist };
 }
 
+export type SceneFocus = "lens" | "pivot" | "roll" | "check";
+
+/** One step on its own, looped (the guided setup shows the movement of the step you are on). */
+function focusTime(focus: SceneFocus, e: number): number {
+  if (focus === "pivot") return 1.5 + (e % 6);
+  if (focus === "roll") return 8 + (e % 5);
+  return 12.9 + (e % 4.6); // check: lift, set the tip on A2, hold
+}
+/** Calibrating the lens: the drill (phone on it) sweeps over the sheet, near and far, tilting to every side. */
+function lensHold(e: number) {
+  const w = (2 * Math.PI) / 8;
+  return {
+    tip: [0.05 * Math.sin(w * e), A2.y + 0.05 * Math.sin(2 * w * e), 0.09 + 0.05 * (0.5 + 0.5 * Math.sin(0.6 * w * e))] as V3,
+    tilt: 0.32 * (0.6 + 0.4 * Math.sin(1.3 * w * e)),
+    az: w * e * 1.5,
+    twist: 0.4 * Math.sin(w * e),
+  };
+}
+
 function toolWorld(h: ReturnType<typeof holdAt>): Xf {
   // tool frame: origin at the tip, +Z the drilling direction; tilted in the direction az, twisted around +Z
   const tiltQ = qaxis([-Math.sin(h.az), Math.cos(h.az), 0], h.tilt);
@@ -78,7 +97,11 @@ function snapshotFor(def: SceneDef, camW: Xf) {
 
 const v3 = (p: V3) => new THREE.Vector3(p[0], p[1], p[2]);
 
-export default function CalibrationScene() {
+export default function CalibrationScene({ focus, compact = false, className }: { focus?: SceneFocus; compact?: boolean; className?: string } = {}) {
+  const focusRef = useRef(focus);
+  useEffect(() => {
+    focusRef.current = focus;
+  }, [focus]);
   const mountRef = useRef<HTMLDivElement>(null);
   const insetRef = useRef<HTMLCanvasElement>(null);
   const [step, setStep] = useState(-1);
@@ -150,10 +173,23 @@ export default function CalibrationScene() {
 
     const cam = new THREE.PerspectiveCamera(36, 1, 0.01, 10);
     cam.up.set(0, 0, 1);
-    cam.position.set(0.46, -0.52, 0.36);
+    // compact (inside the guided setup): closer, on the tip and the drill
+    if (!compact) cam.position.set(0.46, -0.52, 0.36);
     cam.layers.enable(1);
     const controls = new OrbitControls(cam, renderer.domElement);
-    controls.target.set(-0.01, -0.01, 0.13);
+    if (!compact) controls.target.set(-0.01, -0.01, 0.13);
+    // compact: framed per step (the lens step needs the whole drill high above the sheet)
+    let framed: SceneFocus | undefined | null = null;
+    const frameFor = (fc: SceneFocus | undefined) => {
+      if (fc === "lens") {
+        cam.position.set(0.42, -0.5, 0.34);
+        controls.target.set(0, -0.02, 0.14);
+      } else {
+        cam.position.set(0.34, -0.4, 0.26);
+        controls.target.set(0, -0.015, 0.12);
+      }
+      controls.update();
+    };
     controls.enableZoom = false;
     controls.enablePan = false;
     controls.enableDamping = true;
@@ -167,7 +203,7 @@ export default function CalibrationScene() {
       const w = el.clientWidth, h = el.clientHeight;
       renderer.setSize(w, h);
       cam.aspect = w / h;
-      cam.fov = w < 640 ? 50 : 36;
+      cam.fov = compact ? 38 : w < 640 ? 50 : 36;
       cam.updateProjectionMatrix();
     };
     const ro = new ResizeObserver(resize);
@@ -184,17 +220,23 @@ export default function CalibrationScene() {
     const frame = () => {
       raf = requestAnimationFrame(frame);
       if (!visible) return;
-      const t = ((performance.now() - t0) / 1000) % LOOP;
-      const h = holdAt(t);
+      const e = (performance.now() - t0) / 1000;
+      const fc = focusRef.current;
+      if (compact && fc !== framed) {
+        framed = fc;
+        frameFor(fc);
+      }
+      const t = fc ? (fc === "lens" ? 0 : focusTime(fc, e)) : e % LOOP;
+      const h = fc === "lens" ? lensHold(e) : holdAt(t);
       const toolW = toolWorld(h);
       const camW = compose(toolW, inverse(toolLocal(tool)));
       const { ids, snap } = snapshotFor(def, camW);
       s3.update(snap, ids);
 
       // pivot: the lens sweeps a cone; its rays all meet at the tip
-      const pivoting = t >= 1.5 && t < 7.5;
-      if (t < 1.5) lensPath.length = 0;
-      if (pivoting) {
+      const pivoting = fc !== "lens" && t >= 1.5 && t < 7.5;
+      if (fc !== "lens" && t < 1.5) lensPath.length = 0;
+      if (pivoting || fc === "lens") {
         lensPath.push(v3(camW.p));
         if (lensPath.length > TRAIL) lensPath.shift();
       }
@@ -202,10 +244,10 @@ export default function CalibrationScene() {
       lensPath.forEach((p, i) => tp.setXYZ(i, p.x, p.y, p.z));
       tp.needsUpdate = true;
       trailGeo.setDrawRange(0, lensPath.length);
-      (trail.material as THREE.LineBasicMaterial).opacity = t < 8 ? 0.9 : Math.max(0, 0.9 - (t - 8) * 0.6);
+      (trail.material as THREE.LineBasicMaterial).opacity = fc === "lens" || t < 8 ? 0.9 : Math.max(0, 0.9 - (t - 8) * 0.6);
       const rp = raysGeo.attributes.position as THREE.BufferAttribute;
       let nr = 0;
-      if (t < 8.5) {
+      if (fc !== "lens" && t < 8.5) {
         for (let i = 0; i < RAYS && lensPath.length; i++) {
           const p = lensPath[Math.floor((i / RAYS) * lensPath.length)];
           rp.setXYZ(nr * 2, p.x, p.y, p.z);
@@ -226,7 +268,7 @@ export default function CalibrationScene() {
 
       // the fixed point pulses
       const pulse = 1 + 0.25 * Math.sin(t * 6);
-      halo.scale.setScalar(pivoting || t >= 13.5 ? pulse : 1);
+      halo.scale.setScalar(fc !== "lens" && (pivoting || t >= 13.5) ? pulse : 1);
       (halo.material as THREE.MeshBasicMaterial).color.set(t >= 13.5 && t < 17.5 ? 0x3dffa8 : 0xffb547);
 
       controls.update();
@@ -235,15 +277,17 @@ export default function CalibrationScene() {
       phoneCam.position.set(...camW.p);
       const q = new THREE.Quaternion(camW.q[1], camW.q[2], camW.q[3], camW.q[0]);
       phoneCam.quaternion.copy(q.multiply(new THREE.Quaternion(1, 0, 0, 0)));
-      phoneR.render(scene, phoneCam);
+      if (!compact) phoneR.render(scene, phoneCam);
 
-      // the step in progress (a short pause between steps keeps the last one); -1 before, 3 after
-      const st = t < STEPS[0].from ? -1 : t >= STEPS[2].to ? 3 : STEPS.reduce((k, s, i) => (t >= s.from ? i : k), 0);
-      if (st !== lastStep) {
-        lastStep = st;
-        setStep(st);
+      if (!compact) {
+        // the step in progress (a short pause between steps keeps the last one); -1 before, 3 after
+        const st = t < STEPS[0].from ? -1 : t >= STEPS[2].to ? 3 : STEPS.reduce((k, s, i) => (t >= s.from ? i : k), 0);
+        if (st !== lastStep) {
+          lastStep = st;
+          setStep(st);
+        }
+        setProgress(t / LOOP);
       }
-      setProgress(t / LOOP);
     };
     frame();
 
@@ -261,6 +305,13 @@ export default function CalibrationScene() {
   }, []);
 
   const cur = step >= 0 && step < STEPS.length ? STEPS[step] : null;
+  if (compact)
+    return (
+      <div className={`relative overflow-hidden rounded-2xl ${className ?? "h-56"}`}>
+        <div ref={mountRef} className="h-full w-full" />
+        <canvas ref={insetRef} className="hidden" />
+      </div>
+    );
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10">
       <div ref={mountRef} className="h-[420px] w-full cursor-grab sm:h-[480px]" />
