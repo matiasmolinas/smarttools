@@ -106,6 +106,11 @@ function Run({ run }: { run: BenchRun }) {
         <p className="mt-1 font-mono text-[11px] text-white/50">
           {new Date(run.created).toLocaleString()} · {run.phone.name} · {run.mount} · lens {run.calibration.lens ? "calibrated" : "not calibrated"} · dock {run.calibration.dock ? "calibrated" : "not calibrated"} · filter {Number(run.filter.posMinCutoff) >= 1000 ? "off" : "One Euro"}
         </p>
+        {run.tracker && (
+          <p className="mt-1 font-mono text-[11px] text-white/50">
+            tracker: {Number(run.tracker.fps).toFixed(1)} frames/s · {Number(run.tracker.latencyMs).toFixed(0)} ms capture → pose · detect {Number(run.tracker.detectMs).toFixed(0)} ms
+          </p>
+        )}
         {run.notes && <p className="mt-2 text-sm text-white/65">{run.notes}</p>}
       </div>
 

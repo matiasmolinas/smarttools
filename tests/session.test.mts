@@ -34,6 +34,9 @@ test("a rendered frame goes through tracker -> engine -> snapshot, matching the 
   assert.ok(Math.abs(est.angleErrDeg - truth.angleErrDeg) < 0.1, `angle ${est.angleErrDeg} vs ${truth.angleErrDeg}`);
   assert.ok(Math.abs(est.gapMm - truth.gapMm) < 0.3, `gap ${est.gapMm} vs ${truth.gapMm}`);
   assert.ok(s.lastFrame!.markers >= 4);
+  // each stage's time is reported, to find what is slow on a given phone
+  const tm = s.lastFrame!.timings!;
+  for (const k of ["detectMs", "refineMs", "poseMs"] as const) assert.ok(tm[k] >= 0 && tm[k] < 5000, `${k} ${tm[k]}`);
   const { aim, mark } = s.overlayPoints();
   assert.ok(aim && mark && aim.x > 0 && aim.x < rig.width && mark.y > 0, "overlay points project into the image");
   s.dispose();

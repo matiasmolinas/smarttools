@@ -29,6 +29,8 @@ export interface TrackerFrame {
   camera: Camera;
   /** markers on parts (anchors): T_camera_body per body seen */
   bodies: BodyPose[];
+  /** how long each stage took, ms (to find what is slow on a given phone) */
+  timings?: { detectMs: number; refineMs: number; poseMs: number; drawMs?: number; bitmapMs?: number };
 }
 
 export type CaptureResult =
@@ -113,10 +115,13 @@ export class MarkerTracker {
 
   /** Process one frame captured at tCapture (seconds). */
   frame(img: Rgba, tCapture: number): TrackerFrame {
+    const t0 = performance.now();
     const all = this.det.detect(img);
+    const t1 = performance.now();
     const known = all.filter((m) => markerCorners(m.id));
     const onParts = all.filter((m) => this.bodyIds.has(m.id));
     const quads = this.core.refineMany(img, known.map((m) => m.corners));
+    const t2 = performance.now();
     const world: P[] = [];
     const raw: P[] = [];
     known.forEach((m, i) => {
@@ -151,7 +156,9 @@ export class MarkerTracker {
       bodies = solveBodies(this.core, this.bodies, this.lastBodyMarkers, { f: cam.f, cx: cam.cx, cy: cam.cy });
       quads.push(...pq);
     }
-    return { tCapture, pose, markers: kept, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam, bodies };
+    const t3 = performance.now();
+    const timings = { detectMs: t1 - t0, refineMs: t2 - t1, poseMs: t3 - t2 };
+    return { tCapture, pose, markers: kept, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam, bodies, timings };
   }
 
   private sampleFocal(world: P[], und: P[], cam: Camera) {

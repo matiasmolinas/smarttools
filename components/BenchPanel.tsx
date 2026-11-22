@@ -5,8 +5,8 @@
 // saved on the phone and downloaded. The protocol is docs/FIELD-TEST.md; the charts are on /benchmarks.
 
 import { useEffect, useRef, useState } from "react";
-import type { BrowserNav } from "@/lib/tracker";
-import { PHASES, summarize, type PhaseId, type PhaseSummary } from "@/lib/bench";
+import { DETECT_SIDES, type BrowserNav, type TrackerPerf } from "@/lib/tracker";
+import { PHASES, summarize, type BenchRun, type PhaseId, type PhaseSummary } from "@/lib/bench";
 import { browserMemory } from "@/lib/memory";
 
 const MOUNTS = ["provisional mount", "dock v0.4"] as const;
@@ -14,7 +14,24 @@ const COUNTDOWN_S = 3;
 
 type Live = ReturnType<NonNullable<BrowserNav["bench"]>["liveStats"]>;
 
-export default function BenchPanel({ tracker, say, onClose }: { tracker: () => BrowserNav | null; say: (m: string) => void; onClose: () => void }) {
+export default function BenchPanel({
+  tracker,
+  say,
+  onClose,
+  realCamera = true,
+  cameraRes = 1080,
+  onCameraRes,
+}: {
+  tracker: () => BrowserNav | null;
+  say: (m: string) => void;
+  onClose: () => void;
+  /** the real camera (the speed settings apply to it, not to the simulated one) */
+  realCamera?: boolean;
+  cameraRes?: 720 | 1080;
+  onCameraRes?: (r: 720 | 1080) => void;
+}) {
+  const [perf, setPerf] = useState<TrackerPerf | null>(null);
+  const [side, setSide] = useState<number>(960);
   const [live, setLive] = useState<Live | null>(null);
   const [rec, setRec] = useState<{ phase: PhaseId; left: number; countdown: number } | null>(null);
   const [done, setDone] = useState<PhaseSummary[]>([]);
@@ -59,6 +76,10 @@ export default function BenchPanel({ tracker, say, onClose }: { tracker: () => B
         setFilterOn(tr.filterOn);
       }
       const b = tr?.bench;
+      if (tr) {
+        setPerf(tr.perf());
+        setSide(tr.maxSide);
+      }
       if (!b) return;
       const now = performance.now() / 1000;
       setLive(b.liveStats());
@@ -100,6 +121,7 @@ export default function BenchPanel({ tracker, say, onClose }: { tracker: () => B
       phone: { id: tr.phone.id, name: tr.phone.name },
       calibration: { lens: tr.calibrated.camera, dock: tr.calibrated.tool },
       filter: tr.filterConfig(),
+      tracker: tr.perf() as unknown as BenchRun["tracker"],
       notes: "",
     });
     try {
@@ -127,6 +149,43 @@ export default function BenchPanel({ tracker, say, onClose }: { tracker: () => B
         <button onClick={onClose} className="text-white/60 hover:text-white">
           close ✕
         </button>
+      </div>
+
+      <div className="mt-2 rounded-lg border border-white/10 p-2">
+        <div className="flex items-center justify-between">
+          <span className="text-white/50">TRACKER SPEED</span>
+          <span className={perf && perf.latencyMs > 150 ? "text-[#ff8a8a]" : "text-[#3ee59b]"}>{perf ? `${f(perf.latencyMs, 0)} ms` : "–"}</span>
+        </div>
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+          <span className="text-white/50">frames/s · dropped/s</span>
+          <span>{perf ? `${f(perf.fps, 1)} · ${f(perf.droppedPerS, 1)}` : "–"}</span>
+          <span className="text-white/50">camera → detect px</span>
+          <span>{perf ? `${perf.video.w}×${perf.video.h} → ${perf.detect.w}×${perf.detect.h}` : "–"}</span>
+          <span className="text-white/50">copy · scale ms</span>
+          <span>{perf ? `${f(perf.bitmapMs, 0)} · ${f(perf.drawMs, 0)}` : "–"}</span>
+          <span className="text-white/50">detect · refine · pose</span>
+          <span>{perf ? `${f(perf.detectMs, 0)} · ${f(perf.refineMs, 0)} · ${f(perf.poseMs, 0)}` : "–"}</span>
+        </div>
+        {realCamera && (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <button
+              className={btn}
+              onClick={() => {
+                const tr = tracker();
+                if (!tr) return;
+                const next = DETECT_SIDES[(DETECT_SIDES.indexOf(tr.maxSide as (typeof DETECT_SIDES)[number]) + 1) % DETECT_SIDES.length];
+                tr.setMaxSide(next);
+                setSide(next);
+                say(`DETECTION ${next} PX`);
+              }}
+            >
+              detect {side} px
+            </button>
+            <button className={btn} onClick={() => onCameraRes?.(cameraRes === 1080 ? 720 : 1080)}>
+              camera {cameraRes}p
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5">

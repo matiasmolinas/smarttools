@@ -11,7 +11,8 @@ import type { Xf } from "../xform";
 
 export type ToWorker =
   | { type: "init"; camera: Camera; cameraCalibrated: boolean; maxSide: number }
-  | { type: "frame"; bitmap: ImageBitmap; tCapture: number }
+  | { type: "frame"; bitmap: ImageBitmap; tCapture: number; srcWidth: number; bitmapMs: number }
+  | { type: "setMaxSide"; maxSide: number }
   | { type: "sim"; rig: Rig; codes: Uint8Array; toolW: Xf; tCapture: number; seed: number }
   | { type: "setCamera"; camera: Camera; calibrated: boolean }
   | { type: "beginCapture"; kind: CaptureKind }
@@ -38,6 +39,8 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
   if (!tracker || !core) return;
   switch (m.type) {
     case "frame": {
+      // the bitmap usually arrives already scaled down to the detection size (createImageBitmap's resize)
+      const t0 = performance.now();
       const b = m.bitmap;
       const ds = Math.min(1, maxSide / Math.max(b.width, b.height));
       const w = Math.round(b.width * ds), h = Math.round(b.height * ds);
@@ -45,10 +48,17 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
       const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
       ctx.drawImage(b, 0, 0, w, h);
       b.close();
-      const f = tracker.frame(ctx.getImageData(0, 0, w, h), m.tCapture);
-      post({ type: "result", frame: f, width: w, height: h, scale: 1 / ds });
+      const img = ctx.getImageData(0, 0, w, h);
+      const drawMs = performance.now() - t0;
+      const f = tracker.frame(img, m.tCapture);
+      f.timings = { ...f.timings!, drawMs, bitmapMs: m.bitmapMs };
+      // frame px -> source (video) px
+      post({ type: "result", frame: f, width: w, height: h, scale: m.srcWidth / w });
       break;
     }
+    case "setMaxSide":
+      maxSide = m.maxSide;
+      break;
     case "sim": {
       const img = renderTool(core, m.rig, m.codes, [m.toolW], { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, m.seed, { ss: 1 });
       const f = tracker.frame(img, m.tCapture);

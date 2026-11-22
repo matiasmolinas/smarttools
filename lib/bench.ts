@@ -96,6 +96,8 @@ export interface BenchRun {
   phone: { id: string; name: string };
   calibration: { lens: boolean; dock: boolean };
   filter: Record<string, number | boolean>;
+  /** how fast the tracker ran on this phone when the run was saved (frames/s, stage medians in ms) */
+  tracker?: Record<string, number | { w: number; h: number }> | null;
   notes: string;
   samples: BenchSample[];
   accel: AccelSample[];

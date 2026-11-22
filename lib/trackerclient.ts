@@ -28,7 +28,12 @@ export class TrackerClient {
   sent = 0;
   dropped = 0;
 
+  private maxSide: number;
+  /** createImageBitmap can scale while it copies (Chrome; not every browser): tried once, then remembered */
+  private resizeOk: boolean | null = null;
+
   constructor(camera: Camera, cameraCalibrated: boolean, maxSide = 960) {
+    this.maxSide = maxSide;
     this.w = new Worker(new URL("./workers/tracker.worker.ts", import.meta.url), { type: "module" });
     let resolveReady!: () => void;
     this.readyPromise = new Promise((r) => (resolveReady = r));
@@ -63,14 +68,38 @@ export class TrackerClient {
     }
     this.busy = true;
     try {
-      const bitmap = await createImageBitmap(source as ImageBitmapSource);
-      this.send({ type: "frame", bitmap, tCapture }, [bitmap]);
+      const v = source as HTMLVideoElement & HTMLCanvasElement;
+      const sw = v.videoWidth || v.width, sh = v.videoHeight || v.height;
+      const ds = Math.min(1, this.maxSide / Math.max(sw, sh));
+      const t0 = performance.now();
+      let bitmap: ImageBitmap | null = null;
+      if (ds < 1 && this.resizeOk !== false) {
+        try {
+          bitmap = await createImageBitmap(source as ImageBitmapSource, { resizeWidth: Math.round(sw * ds), resizeHeight: Math.round(sh * ds), resizeQuality: "medium" });
+          this.resizeOk = bitmap.width === Math.round(sw * ds);
+          if (!this.resizeOk) {
+            bitmap.close();
+            bitmap = null;
+          }
+        } catch {
+          this.resizeOk = false;
+        }
+      }
+      bitmap ??= await createImageBitmap(source as ImageBitmapSource);
+      const bitmapMs = performance.now() - t0;
+      this.send({ type: "frame", bitmap, tCapture, srcWidth: sw, bitmapMs }, [bitmap]);
       this.sent++;
       return true;
     } catch {
       this.busy = false;
       return false;
     }
+  }
+
+  /** The detection resolution (longest side, px). */
+  setMaxSide(maxSide: number) {
+    this.maxSide = maxSide;
+    this.send({ type: "setMaxSide", maxSide });
   }
 
   /** A simulated frame: the worker renders the camera view for the tool pose and tracks it. */
