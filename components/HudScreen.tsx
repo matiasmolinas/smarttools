@@ -52,6 +52,18 @@ export default function HudScreen() {
   const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
   const [done, setDone] = useState(0);
   const [benchOpen, setBenchOpen] = useState(false);
+  // the camera's resolution: 1080p by default, 720p is lighter for slow phones (kept per device)
+  const [camRes, setCamRes] = useState<720 | 1080>(1080);
+  const camResRef = useRef<720 | 1080>(1080);
+  useEffect(() => {
+    try {
+      const v = Number(localStorage.getItem("st-cam-res"));
+      if (v === 720 || v === 1080) {
+        camResRef.current = v;
+        setCamRes(v);
+      }
+    } catch {}
+  }, []);
   // the tracker of the view in use (camera or the simulated camera), stable for the bench panel
   const benchTracker = useCallback(() => (bgRef.current === "simcam" ? simTrackerRef.current : trackerRef.current), []);
 
@@ -135,7 +147,7 @@ export default function HudScreen() {
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          video: { facingMode: { ideal: "environment" }, width: { ideal: camResRef.current === 720 ? 1280 : 1920 }, height: { ideal: camResRef.current } },
           audio: false,
         });
         stopCamera();
@@ -358,7 +370,21 @@ export default function HudScreen() {
         </div>
       )}
 
-      {benchOpen && (bg === "camera" || bg === "simcam") && <BenchPanel tracker={benchTracker} say={say} onClose={() => setBenchOpen(false)} />}
+      {benchOpen && (bg === "camera" || bg === "simcam") && <BenchPanel
+          tracker={benchTracker}
+          say={say}
+          onClose={() => setBenchOpen(false)}
+          realCamera={bg === "camera"}
+          cameraRes={camRes}
+          onCameraRes={(r) => {
+            camResRef.current = r;
+            setCamRes(r);
+            try {
+              localStorage.setItem("st-cam-res", String(r));
+            } catch {}
+            void choose("camera");
+          }}
+        />}
 
       {/* plan and job bar, bottom (camera only): plan with the tool as a pointer, choose a plan, end the job */}
       {bg === "camera" && (

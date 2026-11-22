@@ -27,7 +27,26 @@ import { JobRecorder, defaultContext, type JobRecord } from "./jobrecord";
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
 /** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
 const SANITY_MM = 15;
-const MAX_SIDE = 960; // detection resolution
+/** detection resolution (longest side, px): a phone setting, kept per device */
+export const DETECT_SIDES = [640, 800, 960] as const;
+const DEFAULT_SIDE = 960;
+
+export interface TrackerPerf {
+  /** frames processed per second, and dropped because the tracker was still busy */
+  fps: number;
+  droppedPerS: number;
+  /** medians over the last seconds, ms */
+  bitmapMs: number;
+  drawMs: number;
+  detectMs: number;
+  refineMs: number;
+  poseMs: number;
+  latencyMs: number;
+  markers: number;
+  /** what the camera gives and what the detector works on, px */
+  video: { w: number; h: number };
+  detect: { w: number; h: number };
+}
 
 const CAL_SECONDS: Record<CaptureKind, number> = { pivot: 5, roll: 5, camera: 20 };
 const CAL_TEXT: Record<CaptureKind, string> = {
@@ -64,6 +83,11 @@ export class BrowserNav {
   bench: BenchRecorder | null = null;
   /** the engine's One Euro pose filter on (default) or off (raw poses on screen, for comparison) */
   filterOn = true;
+  /** detection resolution, longest side (px) */
+  maxSide: number = readSide();
+  private videoSize = { w: 0, h: 0 };
+  private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number }[] = [];
+  private droppedLog: { t: number; n: number }[] = [];
 
   private constructor(core: NavCore) {
     this.core = core;
@@ -84,7 +108,7 @@ export class BrowserNav {
 
   private attachWorker(camera: Camera, calibrated: boolean) {
     this.client?.terminate();
-    const c = new TrackerClient(camera, calibrated, MAX_SIDE);
+    const c = new TrackerClient(camera, calibrated, this.maxSide);
     c.onResult = (r: WorkerResult) => this.onWorkerResult(r);
     this.client = c;
   }
@@ -94,6 +118,12 @@ export class BrowserNav {
     this.session?.pushTrackerFrame(r.frame);
     this.frames++;
     this.benchSample(r);
+    const now = performance.now() / 1000;
+    const tm = r.frame.timings;
+    this.perfLog.push({ t: now, bitmapMs: tm?.bitmapMs ?? 0, drawMs: tm?.drawMs ?? 0, detectMs: tm?.detectMs ?? 0, refineMs: tm?.refineMs ?? 0, poseMs: tm?.poseMs ?? 0, latencyMs: Math.max(0, (now - r.frame.tCapture) * 1000), markers: r.frame.markers });
+    this.droppedLog.push({ t: now, n: this.client?.dropped ?? 0 });
+    while (this.perfLog.length && now - this.perfLog[0].t > 3) this.perfLog.shift();
+    while (this.droppedLog.length && now - this.droppedLog[0].t > 3) this.droppedLog.shift();
     if (r.pixels) this.onSimImage(new ImageData(new Uint8ClampedArray(r.pixels), r.width, r.height));
   }
 
@@ -138,7 +168,8 @@ export class BrowserNav {
     const sw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
     const sh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
     if (!sw || !sh || (source instanceof HTMLVideoElement && source.readyState < 2)) return;
-    const ds = Math.min(1, MAX_SIDE / Math.max(sw, sh));
+    const ds = Math.min(1, this.maxSide / Math.max(sw, sh));
+    this.videoSize = { w: sw, h: sh };
     this.ensureSession(Math.round(sw * ds), Math.round(sh * ds), tCapture);
     void this.client?.frame(source, tCapture);
   }
@@ -155,6 +186,43 @@ export class BrowserNav {
     if (n > 0 && s.snapshot) this.recorder?.feed(s.snapshot);
     this.stepCalibration(tWall);
     return n;
+  }
+
+  // ---------------- tracker speed ----------------
+  /** How fast the tracker runs on this phone, over the last 3 s (null before any frame). */
+  perf(): TrackerPerf | null {
+    const l = this.perfLog;
+    if (l.length < 2) return null;
+    const med = (k: keyof (typeof l)[number]) => {
+      const v = l.map((x) => x[k]).sort((a, b) => a - b);
+      return v[Math.floor(v.length / 2)];
+    };
+    const span = Math.max(1e-3, l[l.length - 1].t - l[0].t);
+    const d = this.droppedLog;
+    const dropped = d.length > 1 ? (d[d.length - 1].n - d[0].n) / Math.max(1e-3, d[d.length - 1].t - d[0].t) : 0;
+    return {
+      fps: (l.length - 1) / span,
+      droppedPerS: dropped,
+      bitmapMs: med("bitmapMs"),
+      drawMs: med("drawMs"),
+      detectMs: med("detectMs"),
+      refineMs: med("refineMs"),
+      poseMs: med("poseMs"),
+      latencyMs: med("latencyMs"),
+      markers: med("markers"),
+      video: this.videoSize,
+      detect: { w: Math.round(this.size.w), h: Math.round(this.size.h) },
+    };
+  }
+  /** Change the detection resolution (the session restarts at the new size; calibrations are rescaled). */
+  setMaxSide(side: number) {
+    this.maxSide = side;
+    try {
+      localStorage.setItem("st-detect-side", String(side));
+    } catch {}
+    this.perfLog = [];
+    this.droppedLog = [];
+    this.forgetCalibrationSilently();
   }
 
   // ---------------- the bench lab ----------------
@@ -375,6 +443,14 @@ function save<T>(key: string, size: { w: number; h: number }, value: T) {
 }
 
 const key = (what: "camera" | "tool", phoneId: string) => `st-${what}:${phoneId}`;
+function readSide(): number {
+  try {
+    const v = Number(localStorage.getItem("st-detect-side"));
+    return (DETECT_SIDES as readonly number[]).includes(v) ? v : DEFAULT_SIDE;
+  } catch {
+    return DEFAULT_SIDE;
+  }
+}
 function readPhoneId(): string {
   try {
     return localStorage.getItem("st-phone") ?? DEFAULT_PHONE_ID;
