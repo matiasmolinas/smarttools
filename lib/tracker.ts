@@ -91,6 +91,8 @@ export class BrowserNav {
   bench: BenchRecorder | null = null;
   /** the engine's One Euro pose filter on (default) or off (raw poses on screen, for comparison) */
   filterOn = true;
+  /** the angle tolerance (deg): the specification (0.5) or a wider one to practise by hand */
+  tolDeg: number = readTol();
   /** detection resolution, longest side (px) */
   maxSide: number = readSide();
   private videoSize = { w: 0, h: 0 };
@@ -288,7 +290,17 @@ export class BrowserNav {
         { posMinCutoff: 1000, posBeta: 0, rotMinCutoff: 1000, rotBeta: 0, dCutoff: d.dCutoff, predict };
   }
   private applyFilter() {
-    this.session?.engine.configure(this.filterConfig());
+    // one configuration: the pose filter and the angle tolerance (configure fills the rest with defaults)
+    const tol = this.tolDeg;
+    this.session?.engine.configure({ ...this.filterConfig(), requirementAngleDeg: tol, limits: { ...ENGINE_DEFAULTS.limits, maxAngleDeg: tol * 0.8 } });
+  }
+  /** Angle tolerance: 0.5° (the specification) or wider to practise by hand. Kept per device. */
+  setTolerance(deg: number) {
+    this.tolDeg = deg;
+    try {
+      localStorage.setItem("st-tol", String(deg));
+    } catch {}
+    this.applyFilter();
   }
 
   // ---------------- plans and jobs ----------------
@@ -344,7 +356,8 @@ export class BrowserNav {
       image: { aim: pts.aim, mark: pts.mark, quads: lf?.quads ?? [], scale: this.scale },
       info: `${snap.markers} tags · ${c.camera ? "lens ✓" : `f ${Math.round(lf?.focalPx ?? 0)}${lf?.focalLocked ? "" : "?"}`} · ${c.tool ? "dock ✓" : "dock ?"} · ${Math.round(snap.stats.latencyS * 1000)} ms${this.extraInfo()}`,
       calibrating: cal ? { text: CAL_TEXT[cal.step], progress: Math.min(1, (snap.t - cal.t0) / CAL_SECONDS[cal.step]), count: s.tracker.captured } : null,
-      limits: ENGINE_DEFAULTS.limits,
+      limits: { ...ENGINE_DEFAULTS.limits, maxAngleDeg: this.tolDeg * 0.8 },
+      tolDeg: this.tolDeg,
     });
   }
 
@@ -480,6 +493,14 @@ function save<T>(key: string, size: { w: number; h: number }, value: T) {
 }
 
 const key = (what: "camera" | "tool", phoneId: string) => `st-${what}:${phoneId}`;
+function readTol(): number {
+  try {
+    const v = Number(localStorage.getItem("st-tol"));
+    return v === 2 ? 2 : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
 function readSide(): number {
   try {
     const v = Number(localStorage.getItem("st-detect-side"));

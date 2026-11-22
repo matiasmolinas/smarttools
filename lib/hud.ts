@@ -38,6 +38,10 @@ export interface Overlay {
   alarms?: number;
   /** guidance hints on the part (lib/guidance.ts): out of order, material left */
   hint?: string | null;
+  /** markers used in the last pose (few = a weak pose: say so) */
+  markers?: number;
+  /** the angle tolerance in use, deg (the specification, or a wider practice setting) */
+  tolDeg?: number;
 }
 export interface HudOptions {
   background?: HudBackground;
@@ -161,7 +165,7 @@ export function drawHud(
         }
       }, WHITE, lw);
       if (!onMark && s.phase !== "drill" && s.offsetMm > 3) {
-        label(ctx, `${s.label} · ${s.offsetMm.toFixed(0)} mm`, mx + r * 3.4, my - r * 2.2, u * 3, SOFT, "left");
+        label(ctx, `${s.label} · ${s.offsetMm.toFixed(0)} mm`, mx + r * 3.4, my - r * 2.2, u * 4, WHITE, "left");
       }
     } else {
       // off-screen: a small chevron on the edge pointing to it
@@ -212,11 +216,11 @@ export function drawHud(
     const r = u * 12.5;
     line(ctx, () => ctx.arc(rc.x, rc.y, r, 0, Math.PI * 2), "rgba(245,248,252,0.22)", lw * 2.2);
     line(ctx, () => ctx.arc(rc.x, rc.y, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2), frac >= 0.998 ? RED : GREEN, lw * 2.4);
-    label(ctx, `${s.depthMm.toFixed(1)}`, rc.x + r + u * 2.5, rc.y - u * 1.2, u * 4.2, WHITE, "left", MONO, 500);
-    label(ctx, `/ ${s.depthTargetMm ?? DEPTH_TARGET_MM} mm`, rc.x + r + u * 2.5, rc.y + u * 3, u * 2.6, SOFT, "left", MONO, 400);
+    label(ctx, `${s.depthMm.toFixed(1)}`, rc.x + r + u * 2.5, rc.y - u * 1.6, u * 6, WHITE, "left", MONO, 600);
+    label(ctx, `/ ${s.depthTargetMm ?? DEPTH_TARGET_MM} mm`, rc.x + r + u * 2.5, rc.y + u * 4, u * 3.6, SOFT, "left", MONO, 500);
   } else if (onMark || s.phase === "align") {
     // angle readout beside the chuck ring, only while squaring up
-    label(ctx, `${s.angleErrDeg.toFixed(1)}°`, chX + chuckR + u * 2, chY, u * 3.6, square ? GREEN : AMBER, "left", MONO, 500);
+    label(ctx, `${s.angleErrDeg.toFixed(1)}°`, chX + chuckR + u * 2, chY, u * 6, square ? GREEN : AMBER, "left", MONO, 600);
   }
 
   ctx.restore();
@@ -234,12 +238,14 @@ export function drawHud(
       ? { text: "STOP · no-go zone", color: RED, step: "!", pass: false, check: "the tip is close to a pipe or cable: back out" }
       : ov?.alarms && ov.alarms & 8
       ? { text: "STOP · the part moved", color: RED, step: "!", pass: false, check: "it slipped under the tool: re-clamp, back out, re-check" }
-      : instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost), gate: ov?.gate?.message ?? null });
+      : ov && !ov.lost && ov.markers != null && ov.markers < 4 && !ov.calibrating
+        ? { text: "Show more of the sheet", color: AMBER, step: "!", pass: false, check: `only ${ov.markers} markers seen: keep more markers in front of the bit` }
+        : instruction(s, { onMark, square, ready, locking, broken, lost: !!(ov && ov.lost), gate: ov?.gate?.message ?? null, tol: ov?.tolDeg ?? ANGLE_TOL_DEG });
   if (ov?.hint && cue.color !== RED && !ov.calibrating) cue.check = ov.hint;
   const panelW = landscape ? Math.min(w * 0.62, u * 130) : w - u * 8;
   const pad = u * 3.4;
-  const titleSize = u * (compact ? 6 : 5.4);
-  const smallSize = u * (compact ? 3.4 : 2.9);
+  const titleSize = u * (compact ? 6 : landscape ? 5.4 : 6.6);
+  const smallSize = u * (compact ? 3.4 : landscape ? 3.2 : 4.1);
   const panelH = pad * 2 + smallSize * 1.3 + titleSize * 1.35 + (compact ? 0 : smallSize * 1.5);
   const px = landscape ? u * 4 : u * 4;
   // the docked camera sees the tip near the bottom of the image: keep the card off the rings
@@ -265,13 +271,13 @@ export function drawHud(
   }
 
   // tiny mode tag
-  label(ctx, ov ? `OPTICAL · ${ov.info}` : "OPTICAL · SIM", u * 4, u * 5, u * 2.6, ov && !ov.lost ? GREEN : SOFT, "left", MONO, 500);
+  label(ctx, ov ? `OPTICAL · ${ov.info}` : "OPTICAL · SIM", u * 4, u * 5, u * (landscape ? 2.6 : 3.3), ov && !ov.lost ? GREEN : SOFT, "left", MONO, 500);
 }
 
 // ---------- what to say at each moment ----------
 function instruction(
   s: SimState,
-  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean; lost: boolean; gate: string | null },
+  c: { onMark: boolean; square: boolean; ready: boolean; locking: boolean; broken: boolean; lost: boolean; gate: string | null; tol: number },
 ): { text: string; color: string; step: string; pass: boolean; check: string } {
   if (c.lost) return { text: "Point at the markers", color: AMBER, step: "0/3", pass: false, check: "at least two markers in view" };
   if (c.gate === "Calibrate first" && (s.phase === "approach" || s.phase === "align"))
@@ -280,7 +286,7 @@ function instruction(
     return { text: "No-go zone", color: RED, step: "0/3", pass: false, check: "a pipe or cable runs behind this mark: pick another" };
   if (c.gate === "Locate the part first" && (s.phase === "approach" || s.phase === "align"))
     return { text: "Locate the part", color: AMBER, step: "0/3", pass: false, check: "touch its reference points with the tip" };
-  if (c.broken) return { text: "Stop · straighten", color: RED, step: "3/3", pass: false, check: `angle error > ${ANGLE_TOL_DEG}°` };
+  if (c.broken) return { text: `Straighten · ${s.angleErrDeg.toFixed(1)}° off`, color: RED, step: "3/3", pass: false, check: `move the big circle onto the small one (±${c.tol}°)` };
   const D = s.depthTargetMm ?? DEPTH_TARGET_MM;
   const drive = s.action === "drive";
   if (s.phase === "hold")
@@ -291,16 +297,16 @@ function instruction(
   if (s.phase === "drill") {
     const left = D - s.depthMm;
     if (left < 3) return { text: drive ? "Slow · seating" : "Ease off", color: AMBER, step: "3/3", pass: false, check: `stop at ${D} mm` };
-    return { text: `${drive ? "Drive" : "Drill"} · ${left.toFixed(0)} mm left`, color: GREEN, step: "3/3", pass: false, check: `stop at ${D} mm · keep rings centred` };
+    return { text: `${drive ? "Drive" : "Drill"} · ${left.toFixed(0)} mm left`, color: GREEN, step: "3/3", pass: false, check: `stop at ${D} mm · keep the circles together` };
   }
   if (!c.onMark) {
     if (s.offsetMm > 1) return { text: "Tip to the mark", color: AMBER, step: "1/3", pass: false, check: "tip within 1.0 mm of the mark" };
     return { text: "Rest on the mark", color: AMBER, step: "1/3", pass: false, check: "tip touching the surface" };
   }
-  if (!c.square) return { text: "Line up the rings", color: AMBER, step: "2/3", pass: false, check: `square to the surface ±${ANGLE_TOL_DEG}°` };
+  if (!c.square) return { text: `Line up · ${s.angleErrDeg.toFixed(1)}° off`, color: AMBER, step: "2/3", pass: false, check: `move the big circle onto the small one (±${c.tol}°)` };
   if (c.gate && !c.locking && !c.ready) return { text: c.gate, color: AMBER, step: "2/3", pass: false, check: "the engine's go / no-go check" };
   if (c.locking) return { text: "Hold steady", color: GREEN, step: "2/3", pass: false, check: "hold 0.75 s" };
-  return { text: "Ready · drill", color: GREEN, step: "2/3", pass: true, check: `square ±${ANGLE_TOL_DEG}° · on the mark` };
+  return { text: "Ready · drill", color: GREEN, step: "2/3", pass: true, check: `square ±${c.tol}° · on the mark` };
 }
 
 // ---------- drawing helpers ----------

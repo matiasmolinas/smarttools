@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BrowserNav, CalResult } from "@/lib/tracker";
 import type { SceneFocus } from "./CalibrationScene";
 
-const CalibrationScene = dynamic(() => import("./CalibrationScene"), { ssr: false, loading: () => <div className="h-56 rounded-2xl bg-white/5 sm:h-64" /> });
+const CalibrationScene = dynamic(() => import("./CalibrationScene"), { ssr: false, loading: () => <div className="h-40 rounded-2xl bg-black/30 sm:h-56" /> });
 
 type Step = "sheet" | "lens" | "tip" | "check" | "ready";
 const ORDER: Step[] = ["sheet", "lens", "tip", "check", "ready"];
@@ -162,7 +162,14 @@ export default function SetupWizard({
     const c = d == null ? BAD : d < 1 ? GOOD : d < 2 ? WARN : BAD;
     title = "Check: tip on A2";
     body = "Rest the tip on the centre of A2 again. This is how far the app puts the tip from A2.";
-    main = <Big value={d == null ? "–" : d.toFixed(1)} unit="mm from A2" color={c} note={d == null ? "Show the sheet" : d < 1 ? "Very good" : d < 2 ? "OK" : "Too far: calibrate the tip again"} />;
+    main = (
+      <Big
+        value={d == null ? "–" : d.toFixed(1)}
+        unit="mm from A2"
+        color={markers < 4 ? WARN : c}
+        note={markers < 4 ? `Only ${markers} markers: turn the sheet so more markers are in front of the bit` : d == null ? "Show the sheet" : d < 1 ? "Very good" : d < 2 ? "OK" : "Too far: calibrate the tip again"}
+      />
+    );
     primary = { label: "Done", onClick: next };
     secondary = { label: "Calibrate the tip again", onClick: () => go("tip") };
   } else {
@@ -175,7 +182,7 @@ export default function SetupWizard({
 
   const dot = ORDER.indexOf(step);
   return (
-    <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[78dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-[#05080d]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white backdrop-blur-md">
+    <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[72dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-black/45 px-5 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white">
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           {DOTS.map((d, i) => (
@@ -193,13 +200,13 @@ export default function SetupWizard({
       <h2 className="mt-4 text-[1.7rem] font-semibold leading-tight">{title}</h2>
       <p className="mt-2 text-lg leading-snug text-white/75">{body}</p>
 
-      <div className={`mt-4 grid gap-4 ${focus ? "sm:grid-cols-2" : ""}`}>
-        {focus && <CalibrationScene focus={focus} compact className="h-48 sm:h-64" />}
+      <div className={`mt-3 grid items-center gap-3 ${focus && main ? "grid-cols-[1.5fr_1fr]" : ""}`}>
+        {focus && <CalibrationScene focus={focus} compact className="h-40 bg-black/30 sm:h-56" />}
         {main && <div className="flex items-center justify-center">{main}</div>}
       </div>
 
       {/* the buttons stay at the bottom of the sheet, always in reach */}
-      <div className="sticky bottom-0 -mx-5 mt-4 flex flex-col gap-3 border-t border-white/10 bg-[#05080d] px-5 pb-1 pt-3">
+      <div className="sticky bottom-0 -mx-5 mt-4 flex flex-col gap-3 border-t border-white/10 bg-black/55 px-5 pb-1 pt-3 backdrop-blur-sm">
         {primary && (
           <button onClick={primary.onClick} disabled={primary.disabled || running} className="h-14 rounded-2xl bg-[#3ee59b] text-xl font-semibold text-black active:scale-[0.99] disabled:opacity-35">
             {running ? "Recording…" : primary.label}
