@@ -42,6 +42,9 @@ export interface Overlay {
   markers?: number;
   /** the angle tolerance in use, deg (the specification, or a wider practice setting) */
   tolDeg?: number;
+  /** video px: where the calibrated tip falls in the image (fixed: the camera is fixed to the drill), and a point up the bit */
+  tipPx?: { x: number; y: number } | null;
+  bitPx?: { x: number; y: number } | null;
 }
 export interface HudOptions {
   background?: HudBackground;

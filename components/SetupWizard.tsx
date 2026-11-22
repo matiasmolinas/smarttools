@@ -160,8 +160,8 @@ export default function SetupWizard({
     focus = "check";
     const d = live?.tipToA2Mm ?? null;
     const c = d == null ? BAD : d < 1 ? GOOD : d < 2 ? WARN : BAD;
-    title = "Check: tip on A2";
-    body = "Rest the tip on the centre of A2 again. This is how far the app puts the tip from A2.";
+    title = "Is the blue TIP cross on the real tip?";
+    body = "Look at the bottom of the screen: the blue cross is where the app thinks the tip is. It must sit on the real bit tip. Rest the tip on A2: the number is its distance to A2.";
     main = (
       <Big
         value={d == null ? "–" : d.toFixed(1)}
@@ -170,8 +170,8 @@ export default function SetupWizard({
         note={markers < 4 ? `Only ${markers} markers: turn the sheet so more markers are in front of the bit` : d == null ? "Show the sheet" : d < 1 ? "Very good" : d < 2 ? "OK" : "Too far: calibrate the tip again"}
       />
     );
-    primary = { label: "Done", onClick: next };
-    secondary = { label: "Calibrate the tip again", onClick: () => go("tip") };
+    primary = { label: "Yes, it's on the tip", onClick: next };
+    secondary = { label: "No: calibrate the tip again", onClick: () => go("tip") };
   } else {
     title = "Ready ✓";
     body = "The app knows where the tip is and which way the bit points, for this mount. If the phone moves on the drill, run the setup again.";
@@ -182,7 +182,7 @@ export default function SetupWizard({
 
   const dot = ORDER.indexOf(step);
   return (
-    <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[72dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-black/45 px-5 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white">
+    <div className="pointer-events-auto absolute inset-x-0 top-0 z-20 max-h-[62dvh] overflow-y-auto rounded-b-3xl border-b border-white/15 bg-black/50 px-5 pb-4 pt-[max(1rem,env(safe-area-inset-top))] text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           {DOTS.map((d, i) => (

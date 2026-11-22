@@ -16,7 +16,7 @@ export interface HudInputs {
   ids: Record<string, number>;
   snapshot: EngineSnapshot;
   /** image-space overlay (camera views only) */
-  image?: { aim: P | null; mark: P | null; quads: P[][]; scale?: number } | null;
+  image?: { aim: P | null; mark: P | null; quads: P[][]; scale?: number; tip?: P | null; bit?: P | null } | null;
   info?: string;
   calibrating?: Overlay["calibrating"];
   /** display thresholds for the ring colours (the engine's gate limits) */
@@ -86,6 +86,8 @@ export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
     hint: i.hint ?? null,
     markers: s.markers,
     tolDeg: i.tolDeg,
+    tipPx: px(i.image?.tip ?? null),
+    bitPx: px(i.image?.bit ?? null),
   };
   return { state, overlay };
 }
