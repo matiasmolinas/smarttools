@@ -6,6 +6,7 @@ import SetupWizard from "./SetupWizard";
 import { simulate, type SimState } from "@/lib/sim";
 import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { drawHud, type HudBackground, type Overlay } from "@/lib/hud";
+import { drawGuide } from "@/lib/hudguide";
 import { BrowserNav } from "@/lib/tracker";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
@@ -55,6 +56,7 @@ export default function HudScreen() {
   // the guided setup (opens by itself when the drill is not calibrated yet) and the job sheet
   const [setupOpen, setSetupOpen] = useState(false);
   const [jobOpen, setJobOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [tol, setTol] = useState(0.5);
   const setupDecided = useRef(false);
   // the camera's resolution: 1080p by default, 720p is lighter for slow phones (kept per device)
@@ -327,14 +329,14 @@ export default function HudScreen() {
         const view = trackerRef.current?.view();
         if (view) {
           listen(view);
-          return drawHud(ctx, view.state, w, h, false, { background: "camera", video: v, overlay: view.overlay });
+          return drawGuide(ctx, view.state, w, h, { video: v, overlay: view.overlay, toolCalibrated: trackerRef.current?.calibrated.tool ?? false });
         }
       }
       if (bgRef.current === "simcam" && simCanvasRef.current) {
         const view = simTrackerRef.current?.view();
         if (view) {
           listen(view);
-          return drawHud(ctx, view.state, w, h, false, { background: "camera", video: simCanvasRef.current, overlay: view.overlay });
+          return drawGuide(ctx, view.state, w, h, { video: simCanvasRef.current, overlay: view.overlay, toolCalibrated: simTrackerRef.current?.calibrated.tool ?? false });
         }
       }
       if (bgRef.current !== "simcam" && restartRef.current) {
@@ -406,7 +408,7 @@ export default function HudScreen() {
 
       {/* planning with the tool as a pointer: big buttons at the top while a plan is being drawn */}
       {bg === "camera" && draft && (
-        <div className="absolute inset-x-3 top-[max(2.2rem,env(safe-area-inset-top))] z-10 rounded-2xl border border-white/20 bg-black/75 p-3 text-white backdrop-blur-md">
+        <div className="absolute inset-x-3 top-[max(8rem,calc(env(safe-area-inset-top)+7rem))] z-10 rounded-2xl border border-white/20 bg-black/75 p-3 text-white backdrop-blur-md">
           <div className="text-lg font-semibold">Planning · {draft.holes.length} holes</div>
           <div className="text-base text-white/70">Touch the surface with the tip, then tap Mark hole.</div>
           <div className="mt-3 grid grid-cols-2 gap-2">
@@ -422,7 +424,7 @@ export default function HudScreen() {
 
       {/* the job: which plan, a new plan, finish (a sheet, so nothing covers the tip while drilling) */}
       {bg === "camera" && jobOpen && !draft && (
-        <div className="absolute inset-x-0 bottom-0 z-20 rounded-t-3xl border-t border-white/15 bg-[#05080d]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white backdrop-blur-md">
+        <div className="absolute inset-x-0 top-0 z-20 rounded-b-3xl border-b border-white/15 bg-black/80 px-5 pb-5 pt-[max(1rem,env(safe-area-inset-top))] text-white backdrop-blur-md">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-semibold">Job</h2>
             <button onClick={() => setJobOpen(false)} className="px-3 text-2xl text-white/60" aria-label="Close">
@@ -484,84 +486,78 @@ export default function HudScreen() {
         />
       )}
 
-      {/* floating control column, right edge (portrait and landscape) */}
-      <div className={`absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 flex -translate-y-1/2 flex-col items-center gap-3.5 ${setupOpen ? "hidden" : ""}`}>
-        <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
-          <SurfIcon />
-        </RoundButton>
-        {bg === "camera" ? (
-          <>
-            <RoundButton label="" caption="Setup" active={setupOpen} onClick={() => (setJobOpen(false), setBenchOpen(false), setSetupOpen(!setupOpen))}>
-              <CalIcon />
-            </RoundButton>
-            <RoundButton label={`${done}/${plan.holes.length}`} caption="Job" active={jobOpen} onClick={() => (setSetupOpen(false), setJobOpen(!jobOpen))}>
-              <JobIcon />
-            </RoundButton>
-          </>
-        ) : (
-          <>
-          {bg === "simcam" && (
-            <RoundButton label="" caption="Setup" active={setupOpen} onClick={() => (setBenchOpen(false), setSetupOpen(!setupOpen))}>
-              <CalIcon />
-            </RoundButton>
-          )}
-          <RoundButton
-            label=""
-            caption="Restart"
-            onClick={() => {
-              restartRef.current = true;
-              say("RESTART");
-            }}
-          >
-            <RestartIcon />
-          </RoundButton>
-          </>
-        )}
-        {(bg === "camera" || bg === "simcam") && (
-          <RoundButton
-            label=""
-            caption="Bench"
-            active={benchOpen}
-            onClick={async () => {
-              // iOS asks for permission to read the accelerometer, from a tap
-              const DM = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<string> } }).DeviceMotionEvent;
-              if (!benchOpen && DM?.requestPermission) await DM.requestPermission().catch(() => "denied");
-              setBenchOpen(!benchOpen);
-            }}
-          >
-            <BenchIcon />
-          </RoundButton>
-        )}
-        <RoundButton
-          label={soundOn ? "on" : "off"}
-          caption="Sound"
-          active={soundOn}
-          onClick={() => {
-            if (soundRef.current) {
-              soundRef.current.close();
-              soundRef.current = null;
-              setSoundOn(false);
-            } else {
-              soundRef.current = new SoundGuide();
-              setSoundOn(true);
-            }
-          }}
+      {/* one menu button, top right (the screen stays clear: the tip works at the bottom) */}
+      {!setupOpen && (
+        <button
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label="Menu"
+          className={`absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex h-16 w-16 items-center justify-center rounded-2xl border text-3xl backdrop-blur-md ${menuOpen ? "border-[#3ee59b] bg-[#3ee59b] text-black" : "border-white/30 bg-black/60 text-white"}`}
         >
-          <SoundIcon />
-        </RoundButton>
-        <RoundButton label="" caption="Full" onClick={fullscreen}>
-          <FullIcon />
-        </RoundButton>
-        <a href="/markers" className="mt-1 font-mono text-[10px] text-white/60 hover:text-white">
-          Markers
-        </a>
-        <a href="/memory" className="font-mono text-[10px] text-white/60 hover:text-white">
-          Memory
-        </a>
-        <a href="/" className="font-mono text-[10px] text-white/50 hover:text-white/80">
-          ← 3D
-        </a>
-      </div>
+          {menuOpen ? "✕" : "☰"}
+        </button>
+      )}
+      {menuOpen && !setupOpen && (
+        <div className="absolute inset-x-0 top-0 z-20 rounded-b-3xl border-b border-white/15 bg-black/80 px-4 pb-4 pt-[max(5.5rem,calc(env(safe-area-inset-top)+5rem))] text-white backdrop-blur-md">
+          <div className="grid grid-cols-2 gap-3">
+            {(bg === "camera" || bg === "simcam") && (
+              <BigButton strong onClick={() => (setMenuOpen(false), setJobOpen(false), setBenchOpen(false), setSetupOpen(true))}>
+                Setup
+              </BigButton>
+            )}
+            {bg === "camera" && <BigButton onClick={() => (setMenuOpen(false), setSetupOpen(false), setJobOpen(true))}>Job · {done}/{plan.holes.length}</BigButton>}
+            {(bg === "camera" || bg === "simcam") && (
+              <BigButton
+                onClick={async () => {
+                  // iOS asks for permission to read the accelerometer, from a tap
+                  const DM = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<string> } }).DeviceMotionEvent;
+                  if (!benchOpen && DM?.requestPermission) await DM.requestPermission().catch(() => "denied");
+                  setMenuOpen(false);
+                  setBenchOpen(!benchOpen);
+                }}
+              >
+                {benchOpen ? "Close tests" : "Tests (Bench)"}
+              </BigButton>
+            )}
+            <BigButton
+              onClick={() => {
+                if (soundRef.current) {
+                  soundRef.current.close();
+                  soundRef.current = null;
+                  setSoundOn(false);
+                } else {
+                  soundRef.current = new SoundGuide();
+                  setSoundOn(true);
+                }
+              }}
+            >
+              Sound: {soundOn ? "on" : "off"}
+            </BigButton>
+            <BigButton onClick={cycleSurface}>View: {SURF_LABEL[bg]}</BigButton>
+            {bg !== "camera" && (
+              <BigButton
+                onClick={() => {
+                  restartRef.current = true;
+                  setMenuOpen(false);
+                }}
+              >
+                Restart demo
+              </BigButton>
+            )}
+            <BigButton onClick={fullscreen}>Full screen</BigButton>
+          </div>
+          <div className="mt-4 flex justify-around text-lg text-white/70">
+            <a href="/memory" className="underline decoration-white/25">
+              Plans & jobs
+            </a>
+            <a href="/markers" className="underline decoration-white/25">
+              Print the sheet
+            </a>
+            <a href="/" className="underline decoration-white/25">
+              Website
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -574,103 +570,9 @@ function BigButton({ children, onClick, strong }: { children: React.ReactNode; o
   );
 }
 
-function JobIcon() {
-  return (
-    <svg {...ico}>
-      <circle cx="7" cy="7" r="2" />
-      <circle cx="17" cy="7" r="2" />
-      <circle cx="17" cy="17" r="2" />
-      <circle cx="7" cy="17" r="2" />
-    </svg>
-  );
-}
 
 
-function RoundButton({
-  children,
-  label,
-  caption,
-  onClick,
-  active,
-  disabled,
-}: {
-  children: React.ReactNode;
-  label: string;
-  caption: string;
-  onClick: () => void;
-  active?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={`${caption} ${label}`}
-      className="flex flex-col items-center gap-1 disabled:opacity-30"
-    >
-      <span
-        className={`flex h-[52px] w-[52px] items-center justify-center rounded-full border backdrop-blur-md transition active:scale-95 ${
-          active ? "border-[#3ee59b] bg-[#3ee59b]/20 text-[#3ee59b]" : "border-white/35 bg-black/45 text-white/90"
-        }`}
-      >
-        {children}
-      </span>
-      <span className="font-mono text-[10px] leading-none text-white/70 [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
-        {caption}
-        {label ? ` · ${label}` : ""}
-      </span>
-    </button>
-  );
-}
 
-const ico = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
-function BenchIcon() {
-  return (
-    <svg {...ico}>
-      <path d="M3 20h18" />
-      <path d="M6 16l3-5 3 3 3-7 3 5" />
-    </svg>
-  );
-}
 
-function SoundIcon() {
-  return (
-    <svg {...ico}>
-      <path d="M4 10v4h4l5 4V6L8 10H4z" />
-      <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />
-    </svg>
-  );
-}
 
-function SurfIcon() {
-  return (
-    <svg {...ico}>
-      <rect x="3" y="4" width="18" height="16" rx="1.5" />
-      <path d="M3 10h18M3 15h18M9 4v6M15 10v5M9 15v5" />
-    </svg>
-  );
-}
-function CalIcon() {
-  return (
-    <svg {...ico}>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
-    </svg>
-  );
-}
-function RestartIcon() {
-  return (
-    <svg {...ico}>
-      <path d="M4 12a8 8 0 1 0 2.4-5.7" />
-      <path d="M4 4v4h4" />
-    </svg>
-  );
-}
-function FullIcon() {
-  return (
-    <svg {...ico}>
-      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-    </svg>
-  );
-}

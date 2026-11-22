@@ -198,6 +198,20 @@ export class BrowserNav {
     return n;
   }
 
+  /** Where the calibrated tip (and a point 5 cm up the bit) fall in the camera image, in detection px.
+   * The camera is fixed to the drill, so this never moves: it must sit on the real tip. */
+  tipInImage(tool: ToolCalib | null = this.session?.tool ?? null): { tip: { x: number; y: number }; bit: { x: number; y: number } | null; inside: boolean } | null {
+    const s = this.session;
+    if (!s || !tool) return null;
+    const cam = s.lastFrame?.camera ?? s.tracker.effectiveCamera;
+    const id = { R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0], rms: 0 } as unknown as Parameters<NavCore["projectPoints"]>[1];
+    const up = [tool.tipCam[0] - tool.axisCam[0] * 0.05, tool.tipCam[1] - tool.axisCam[1] * 0.05, tool.tipCam[2] - tool.axisCam[2] * 0.05] as [number, number, number];
+    const [tip, bit] = this.core.projectPoints(cam, id, [tool.tipCam, up]);
+    if (!tip || tool.tipCam[2] <= 0) return null;
+    const inside = tip.x >= 0 && tip.y >= 0 && tip.x <= this.size.w && tip.y <= this.size.h;
+    return { tip, bit, inside };
+  }
+
   // ---------------- for the guided setup ----------------
   /** The calibration in progress: which step, how far (0..1), frames captured. */
   calStatus(): { step: CaptureKind; progress: number; captured: number } | null {
@@ -353,7 +367,10 @@ export class BrowserNav {
       def: s.scene.def,
       ids: s.scene.ids,
       snapshot: snap,
-      image: { aim: pts.aim, mark: pts.mark, quads: lf?.quads ?? [], scale: this.scale },
+      image: (() => {
+        const ti = c.tool ? this.tipInImage() : null;
+        return { aim: pts.aim, mark: pts.mark, quads: lf?.quads ?? [], scale: this.scale, tip: ti?.tip ?? null, bit: ti?.bit ?? null };
+      })(),
       info: `${snap.markers} tags · ${c.camera ? "lens ✓" : `f ${Math.round(lf?.focalPx ?? 0)}${lf?.focalLocked ? "" : "?"}`} · ${c.tool ? "dock ✓" : "dock ?"} · ${Math.round(snap.stats.latencyS * 1000)} ms${this.extraInfo()}`,
       calibrating: cal ? { text: CAL_TEXT[cal.step], progress: Math.min(1, (snap.t - cal.t0) / CAL_SECONDS[cal.step]), count: s.tracker.captured } : null,
       limits: { ...ENGINE_DEFAULTS.limits, maxAngleDeg: this.tolDeg * 0.8 },
@@ -440,6 +457,18 @@ export class BrowserNav {
     });
   }
   private finishStep(c: NonNullable<BrowserNav["cal"]>, s: NavSession, r0: CaptureResult, t: number) {
+    // a tip that would sit outside the camera image (or behind it) cannot be the real tip: refuse it
+    if ("tipCam" in r0) {
+      const where = this.tipInImage({ ...s.tool, tipCam: r0.tipCam });
+      if (!where || !where.inside) {
+        const error = "the tip ended up outside the image: keep the tip still on A2 and circle slowly";
+        this.onMessage(error.toUpperCase());
+        this.onCalResult({ kind: "pivot", ok: false, error });
+        this.client?.cancelCapture();
+        this.cal = null;
+        return;
+      }
+    }
     const r = s.applyCapture(r0);
     if ("camera" in r) this.client?.setCamera(r.camera, true);
     if ("error" in r) {

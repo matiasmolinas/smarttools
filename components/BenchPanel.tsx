@@ -143,7 +143,7 @@ export default function BenchPanel({
   const btn = "rounded-full border border-white/25 px-3 py-1.5 text-[13px] hover:border-white/60 disabled:opacity-30";
 
   return (
-    <div className="pointer-events-auto absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(2.5rem,env(safe-area-inset-top))] max-h-[85dvh] w-[min(400px,calc(100vw-6rem))] overflow-y-auto rounded-2xl border border-white/20 bg-black/80 p-3 font-mono text-[13px] text-white/90 backdrop-blur-md">
+    <div className="pointer-events-auto absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(8rem,calc(env(safe-area-inset-top)+7rem))] max-h-[60dvh] w-[min(400px,calc(100vw-6rem))] overflow-y-auto rounded-2xl border border-white/20 bg-black/80 p-3 font-mono text-[13px] text-white/90 backdrop-blur-md">
       <div className="flex items-center justify-between">
         <span className="font-semibold text-[#3ee59b]">BENCH LAB</span>
         <button onClick={onClose} className="text-white/60 hover:text-white">
