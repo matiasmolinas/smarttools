@@ -15,7 +15,7 @@ use crate::subpix::{self, Rgba};
 use std::alloc::{alloc, dealloc, Layout};
 use std::slice;
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 #[no_mangle]
 pub extern "C" fn st_abi_version() -> u32 {
@@ -174,6 +174,46 @@ pub unsafe extern "C" fn st_focal_from_homography(h: *const f64, cx: f64, cy: f6
 /// Refine one marker's 4 corners. Returns 1 and writes `out` when refined; 0 otherwise.
 ///
 /// # Safety
+/// Detect markers (ABI 6, `detect.rs`). `codes`: 36 bytes per id. `params`: 4 `f64` (window fraction, margin,
+/// min side px, max bit distance; zero = default). `out`: `max` records of 10 `f64` = id, distance, 4 corners.
+/// Returns the number of markers written.
+#[no_mangle]
+pub unsafe extern "C" fn st_detect_markers(rgba: *const u8, width: usize, height: usize, codes: *const u8, n_codes: usize, params: *const f64, out: *mut f64, max: usize) -> i32 {
+    if rgba.is_null() || codes.is_null() || out.is_null() || width == 0 || height == 0 {
+        return -1;
+    }
+    let img = slice::from_raw_parts(rgba, width * height * 4);
+    let codes = slice::from_raw_parts(codes, n_codes * 36);
+    let mut p = crate::detect::Params::default();
+    if !params.is_null() {
+        let a = slice::from_raw_parts(params, 4);
+        if a[0] > 0.0 {
+            p.window_frac = a[0];
+        }
+        if a[1] > 0.0 {
+            p.margin = a[1] as i32;
+        }
+        if a[2] > 0.0 {
+            p.min_side = a[2];
+        }
+        if a[3] > 0.0 {
+            p.max_distance = a[3] as u32;
+        }
+    }
+    let found = crate::detect::detect(img, width, height, codes, &p);
+    let o = slice::from_raw_parts_mut(out, max * 10);
+    let n = found.len().min(max);
+    for (k, d) in found.iter().take(n).enumerate() {
+        o[k * 10] = d.id as f64;
+        o[k * 10 + 1] = d.distance as f64;
+        for c in 0..4 {
+            o[k * 10 + 2 + c * 2] = d.corners[c][0];
+            o[k * 10 + 3 + c * 2] = d.corners[c][1];
+        }
+    }
+    n as i32
+}
+
 /// `rgba`: `width * height * 4` bytes. `corners`, `out`: 4 points.
 #[no_mangle]
 pub unsafe extern "C" fn st_refine_corners(rgba: *const u8, width: usize, height: usize, corners: *const f64, out: *mut f64) -> i32 {
@@ -693,7 +733,7 @@ pub unsafe extern "C" fn st_engine_free(h: *mut Engine) {
 /// Configuration, 26 `f64` in this order: tick_hz, max_catchup, predict_max_s, predict (0/1),
 /// stale_after_s, lost_after_s, history_s, lock_time_s, steady_window_s, depth_target_mm,
 /// engage_gap_mm, engage_offset_mm, requirement_angle_deg, the 7 gate limits (as `st_gate`),
-/// pos_min_cutoff, pos_beta, rot_min_cutoff, rot_beta, d_cutoff, (reserved).
+/// pos_min_cutoff, pos_beta, rot_min_cutoff, rot_beta, d_cutoff, filter_at_tool (0/1).
 ///
 /// # Safety
 /// `h` valid; `c`: 26 `f64`.
@@ -731,6 +771,7 @@ pub unsafe extern "C" fn st_engine_configure(h: *mut Engine, c: *const f64) -> i
         rot_min_cutoff: c[22],
         rot_beta: c[23],
         d_cutoff: c[24],
+        filter_at_tool: c[25] != 0.0,
     };
     (*h).configure(cfg);
     1

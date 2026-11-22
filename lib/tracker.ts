@@ -20,6 +20,8 @@ import { DEFAULT_PHONE_ID, PHONES, phoneById, type PhoneProfile } from "./phones
 import { checkCalibration, dockRig } from "./dockrig";
 import { smartToolsScene, toolLocal } from "./scenedef";
 import { BenchRecorder, filteredPose, toolPose } from "./bench";
+import type { DetectorKind } from "./detectors";
+import { encodeRecording } from "./recording";
 import { compose, fromPose, inverse } from "./xform";
 import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
 import { JobRecorder, defaultContext, type JobRecord } from "./jobrecord";
@@ -38,6 +40,9 @@ export type CalResult =
   | { kind: CaptureKind; ok: false; error: string };
 
 export interface TrackerPerf {
+  /** the detector in use, and (compare mode) the other one on the same frames */
+  detector: DetectorKind;
+  alt: { kind: string; detectMs: number; markers: number; cornerPx: number } | null;
   /** frames processed per second, and dropped because the tracker was still busy */
   fps: number;
   droppedPerS: number;
@@ -92,12 +97,17 @@ export class BrowserNav {
   bench: BenchRecorder | null = null;
   /** the engine's One Euro pose filter on (default) or off (raw poses on screen, for comparison) */
   filterOn = true;
+  /** filter the tool's pose (at the tip) rather than the camera's (an option to evaluate; kept per device) */
+  filterAtTool: boolean = readFlag("st-filter-tool");
   /** the angle tolerance (deg): the specification (0.5) or a wider one to practise by hand */
   tolDeg: number = readTol();
   /** detection resolution, longest side (px) */
   maxSide: number = readSide();
+  /** the marker detector: js-aruco2 (default) or the Rust one; compare runs both on each frame */
+  detector: DetectorKind = readDetector();
+  compare = false;
   private videoSize = { w: 0, h: 0 };
-  private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number }[] = [];
+  private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number; altMs: number; altMarkers: number; altCornerPx: number; altKind: string }[] = [];
   private droppedLog: { t: number; n: number }[] = [];
 
   private constructor(core: NavCore) {
@@ -119,7 +129,7 @@ export class BrowserNav {
 
   private attachWorker(camera: Camera, calibrated: boolean) {
     this.client?.terminate();
-    const c = new TrackerClient(camera, calibrated, this.maxSide);
+    const c = new TrackerClient(camera, calibrated, this.maxSide, this.detector, this.compare);
     c.onResult = (r: WorkerResult) => this.onWorkerResult(r);
     this.client = c;
   }
@@ -131,7 +141,20 @@ export class BrowserNav {
     this.benchSample(r);
     const now = performance.now() / 1000;
     const tm = r.frame.timings;
-    this.perfLog.push({ t: now, bitmapMs: tm?.bitmapMs ?? 0, drawMs: tm?.drawMs ?? 0, detectMs: tm?.detectMs ?? 0, refineMs: tm?.refineMs ?? 0, poseMs: tm?.poseMs ?? 0, latencyMs: Math.max(0, (now - r.frame.tCapture) * 1000), markers: r.frame.markers });
+    this.perfLog.push({
+      t: now,
+      bitmapMs: tm?.bitmapMs ?? 0,
+      drawMs: tm?.drawMs ?? 0,
+      detectMs: tm?.detectMs ?? 0,
+      refineMs: tm?.refineMs ?? 0,
+      poseMs: tm?.poseMs ?? 0,
+      latencyMs: Math.max(0, (now - r.frame.tCapture) * 1000),
+      markers: r.frame.markers,
+      altMs: tm?.alt?.detectMs ?? NaN,
+      altMarkers: tm?.alt?.markers ?? NaN,
+      altCornerPx: tm?.alt?.meanCornerPx ?? NaN,
+      altKind: tm?.alt?.kind ?? "",
+    });
     this.droppedLog.push({ t: now, n: this.client?.dropped ?? 0 });
     while (this.perfLog.length && now - this.perfLog[0].t > 3) this.perfLog.shift();
     while (this.droppedLog.length && now - this.droppedLog[0].t > 3) this.droppedLog.shift();
@@ -241,14 +264,17 @@ export class BrowserNav {
   perf(): TrackerPerf | null {
     const l = this.perfLog;
     if (l.length < 2) return null;
-    const med = (k: keyof (typeof l)[number]) => {
-      const v = l.map((x) => x[k]).sort((a, b) => a - b);
-      return v[Math.floor(v.length / 2)];
+    const med = (k: Exclude<keyof (typeof l)[number], "altKind">) => {
+      const v = l.map((x) => x[k]).filter((x) => !Number.isNaN(x)).sort((a, b) => a - b);
+      return v.length ? v[Math.floor(v.length / 2)] : NaN;
     };
+    const altKind = l[l.length - 1].altKind;
     const span = Math.max(1e-3, l[l.length - 1].t - l[0].t);
     const d = this.droppedLog;
     const dropped = d.length > 1 ? (d[d.length - 1].n - d[0].n) / Math.max(1e-3, d[d.length - 1].t - d[0].t) : 0;
     return {
+      detector: this.detector,
+      alt: altKind ? { kind: altKind, detectMs: med("altMs"), markers: med("altMarkers"), cornerPx: med("altCornerPx") } : null,
       fps: (l.length - 1) / span,
       droppedPerS: dropped,
       bitmapMs: med("bitmapMs"),
@@ -261,6 +287,45 @@ export class BrowserNav {
       video: this.videoSize,
       detect: { w: Math.round(this.size.w), h: Math.round(this.size.h) },
     };
+  }
+  /** Record about `seconds` of camera frames as the tracker sees them, with the calibration in use: a .strec
+   * file to analyse again on a laptop (scripts/replay.mts). */
+  async record(seconds: number, notes = ""): Promise<Blob | null> {
+    const c = this.client, s = this.session;
+    if (!c || !s) return null;
+    const fps = Math.max(5, Math.min(60, this.perf()?.fps ?? 30));
+    const r = await c.record(Math.round(seconds * fps));
+    const cal = this.calibrated;
+    return encodeRecording(
+      {
+        kind: "smarttools-recording",
+        v: 1,
+        created: new Date().toISOString(),
+        phone: { id: this.phone.id, name: this.phone.name },
+        width: r.width,
+        height: r.height,
+        video: this.videoSize,
+        camera: s.lastFrame?.camera ?? s.tracker.effectiveCamera,
+        cameraCalibrated: cal.camera,
+        tool: s.tool,
+        toolCalibrated: cal.tool,
+        detector: this.detector,
+        notes,
+        times: r.times,
+      },
+      r.frames,
+    );
+  }
+
+  /** Choose the marker detector (kept per device), and whether to run the other one alongside to compare. */
+  setDetector(kind: DetectorKind, compare = this.compare) {
+    this.detector = kind;
+    this.compare = compare;
+    try {
+      localStorage.setItem("st-detector", kind);
+    } catch {}
+    this.perfLog = [];
+    this.client?.setDetector(kind, compare);
   }
   /** Change the detection resolution (the session restarts at the new size; calibrations are rescaled). */
   setMaxSide(side: number) {
@@ -299,15 +364,24 @@ export class BrowserNav {
   filterConfig() {
     const d = ENGINE_DEFAULTS;
     const predict = d.predict && !this.bench;
+    const filterAtTool = this.filterAtTool;
     return this.filterOn
-      ? { posMinCutoff: d.posMinCutoff, posBeta: d.posBeta, rotMinCutoff: d.rotMinCutoff, rotBeta: d.rotBeta, dCutoff: d.dCutoff, predict }
+      ? { posMinCutoff: d.posMinCutoff, posBeta: d.posBeta, rotMinCutoff: d.rotMinCutoff, rotBeta: d.rotBeta, dCutoff: d.dCutoff, predict, filterAtTool }
       : // a cutoff far above the camera rate: the filter passes every measurement through
-        { posMinCutoff: 1000, posBeta: 0, rotMinCutoff: 1000, rotBeta: 0, dCutoff: d.dCutoff, predict };
+        { posMinCutoff: 1000, posBeta: 0, rotMinCutoff: 1000, rotBeta: 0, dCutoff: d.dCutoff, predict, filterAtTool };
   }
   private applyFilter() {
     // one configuration: the pose filter and the angle tolerance (configure fills the rest with defaults)
     const tol = this.tolDeg;
     this.session?.engine.configure({ ...this.filterConfig(), requirementAngleDeg: tol, limits: { ...ENGINE_DEFAULTS.limits, maxAngleDeg: tol * 0.8 } });
+  }
+  /** Filter at the tip (true) or at the camera (false, the default). Kept per device. */
+  setFilterAtTool(on: boolean) {
+    this.filterAtTool = on;
+    try {
+      localStorage.setItem("st-filter-tool", on ? "1" : "0");
+    } catch {}
+    this.applyFilter();
   }
   /** Angle tolerance: 0.5° (the specification) or wider to practise by hand. Kept per device. */
   setTolerance(deg: number) {
@@ -523,6 +597,20 @@ function save<T>(key: string, size: { w: number; h: number }, value: T) {
 }
 
 const key = (what: "camera" | "tool", phoneId: string) => `st-${what}:${phoneId}`;
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+function readDetector(): DetectorKind {
+  try {
+    return localStorage.getItem("st-detector") === "rust" ? "rust" : "js";
+  } catch {
+    return "js";
+  }
+}
 function readTol(): number {
   try {
     const v = Number(localStorage.getItem("st-tol"));

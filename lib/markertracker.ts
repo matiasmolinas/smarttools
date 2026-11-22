@@ -30,7 +30,15 @@ export interface TrackerFrame {
   /** markers on parts (anchors): T_camera_body per body seen */
   bodies: BodyPose[];
   /** how long each stage took, ms (to find what is slow on a given phone) */
-  timings?: { detectMs: number; refineMs: number; poseMs: number; drawMs?: number; bitmapMs?: number };
+  timings?: {
+    detectMs: number;
+    refineMs: number;
+    poseMs: number;
+    drawMs?: number;
+    bitmapMs?: number;
+    /** compare mode: the other detector on the same frame */
+    alt?: { kind: string; detectMs: number; markers: number; shared: number; meanCornerPx: number };
+  };
 }
 
 export type CaptureResult =
@@ -51,6 +59,15 @@ export class MarkerTracker {
   private bodyIds = new Set<number>();
   /** markers on parts seen in the last frame, by id: undistorted corners (for learning stickers) */
   lastBodyMarkers = new Map<number, P[]>();
+
+  /** Swap the marker detector (js-aruco2 or the Rust one, lib/detectors.ts). */
+  setDetector(d: Detector) {
+    this.det = d;
+  }
+  /** Raw detections of a frame with the current detector (for comparisons). */
+  detectRaw(img: Rgba) {
+    return this.det.detect(img);
+  }
 
   constructor(core: NavCore, detector: Detector, camera: Camera, cameraCalibrated: boolean) {
     this.core = core;

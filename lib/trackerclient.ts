@@ -6,6 +6,7 @@ import type { CaptureKind, CaptureResult, TrackerFrame } from "./markertracker";
 import type { Rig } from "./scene";
 import type { Xf } from "./xform";
 import type { ToWorker } from "./workers/tracker.worker";
+import type { DetectorKind } from "./detectors";
 
 export interface WorkerResult {
   frame: TrackerFrame;
@@ -31,6 +32,7 @@ export class TrackerClient {
   private waits = new Map<number, (r: CaptureResult) => void>();
   readyPromise: Promise<void>;
   onResult: (r: WorkerResult) => void = () => {};
+  private onRecorded: ((m: { times: number[]; frames: ArrayBuffer[]; width: number; height: number }) => void) | null = null;
   /** frames sent / dropped because the worker was busy */
   sent = 0;
   dropped = 0;
@@ -41,7 +43,7 @@ export class TrackerClient {
    * detection in the wrong place. Elsewhere the worker scales the full frame. */
   private resizeOk: boolean | null = scaleWhileCopying() ? null : false;
 
-  constructor(camera: Camera, cameraCalibrated: boolean, maxSide = 960) {
+  constructor(camera: Camera, cameraCalibrated: boolean, maxSide = 960, detector: DetectorKind = "js", compare = false) {
     this.maxSide = maxSide;
     this.w = new Worker(new URL("./workers/tracker.worker.ts", import.meta.url), { type: "module" });
     let resolveReady!: () => void;
@@ -49,16 +51,24 @@ export class TrackerClient {
     this.w.onmessage = (e: MessageEvent) => {
       const m = e.data;
       if (m.type === "ready") resolveReady();
+      if (m.type === "fatal") {
+        console.error(`[SmartTools] ${m.message}`);
+        this.busy = false;
+      }
       if (m.type === "result") {
         this.busy = false;
         this.onResult(m as WorkerResult);
+      }
+      if (m.type === "recorded") {
+        this.onRecorded?.(m);
+        this.onRecorded = null;
       }
       if (m.type === "captured") {
         this.waits.get(m.id)?.(m.result);
         this.waits.delete(m.id);
       }
     };
-    this.send({ type: "init", camera, cameraCalibrated, maxSide });
+    this.send({ type: "init", camera, cameraCalibrated, maxSide, detector, compare });
   }
 
   private send(m: ToWorker, transfer: Transferable[] = []) {
@@ -103,6 +113,19 @@ export class TrackerClient {
       this.busy = false;
       return false;
     }
+  }
+
+  /** Record the next `frames` analysed frames (JPEG at the detection size) with their capture times. */
+  record(frames: number): Promise<{ times: number[]; frames: ArrayBuffer[]; width: number; height: number }> {
+    return new Promise((res) => {
+      this.onRecorded = res;
+      this.send({ type: "record", frames });
+    });
+  }
+
+  /** Which marker detector the worker uses, and whether it also runs the other one to compare. */
+  setDetector(detector: DetectorKind, compare: boolean) {
+    this.send({ type: "setDetector", detector, compare });
   }
 
   /** The detection resolution (longest side, px). */

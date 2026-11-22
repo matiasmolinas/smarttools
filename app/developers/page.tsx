@@ -26,7 +26,7 @@ const FOUR = [
 const ENGINE = [
   {
     k: "Navigation",
-    d: "Rust compiled to WebAssembly (~206 KB), a 120 Hz clock fed by 30 Hz camera poses. A scene graph of frames (sheet, parts, holes, tool), registration by touch, parts that move, the go / no-go gate, depth and angle alarms, no-go zones, gestures. Every decision uses measured poses; prediction is only for drawing.",
+    d: "Rust compiled to WebAssembly (~244 KB), a 120 Hz clock fed by 30 Hz camera poses. A scene graph of frames (sheet, parts, holes, tool), registration by touch, parts that move, the go / no-go gate, depth and angle alarms, no-go zones, gestures. Every decision uses measured poses; prediction is only for drawing. A marker detector in Rust is the alternative to js-aruco2: about 3× faster, as accurate.",
     files: [["engine/src/", "engine/src"], ["lib/engine.ts", "lib/engine.ts"], ["Engine spec", "docs/ENGINE_SPEC.md"]],
   },
   {
@@ -47,7 +47,7 @@ const NUMBERS = [
   { k: "< 0.3°", v: "angle error while driving, 95th percentile" },
   { k: "120 Hz", v: "the engine's clock, on the phone" },
   { k: "0", v: "language-model tokens in the real-time loop" },
-  { k: "195", v: "automated checks: 64 Rust, 78 TypeScript, 53 end-to-end" },
+  { k: "203", v: "automated checks: 68 Rust, 82 TypeScript, 53 end-to-end" },
 ];
 
 type Project = {

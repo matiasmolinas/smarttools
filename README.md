@@ -205,6 +205,7 @@ npm install
 npm run dev                                   # website at http://localhost:3000
 node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
 npm run engine:test                           # Rust core: cargo test + parity with TypeScript
+node --no-warnings scripts/replay.mts f.strec # replay a camera recording from the phone with both detectors
 npm test                                      # Rust + parity + TypeScript unit + quick E2E
 ```
 
@@ -241,8 +242,8 @@ the engine keeps 120 Hz.
 ### Tests
 
 ```bash
-npm run engine:test   # Rust: 64 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 78 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run engine:test   # Rust: 68 tests + TypeScript/Rust parity
+npm run test:unit     # TypeScript: 82 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
 npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 

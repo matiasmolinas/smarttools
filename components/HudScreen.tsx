@@ -56,6 +56,10 @@ export default function HudScreen() {
   // the camera's resolution: 1080p, or 720p for slow phones (kept per device)
   const [camRes, setCamRes] = useState<720 | 1080>(1080);
   const camResRef = useRef<720 | 1080>(1080);
+  // camera options to evaluate: 60 frames/s, focus and exposure locked (kept per device)
+  const [camOpts, setCamOpts] = useState({ fps60: false, lock: false });
+  const camOptsRef = useRef({ fps60: false, lock: false });
+  const [camInfo, setCamInfo] = useState("");
   const tracker = useCallback(() => trackerRef.current, []);
 
   const say = useCallback((t: string) => {
@@ -70,6 +74,11 @@ export default function HudScreen() {
 
   useEffect(() => {
     simRef.current = new URLSearchParams(window.location.search).get("sim") === "1";
+    try {
+      const o = { fps60: localStorage.getItem("st-cam-fps60") === "1", lock: localStorage.getItem("st-cam-lock") === "1" };
+      camOptsRef.current = o;
+      setCamOpts(o);
+    } catch {}
     try {
       const v = Number(localStorage.getItem("st-cam-res"));
       if (v === 720 || v === 1080) {
@@ -119,7 +128,12 @@ export default function HudScreen() {
     try {
       if (!simRef.current) {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: camResRef.current === 720 ? 1280 : 1920 }, height: { ideal: camResRef.current } },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: camResRef.current === 720 ? 1280 : 1920 },
+            height: { ideal: camResRef.current },
+            frameRate: { ideal: camOptsRef.current.fps60 ? 60 : 30 },
+          },
           audio: false,
         });
         stopCamera();
@@ -127,6 +141,7 @@ export default function HudScreen() {
         const v = videoRef.current!;
         v.srcObject = stream;
         await v.play().catch(() => {});
+        setCamInfo(await applyCameraLock(stream, camOptsRef.current.lock));
       }
       await ensureTracker();
       setStatusBoth("running");
@@ -374,6 +389,17 @@ export default function HudScreen() {
               onClose={() => setSheet(null)}
               realCamera={!simRef.current}
               cameraRes={camRes}
+              cameraOpts={camOpts}
+              cameraInfo={camInfo}
+              onCameraOpts={(o) => {
+                camOptsRef.current = o;
+                setCamOpts(o);
+                try {
+                  localStorage.setItem("st-cam-fps60", o.fps60 ? "1" : "0");
+                  localStorage.setItem("st-cam-lock", o.lock ? "1" : "0");
+                } catch {}
+                void start();
+              }}
               onCameraRes={(r) => {
                 camResRef.current = r;
                 setCamRes(r);
@@ -449,6 +475,34 @@ export default function HudScreen() {
       )}
     </div>
   );
+}
+
+/** Lock focus and exposure where the browser allows it (Chrome on Android; not Safari on iPhone), and say
+ * what the camera actually runs at. */
+async function applyCameraLock(stream: MediaStream, lock: boolean): Promise<string> {
+  const track = stream.getVideoTracks()[0];
+  if (!track) return "";
+  type Caps = MediaTrackCapabilities & { focusMode?: string[]; exposureMode?: string[]; focusDistance?: { min: number } };
+  type Sets = MediaTrackSettings & { focusMode?: string; exposureMode?: string; focusDistance?: number; exposureTime?: number };
+  const caps = (track.getCapabilities?.() ?? {}) as Caps;
+  let lockNote = "focus auto";
+  if (lock) {
+    const set = track.getSettings() as Sets;
+    const adv: Record<string, unknown> = {};
+    if (caps.focusMode?.includes("manual") && set.focusDistance != null) Object.assign(adv, { focusMode: "manual", focusDistance: set.focusDistance });
+    else if (caps.focusMode?.includes("single-shot")) adv.focusMode = "single-shot";
+    if (caps.exposureMode?.includes("manual") && set.exposureTime != null) Object.assign(adv, { exposureMode: "manual", exposureTime: set.exposureTime });
+    if (Object.keys(adv).length) {
+      try {
+        await track.applyConstraints({ advanced: [adv as MediaTrackConstraintSet] });
+        lockNote = `${adv.focusMode ? "focus locked" : "focus auto"} · ${adv.exposureMode ? "exposure locked" : "exposure auto"}`;
+      } catch {
+        lockNote = "lock refused by the camera";
+      }
+    } else lockNote = "lock not supported here";
+  }
+  const s = track.getSettings();
+  return `${s.width}×${s.height} · ${Math.round(s.frameRate ?? 0)} fps · ${lockNote}`;
 }
 
 function TopSheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {

@@ -3,7 +3,7 @@
 // then the tip resting on A2. Camera images are rendered by the Rust core and go through the real tracker
 // and the real engine, the same path as /hud. Written to public/benchmarks/ and labelled "simulation".
 //
-// Run: node --no-warnings scripts/bench-sim.mts
+// Run: node --no-warnings scripts/bench-sim.mts [--at-tool]   (--at-tool: the engine filters at the tip)
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -34,7 +34,8 @@ const PLAN: { phase: PhaseId; seconds: number; hold: Hold; d: Disturbance; simPh
 
 const session = new NavSession(core, new AR.Detector({ dictionaryName: "ARUCO_MIP_36h12" }), { camera: rig.camera, cameraCalibrated: true, tool: rig.tool, toolCalibrated: true, t0: 0 });
 // as in the bench lab on the phone: no prediction, so "filtered" is the pose the gate decides with
-session.engine.configure({ predict: false });
+const AT_TOOL = process.argv.includes("--at-tool");
+session.engine.configure({ predict: false, filterAtTool: AT_TOOL });
 const nav = session.scene.def.navigation;
 const bench = new BenchRecorder();
 let wall = 0;
@@ -72,20 +73,20 @@ for (const step of PLAN) {
 
 const d = ENGINE_DEFAULTS;
 const run = bench.finish({
-  id: "sim-reference",
+  id: AT_TOOL ? "sim-reference-tip" : "sim-reference",
   created: "2026-11-21T00:00:00.000Z",
   source: "simulation",
-  title: "Simulated reference: motor off vs motor on (modelled vibration), then the tip on A2",
+  title: AT_TOOL ? "Simulated reference, filtered at the tip: motor off vs motor on, then the tip on A2" : "Simulated reference: motor off vs motor on (modelled vibration), then the tip on A2",
   mount: "dock v0.4 (simulated geometry)",
   phone: { id: "redmi-15", name: "Redmi 15 (simulated camera)" },
   calibration: { lens: true, dock: true },
-  filter: { posMinCutoff: d.posMinCutoff, posBeta: d.posBeta, rotMinCutoff: d.rotMinCutoff, rotBeta: d.rotBeta, dCutoff: d.dCutoff, predict: false },
+  filter: { posMinCutoff: d.posMinCutoff, posBeta: d.posBeta, rotMinCutoff: d.rotMinCutoff, rotBeta: d.rotBeta, dCutoff: d.dCutoff, predict: false, filterAtTool: AT_TOOL },
   notes: "Rendered camera images (lens model, noise, motion blur) through the real tracker and engine. Motor vibration is a model: 0.15 mm / 0.12° at 35 Hz. Not a measurement.",
 });
 session.dispose();
 
 mkdirSync("public/benchmarks", { recursive: true });
-writeFileSync("public/benchmarks/sim-reference.json", JSON.stringify(run));
+writeFileSync(`public/benchmarks/${run.id}.json`, JSON.stringify(run));
 for (const s of run.summary) {
   const r = s.raw, f = s.filtered;
   console.log(
@@ -93,4 +94,4 @@ for (const s of run.summary) {
       (s.a2 ? ` · tip to A2 ${s.a2.distanceMm} mm` : ""),
   );
 }
-console.log("wrote public/benchmarks/sim-reference.json");
+console.log(`wrote public/benchmarks/${run.id}.json`);

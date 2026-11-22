@@ -21,6 +21,9 @@ export default function BenchPanel({
   realCamera = true,
   cameraRes = 1080,
   onCameraRes,
+  cameraOpts,
+  cameraInfo,
+  onCameraOpts,
 }: {
   tracker: () => BrowserNav | null;
   say: (m: string) => void;
@@ -29,8 +32,16 @@ export default function BenchPanel({
   realCamera?: boolean;
   cameraRes?: 720 | 1080;
   onCameraRes?: (r: 720 | 1080) => void;
+  /** camera options to evaluate: 60 frames/s, focus and exposure locked; and what the camera actually runs at */
+  cameraOpts?: { fps60: boolean; lock: boolean };
+  cameraInfo?: string;
+  onCameraOpts?: (o: { fps60: boolean; lock: boolean }) => void;
 }) {
   const [perf, setPerf] = useState<TrackerPerf | null>(null);
+  const [detector, setDetector] = useState<"js" | "rust">("js");
+  const [compareOn, setCompareOn] = useState(false);
+  const [atTool, setAtTool] = useState(false);
+  const [recording, setRecording] = useState<string | null>(null);
   const [side, setSide] = useState<number>(960);
   const [live, setLive] = useState<Live | null>(null);
   const [rec, setRec] = useState<{ phase: PhaseId; left: number; countdown: number } | null>(null);
@@ -79,6 +90,9 @@ export default function BenchPanel({
       if (tr) {
         setPerf(tr.perf());
         setSide(tr.maxSide);
+        setDetector(tr.detector);
+        setCompareOn(tr.compare);
+        setAtTool(tr.filterAtTool);
       }
       if (!b) return;
       const now = performance.now() / 1000;
@@ -159,12 +173,54 @@ export default function BenchPanel({
         <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
           <span className="text-white/50">frames/s · dropped/s</span>
           <span>{perf ? `${f(perf.fps, 1)} · ${f(perf.droppedPerS, 1)}` : "–"}</span>
+          {cameraInfo && (
+            <>
+              <span className="text-white/50">camera runs at</span>
+              <span>{cameraInfo}</span>
+            </>
+          )}
           <span className="text-white/50">camera → detect px</span>
           <span>{perf ? `${perf.video.w}×${perf.video.h} → ${perf.detect.w}×${perf.detect.h}` : "–"}</span>
           <span className="text-white/50">copy · scale ms</span>
           <span>{perf ? `${f(perf.bitmapMs, 0)} · ${f(perf.drawMs, 0)}` : "–"}</span>
           <span className="text-white/50">detect · refine · pose</span>
           <span>{perf ? `${f(perf.detectMs, 0)} · ${f(perf.refineMs, 0)} · ${f(perf.poseMs, 0)}` : "–"}</span>
+          {perf?.alt && (
+            <>
+              <span className="text-white/50">vs {perf.alt.kind}: detect · markers</span>
+              <span>
+                {f(perf.alt.detectMs, 1)} ms · {f(perf.alt.markers, 0)}
+              </span>
+              <span className="text-white/50">corner diff (raw)</span>
+              <span>{f(perf.alt.cornerPx, 2)} px</span>
+            </>
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <button
+            className={`${btn} ${detector === "rust" ? "border-[#3ee59b] text-[#3ee59b]" : ""}`}
+            onClick={() => {
+              const tr = tracker();
+              if (!tr) return;
+              const next = tr.detector === "js" ? "rust" : "js";
+              tr.setDetector(next);
+              setDetector(next);
+              say(`DETECTOR: ${next === "rust" ? "RUST (WEBASSEMBLY)" : "JAVASCRIPT"}`);
+            }}
+          >
+            detector {detector}
+          </button>
+          <button
+            className={`${btn} ${compareOn ? "border-[#3ee59b] text-[#3ee59b]" : ""}`}
+            onClick={() => {
+              const tr = tracker();
+              if (!tr) return;
+              tr.setDetector(tr.detector, !compareOn);
+              setCompareOn(!compareOn);
+            }}
+          >
+            compare {compareOn ? "on" : "off"}
+          </button>
         </div>
         {realCamera && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -184,6 +240,16 @@ export default function BenchPanel({
             <button className={btn} onClick={() => onCameraRes?.(cameraRes === 1080 ? 720 : 1080)}>
               camera {cameraRes}p
             </button>
+            {cameraOpts && (
+              <>
+                <button className={`${btn} ${cameraOpts.fps60 ? "border-[#3ee59b] text-[#3ee59b]" : ""}`} onClick={() => onCameraOpts?.({ ...cameraOpts, fps60: !cameraOpts.fps60 })}>
+                  60 fps {cameraOpts.fps60 ? "on" : "off"}
+                </button>
+                <button className={`${btn} ${cameraOpts.lock ? "border-[#3ee59b] text-[#3ee59b]" : ""}`} onClick={() => onCameraOpts?.({ ...cameraOpts, lock: !cameraOpts.lock })}>
+                  lock focus {cameraOpts.lock ? "on" : "off"}
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -205,6 +271,30 @@ export default function BenchPanel({
         </span>
         <span className="text-white/50">accelerometer</span>
         <span>{accel == null ? "no data" : `${f(accel, 2)} m/s²`}</span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          className={btn}
+          disabled={!!recording && recording.startsWith("●")}
+          onClick={async () => {
+            const tr = tracker();
+            if (!tr) return;
+            setRecording("● recording 10 s…");
+            const blob = await tr.record(10, mount);
+            if (!blob) return setRecording("nothing to record: point at the sheet");
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `smarttools-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.strec`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+            setRecording(`saved · ${(blob.size / 1e6).toFixed(1)} MB`);
+          }}
+        >
+          record camera 10 s
+        </button>
+        {recording && <span className="text-white/60">{recording}</span>}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5">
@@ -233,6 +323,18 @@ export default function BenchPanel({
           }}
         >
           filter {filterOn ? "on" : "off"}
+        </button>
+        <button
+          className={`${btn} ${atTool ? "border-[#3ee59b] text-[#3ee59b]" : ""}`}
+          onClick={() => {
+            const tr = tracker();
+            if (!tr) return;
+            tr.setFilterAtTool(!atTool);
+            setAtTool(!atTool);
+            say(!atTool ? "FILTER AT THE TIP" : "FILTER AT THE CAMERA");
+          }}
+        >
+          filter at {atTool ? "tip" : "camera"}
         </button>
         <button className={btn} onClick={() => setMount(MOUNTS[(MOUNTS.indexOf(mount) + 1) % MOUNTS.length])}>
           {mount}

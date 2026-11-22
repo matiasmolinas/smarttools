@@ -27,6 +27,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.187.0",
+    "jpeg-js": "0.4.4",
     "tailwindcss": "4.3.3",
     "typescript": "^5"
   }
