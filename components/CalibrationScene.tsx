@@ -115,7 +115,8 @@ export default function CalibrationScene({ focus, compact = false, className }: 
     const def = smartToolsScene({ tool });
     const codes = markerCodes(new AR.Dictionary(DICTIONARY).codeList);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // compact (over the camera, in the guided setup): a transparent background, so the camera shows through
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: compact });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     el.appendChild(renderer.domElement);
     renderer.domElement.style.display = "block";
@@ -125,7 +126,7 @@ export default function CalibrationScene({ focus, compact = false, className }: 
     phoneR.setSize(PW, PH, false);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05080d);
+    scene.background = compact ? null : new THREE.Color(0x05080d);
     scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x101820, 1.5));
     const sun = new THREE.DirectionalLight(0xffffff, 1.7);
     sun.position.set(0.4, -0.5, 0.9);

@@ -26,6 +26,8 @@ export interface HudInputs {
   action?: "drill" | "drive";
   /** a guidance hint (out of order, material left under the tip) */
   hint?: string | null;
+  /** the angle tolerance in use, deg */
+  tolDeg?: number;
 }
 
 export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
@@ -82,6 +84,8 @@ export function hudView(i: HudInputs): { state: SimState; overlay: Overlay } {
     calibrating: i.calibrating ?? null,
     alarms: s.alarms,
     hint: i.hint ?? null,
+    markers: s.markers,
+    tolDeg: i.tolDeg,
   };
   return { state, overlay };
 }

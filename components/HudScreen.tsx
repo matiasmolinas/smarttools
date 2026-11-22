@@ -55,6 +55,7 @@ export default function HudScreen() {
   // the guided setup (opens by itself when the drill is not calibrated yet) and the job sheet
   const [setupOpen, setSetupOpen] = useState(false);
   const [jobOpen, setJobOpen] = useState(false);
+  const [tol, setTol] = useState(0.5);
   const setupDecided = useRef(false);
   // the camera's resolution: 1080p by default, 720p is lighter for slow phones (kept per device)
   const [camRes, setCamRes] = useState<720 | 1080>(1080);
@@ -115,6 +116,7 @@ export default function HudScreen() {
         };
         if (!sim) {
           setPhoneName(tr.phone.name);
+          setTol(tr.tolDeg);
           const id = activePlanId();
           if (id)
             browserMemory()
@@ -434,6 +436,17 @@ export default function HudScreen() {
             <BigButton onClick={nextPlan}>Change plan</BigButton>
             <BigButton
               onClick={() => {
+                const tr = trackerRef.current;
+                if (!tr) return;
+                const next = tr.tolDeg === 0.5 ? 2 : 0.5;
+                tr.setTolerance(next);
+                setTol(next);
+              }}
+            >
+              Precision: ±{tol}° {tol === 0.5 ? "(spec)" : "(practice)"}
+            </BigButton>
+            <BigButton
+              onClick={() => {
                 setDraft(newPlan(`Plan ${new Date().toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
                 setJobOpen(false);
               }}
@@ -472,7 +485,7 @@ export default function HudScreen() {
       )}
 
       {/* floating control column, right edge (portrait and landscape) */}
-      <div className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 flex -translate-y-1/2 flex-col items-center gap-3.5">
+      <div className={`absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 flex -translate-y-1/2 flex-col items-center gap-3.5 ${setupOpen ? "hidden" : ""}`}>
         <RoundButton label={SURF_LABEL[bg]} caption="View" onClick={cycleSurface}>
           <SurfIcon />
         </RoundButton>
