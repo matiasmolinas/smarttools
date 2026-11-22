@@ -25,6 +25,8 @@ export interface GuideOptions {
   overlay: Overlay;
   /** the tool is calibrated (the tip can be drawn) */
   toolCalibrated: boolean;
+  /** false while a sheet (setup, menu, job) covers the top: the banner would show through it */
+  banner?: boolean;
 }
 
 export function drawGuide(ctx: CanvasRenderingContext2D, s: SimState, w: number, h: number, o: GuideOptions) {
@@ -162,6 +164,7 @@ export function drawGuide(ctx: CanvasRenderingContext2D, s: SimState, w: number,
   ctx.restore();
 
   // ---------- the banner: one instruction, at the top ----------
+  if (o.banner === false) return;
   const b = banner(s, ov, { tip, mark, onMark, touching, square, drilling, tol, calibrated: o.toolCalibrated });
   const bx = u * 3, by = u * 3, bw = w - u * 6 - u * 15, bh = u * 23;
   ctx.fillStyle = "rgba(6,9,13,0.72)";

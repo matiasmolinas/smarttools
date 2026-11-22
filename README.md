@@ -25,7 +25,7 @@ your hands.
 | [`/benchmarks`](https://smarttools-nav.vercel.app/benchmarks) | Motor off vs motor on: raw and filtered poses from the bench lab (`/hud` → Bench), the tip checked on A2, and the build log. Simulated runs are labelled; the field-test protocol is [docs/FIELD-TEST.md](docs/FIELD-TEST.md) |
 | [`/memory`](https://smarttools-nav.vercel.app/memory) | What this phone keeps: plans (made with the tool as a pointer, or imported) and jobs, with the report and the agentvcs ledger to download. Works offline |
 | [`/engine`](https://smarttools-nav.vercel.app/engine) | The engine lab: one engine drawn in 3D, as a 2D plan and as the HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone screen only. Simulated (wall, wood, grid), the scene simulator tracked by the real pipeline (**Sim cam**), or the rear camera (**Cam**, with **Phone**, **Lens**, **Calibrate**, export / import) |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone app, only what is needed to work: **Start** (the rear camera), then a GPS-style guide over the camera. The guided **Setup** (lens, tip, check) opens by itself; one menu for Setup, Job, Tests and Sound. (`/hud?sim=1` replaces the camera with the scene simulator, for development) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
 
 ## How the demo works
