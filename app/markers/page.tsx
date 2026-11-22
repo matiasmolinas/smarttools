@@ -85,16 +85,11 @@ export default function MarkersPage() {
           <li>Measure the 50 mm line in the left margin. If it is not 50 mm, print again.</li>
           <li>Tape the sheet flat on the wall or board. The crosshairs A1–A3 are where the holes go.</li>
           <li>
-            Open <a className="underline" href="/hud">/hud</a> on the phone, tap <b>View</b> until <b>Cam</b>, and
-            point at the sheet.
+            Open <a className="underline" href="/hud">/hud</a> on the phone, tap <b>Start</b> and point at the sheet.
           </li>
           <li>
-            Once per phone: tap <b>Lens</b> and move the phone over the sheet for 20 s, tilting it in different
-            directions.
-          </li>
-          <li>
-            With the phone in the dock, rest the bit tip on <b>A2</b> and tap <b>Calibrate</b>: circle the drill around
-            the tip for 5 s, then twist it around the bit for 5 s.
+            The <b>Setup</b> guides you, one step at a time: the lens (once per phone), then the tip on <b>A2</b>
+            (circle the drill around it, then twist it around the bit). It opens by itself the first time.
           </li>
         </ol>
         <PrintButton />

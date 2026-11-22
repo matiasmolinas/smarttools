@@ -42,8 +42,9 @@ Estimated time: 2 hours, including the mount.
 
 1. Open https://smarttools-nav.vercel.app/hud in Chrome and add it to the home screen (⋮ → *Install app*). Open it
    from the icon: it runs full screen and works offline.
-2. Tap **View** until it says **Cam**, and allow the camera.
-3. Tap **Phone** until it says **Redmi 15**.
+2. Tap **Start** and allow the camera. The **Setup** opens by itself the first time; on its first screen, tap
+   *Phone: … (tap to change)* to pick your phone.
+3. Everything else is in the **menu ☰** (top right): **Setup**, **Job**, **Tests**, **Sound**, **Full screen**.
 4. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
 
 ### The sheet
@@ -57,11 +58,12 @@ no glare on the sheet, and no shadow of the drill covering many markers.
 
 Done once per phone, with the phone in your hand.
 
-1. In **Cam**, tap **Lens**.
-2. For 20 s, move the phone over the sheet: near and far, tilting it towards all four sides, always with many
-   markers in view.
-3. When it ends, the app shows `LENS OK · N VIEWS · X PX`. **Write down X.** Below 1 px is very good. If it fails or
-   X is above 2 px, repeat with better light.
+1. In the **Setup**, step **Lens**, tap **Start** (if the lens was calibrated before, it says so and you can go on,
+   or tap *Calibrate again*).
+2. For 20 s, move the phone over the sheet as in the animation: near and far, tilting it towards all four sides,
+   always with many markers in view.
+3. When it ends, the setup shows the error in px. **Write it down.** Below 1 px is very good. Above 2 px, repeat with
+   better light.
 
 ---
 
@@ -93,22 +95,22 @@ One way that works:
 
 Every time you mount or move the phone:
 
-1. Rest the bit tip on the **centre of A2**.
-2. Tap **Calibrate**:
-   - **first 5 s:** circle the drill around the tip, keeping the tip on A2, tilting it about 10–15° to every side;
+1. **Make a small dent in the centre of A2** with a nail or a punch, so the tip cannot slide while you move the drill.
+   It is what improves this calibration the most.
+2. In the **Setup** (menu ☰ → Setup), step **Tip**: rest the tip in the dent and tap **Start**:
+   - **first 5 s:** circle the drill around the tip, keeping the tip in the dent, tilting it about 10–15° to every
+     side;
    - **next 5 s:** with the tip in the same place, twist the drill around its own bit, from one side to the other.
-3. Expected messages:
-   - `TIP OK · X MM` after the first step. **Write down X.** Below 0.5 mm is very good.
-   - `DOCK CALIBRATED · TILT ≈ N°` at the end. With the provisional mount you may also see
-     `CHECK THE PHONE: TIP … MM FROM THE REDMI 15 PROFILE`. **That is expected:** the profile describes the printed
-     dock, not your mount, and the calibration measures the real one anyway.
-4. If something fails, repeat it with more markers in view and slower movements.
+3. Step **Check**: the **blue TIP cross** is where the app thinks the tip is. It is fixed in the image (the camera
+   is fixed to the drill) and **must sit on the real bit tip**. If it does not, tap *No: calibrate the tip again*.
+   The number is the tip's distance to A2 with the tip resting on it: below 1 mm is very good.
+4. If something fails, the setup says why: repeat with more markers in view and slower movements.
 
 ---
 
 ## 4. Test 1: accuracy at A2
 
-Open the lab with the **Bench** button. The panel shows live:
+Open the lab with **menu ☰ → Tests**. The panel shows live:
 - how many markers it sees;
 - the bit's angle to the sheet;
 - the tip's distance to A2;
@@ -156,10 +158,11 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
 
 ## 6. Test 3: a 4-hole job
 
-1. **The plan:** in the bar at the bottom, tap the plan's name until it says
+1. **The plan:** **menu ☰ → Job → Change plan** until it says
    **Demo: 4 holes, 40 mm square, 20 mm deep**. Four Ø6 mm holes, 20 mm deep, on a 40 × 40 mm square (D1 to D4), in
    the gaps between markers. **A2 stays free**, so you can recalibrate afterwards.
-2. Tap **Sound** to get the guiding tone.
+2. **Menu ☰ → Sound: on** for the guiding tone. Follow the banner at the top: the arrow to the mark, *Touch down*,
+   *Tilt* (bring the dot into the small circle), *Drill*.
 3. **Optional:** with the Bench panel open, tap **Drilling 10s** just before starting D1, and drill during the
    recording. That measures the vibration under real load.
 4. **For each hole:**
@@ -168,7 +171,7 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
    - drill until the screen shows the depth;
    - pull out.
    The app records the hole by itself.
-5. When all 4 are done, tap **Finish job**. You will see `JOB SAVED · …` with the verdict.
+5. When all 4 are done, **menu ☰ → Job → Finish job and save**. You will see *Job saved* with the verdict.
 6. **Measure with the caliper** and write down:
    - each hole's real **depth**, with the caliper's depth rod;
    - the **spacing** between centres: D1–D2 and D4–D3 (horizontal), D2–D3 and D1–D4 (vertical). They should all be
@@ -179,9 +182,9 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
 
 ## 7. Optional: plan with the drill as a pointer
 
-1. Tap **New plan**. Rest the tip on a free spot of the sheet (between markers) and tap **Mark hole**. Repeat at a
-   second spot and tap **Save**.
-2. Drill those two holes as in test 3 and tap **Finish job**.
+1. **Menu ☰ → Job → New plan with the tool.** Rest the tip on a free spot of the sheet (between markers) and tap
+   **Mark hole**. Repeat at a second spot and tap **Save plan**.
+2. Drill those two holes as in test 3 and finish the job from **menu ☰ → Job**.
 
 ---
 
