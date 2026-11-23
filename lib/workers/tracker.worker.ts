@@ -6,11 +6,14 @@ import { AR } from "../aruco";
 import { DICTIONARY } from "../board";
 import { NavCore, type Camera, type ToolCalib } from "../engine";
 import { MarkerTracker, type CaptureKind } from "../markertracker";
-import { renderTool, DEFAULT_DISTURBANCE, type Rig } from "../scene";
+import { renderTool, DEFAULT_DISTURBANCE, markerCodes, type Rig } from "../scene";
+import { compareDetections, makeDetector, type DetectorKind } from "../detectors";
 import type { Xf } from "../xform";
 
 export type ToWorker =
-  | { type: "init"; camera: Camera; cameraCalibrated: boolean; maxSide: number }
+  | { type: "init"; camera: Camera; cameraCalibrated: boolean; maxSide: number; detector?: DetectorKind; compare?: boolean }
+  | { type: "setDetector"; detector: DetectorKind; compare: boolean }
+  | { type: "record"; frames: number }
   | { type: "frame"; bitmap: ImageBitmap; tCapture: number; srcWidth: number; bitmapMs: number }
   | { type: "setMaxSide"; maxSide: number }
   | { type: "sim"; rig: Rig; codes: Uint8Array; toolW: Xf; tCapture: number; seed: number }
@@ -23,16 +26,64 @@ let core: NavCore | null = null;
 let tracker: MarkerTracker | null = null;
 let maxSide = 960;
 let canvas: OffscreenCanvas | null = null;
+let detectorKind: DetectorKind = "js";
+let compare = false;
+let altDet: { kind: DetectorKind; det: ReturnType<typeof makeDetector> } | null = null;
+// a recording in progress: frames left, and the JPEGs (encoded as the frames are analysed)
+let rec: { left: number; times: number[]; jpegs: Promise<ArrayBuffer>[] } | null = null;
+/** Compare mode: run the other detector on the same frame and note its time, markers and corner distance. */
+function compareOn(img: { width: number; height: number; data: Uint8ClampedArray }, f: ReturnType<MarkerTracker["frame"]>) {
+  if (!compare || !tracker || !core) return;
+  const other: DetectorKind = detectorKind === "js" ? "rust" : "js";
+  if (!altDet || altDet.kind !== other) altDet = { kind: other, det: makeDetector(other, core, (codes ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList))) };
+  const t0 = performance.now();
+  const alt = sheetIds(altDet.det.detect(img));
+  const altMs = performance.now() - t0;
+  const c = compareDetections(sheetIds(tracker.detectRaw(img)), alt);
+  f.timings = { ...f.timings!, alt: { kind: other, detectMs: altMs, markers: alt.length, shared: c.shared, meanCornerPx: c.meanCornerPx } };
+}
+
+function recordFrame(img: ImageData, t: number) {
+  if (!rec) return;
+  const c = new OffscreenCanvas(img.width, img.height);
+  c.getContext("2d")!.putImageData(img, 0, 0);
+  rec.times.push(t);
+  rec.jpegs.push(c.convertToBlob({ type: "image/jpeg", quality: 0.92 }).then((b) => b.arrayBuffer()));
+  if (--rec.left <= 0) {
+    const r = rec;
+    rec = null;
+    Promise.all(r.jpegs).then((frames) => post({ type: "recorded", times: r.times, frames, width: img.width, height: img.height }, frames));
+  }
+}
+let codes: Uint8Array | null = null;
+const sheetIds = (l: { id: number; corners: { x: number; y: number }[] }[]) => l.filter((m) => m.id < 28);
+function useDetector(kind: DetectorKind) {
+  detectorKind = kind;
+  codes ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList);
+  tracker?.setDetector(makeDetector(kind, core!, codes));
+}
 const ready = NavCore.load().then((c) => (core = c));
+// never fail silently: a worker error otherwise leaves the screen black with nothing in the console
+ready.catch((e) => post({ type: "fatal", message: `engine failed to load: ${e?.message ?? e}` }));
 
 const post = (m: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
 
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
+  try {
+    await handle(e);
+  } catch (err) {
+    post({ type: "fatal", message: `tracker worker: ${(err as Error)?.message ?? err}` });
+  }
+};
+
+async function handle(e: MessageEvent<ToWorker>) {
   await ready;
   const m = e.data;
   if (m.type === "init") {
     tracker = new MarkerTracker(core!, new AR.Detector({ dictionaryName: DICTIONARY }), m.camera, m.cameraCalibrated);
     maxSide = m.maxSide;
+    useDetector(m.detector ?? "js");
+    compare = !!m.compare;
     post({ type: "ready" });
     return;
   }
@@ -52,6 +103,8 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
       const drawMs = performance.now() - t0;
       const f = tracker.frame(img, m.tCapture);
       f.timings = { ...f.timings!, drawMs, bitmapMs: m.bitmapMs };
+      recordFrame(img, m.tCapture);
+      compareOn(img, f);
       // frame px -> source (video) px
       post({ type: "result", frame: f, width: w, height: h, scale: m.srcWidth / w });
       break;
@@ -59,9 +112,18 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
     case "setMaxSide":
       maxSide = m.maxSide;
       break;
+    case "record":
+      rec = { left: m.frames, times: [], jpegs: [] };
+      break;
+    case "setDetector":
+      useDetector(m.detector);
+      compare = m.compare;
+      break;
     case "sim": {
       const img = renderTool(core, m.rig, m.codes, [m.toolW], { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, m.seed, { ss: 1 });
       const f = tracker.frame(img, m.tCapture);
+      compareOn(img, f);
+      if (rec) recordFrame(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), m.tCapture);
       const pixels = img.data.buffer as ArrayBuffer;
       post({ type: "result", frame: f, width: img.width, height: img.height, scale: 1, pixels }, [pixels]);
       break;
@@ -79,4 +141,4 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
       post({ type: "captured", id: m.id, result: tracker.endCapture(m.tool) });
       break;
   }
-};
+}

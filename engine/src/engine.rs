@@ -58,6 +58,10 @@ pub struct EngineConfig {
     pub rot_min_cutoff: f64,
     pub rot_beta: f64,
     pub d_cutoff: f64,
+    /// filter the tool's pose (at the tip) instead of the camera's: a shake that pivots about the tip moves the
+    /// camera a lot and the tip little; filtering the camera's position and rotation separately turns the
+    /// camera's motion into tip jitter
+    pub filter_at_tool: bool,
 }
 
 impl Default for EngineConfig {
@@ -85,6 +89,7 @@ impl Default for EngineConfig {
             rot_min_cutoff: 2.0,
             rot_beta: 300.0,
             d_cutoff: 1.0,
+            filter_at_tool: false,
         }
     }
 }
@@ -232,6 +237,13 @@ impl TrackFilter {
             pos: [OneEuro::new(c.pos_min_cutoff, c.pos_beta, c.d_cutoff); 3],
             rot: [OneEuro::new(c.rot_min_cutoff, c.rot_beta, c.d_cutoff); 4],
             last_q: None,
+        }
+    }
+    /// Filter a pose; with `about` (the tracked node to the tool), the tool's pose is what gets filtered.
+    fn step_about(&mut self, t: f64, x: &Transform, about: Option<&Transform>) -> Transform {
+        match about {
+            Some(rel) => self.step(t, &x.compose(rel)).compose(&rel.inverse()),
+            None => self.step(t, x),
         }
     }
     fn step(&mut self, t: f64, x: &Transform) -> Transform {
@@ -702,6 +714,8 @@ impl Engine {
 
     fn ingest_tracked(&mut self, m: Measurement, node: NodeId, local: Transform) {
         let t = self.now();
+        // filtering at the tool: the pose filtered is the tool's (the tracked node to the tool, fixed)
+        let about = if self.config.filter_at_tool { self.tool.and_then(|tool| self.graph.relative(node, tool)) } else { None };
         {
             let ti = self.track_index(node);
             let hist_s = self.config.history_s;
@@ -709,7 +723,7 @@ impl Engine {
             let tr = &mut self.tracks[ti];
             self.stats.measurements += 1;
             if m.t_capture >= tr.last_seen {
-                let out = tr.filt.step(m.t_capture, &local);
+                let out = tr.filt.step_about(m.t_capture, &local, about.as_ref());
                 tr.hist.push_back(Hist { m, raw: local, filt: tr.filt, out });
                 tr.last_seen = m.t_capture;
                 tr.markers = m.markers;
@@ -722,7 +736,7 @@ impl Engine {
                 let mut rest: Vec<Hist> = tr.hist.drain(i..).collect();
                 rest.insert(0, Hist { m, raw: local, filt: f, out: local });
                 for h in rest.iter_mut() {
-                    h.out = f.step(h.m.t_capture, &h.raw);
+                    h.out = f.step_about(h.m.t_capture, &h.raw, about.as_ref());
                     h.filt = f;
                 }
                 tr.hist.extend(rest);
@@ -1473,6 +1487,33 @@ mod tests {
         let (with, without) = (run(true), run(false));
         assert!(without > 2.5, "lag without prediction {without} mm");
         assert!(with < 0.5, "lag with prediction {with} mm");
+    }
+
+    #[test]
+    fn filtering_at_the_tool_keeps_a_pivoting_shake_off_the_tip() {
+        // the tip rests still; the drill shakes at 35 Hz pivoting about it (the camera, 17 cm away, swings)
+        let run = |at_tool: bool| {
+            let (mut e, sheet, _, cam, tool) = rig();
+            e.config.filter_at_tool = at_tool;
+            e.config.predict = false;
+            let mut jitter: Vec<f64> = Vec::new();
+            for i in 0..480 {
+                let t = i as f64 / 120.0;
+                if i % 4 == 0 {
+                    let a = 0.15f64.to_radians() * (t * 2.0 * std::f64::consts::PI * 35.0).sin();
+                    e.push(meas(cam, sheet, &cam_world([0.0, 0.0, 0.0], [a.sin(), 0.0, -a.cos()]), t));
+                }
+                e.advance_to(t);
+                if t > 1.0 {
+                    let p = e.graph.world(tool).unwrap().p;
+                    jitter.push((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() * 1000.0);
+                }
+            }
+            (jitter.iter().map(|x| x * x).sum::<f64>() / jitter.len() as f64).sqrt()
+        };
+        let (cam, at_tool) = (run(false), run(true));
+        assert!(at_tool < 0.01, "tip jitter filtering at the tool {at_tool} mm");
+        assert!(cam > at_tool * 3.0, "filtering the camera turns the shake into tip jitter: {cam} vs {at_tool} mm");
     }
 
     #[test]

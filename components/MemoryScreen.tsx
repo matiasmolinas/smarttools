@@ -1,8 +1,9 @@
 "use client";
 
 // /memory: what this phone remembers (IndexedDB, lib/memory.ts). Plans (use, download, import, delete) and jobs
-// (the report as HTML or JSON, the agentvcs ledger). Everything here works offline; the outbox shows what the
-// cloud (F2) does not have yet.
+// (the report as HTML or JSON, the agentvcs ledger, the job as an athos recipe). Recipes come in through the gate
+// (lib/gate.ts); jobs are compared by tracking setting (lib/vcs.ts, blame). Everything here works offline; the
+// outbox shows what the cloud (F2) does not have yet.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BUILT_IN_PLANS, SHEET_PLAN, type Plan } from "@/lib/plan";
@@ -10,6 +11,9 @@ import type { JobRecord } from "@/lib/jobrecord";
 import { activePlanId, browserMemory, setActivePlanId, type Row } from "@/lib/memory";
 import { reportHtml } from "@/lib/report";
 import { jobLedger } from "@/lib/ledger";
+import { blame, summarize, verifyBundle, type Bundle } from "@/lib/vcs";
+import { recipeFromJob, recipeFromPlan } from "@/lib/recipe";
+import { gateRecipe, type RecipeGate } from "@/lib/gate";
 import { PHASES, type BenchRun } from "@/lib/bench";
 
 function download(name: string, text: string, type: string) {
@@ -32,6 +36,10 @@ export default function MemoryScreen() {
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const recipeRef = useRef<HTMLInputElement>(null);
+  const ledgerRef = useRef<HTMLInputElement>(null);
+  // a recipe the gate escalated: kept until the person reviews it and accepts it, or drops it
+  const [pending, setPending] = useState<RecipeGate | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +77,44 @@ export default function MemoryScreen() {
     void load();
   };
 
+  const importRecipe = async (f: File) => {
+    const g = gateRecipe(await f.text(), { kind: "expert", name: f.name.replace(/\.md$/i, "") });
+    setPending(null);
+    if (g.verdict === "REJECTED" || !g.plan) return setMsg({ ok: false, text: `Recipe refused: ${g.reasons.join("; ")}.` });
+    if (g.verdict === "ESCALATE") {
+      setPending(g);
+      return setMsg(null);
+    }
+    await saveRecipePlan(g);
+  };
+  const saveRecipePlan = async (g: RecipeGate) => {
+    const r = await browserMemory().savePlan(g.plan);
+    setPending(null);
+    setMsg(r.ok ? { ok: true, text: `Recipe "${r.plan.name}" saved as a plan (${r.plan.holes.length} holes)${g.manual.length ? `. Steps to do by hand: ${g.manual.join("; ")}` : ""}.` } : { ok: false, text: `Not saved: ${r.errors.join("; ")}.` });
+    void load();
+  };
+  const checkLedger = async (f: File) => {
+    try {
+      const v = verifyBundle(JSON.parse(await f.text()) as Bundle);
+      setMsg(v.ok ? { ok: true, text: `${f.name}: the ledger is intact (hashes, chain and manifest check out).` } : { ok: false, text: `${f.name}: ${v.errors.join("; ")}.` });
+    } catch {
+      setMsg({ ok: false, text: `${f.name}: not a ledger (JSON).` });
+    }
+  };
+  const fileInput = (ref: React.RefObject<HTMLInputElement | null>, accept: string, f: (file: File) => void) => (
+    <input
+      ref={ref}
+      type="file"
+      accept={accept}
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        if (file) f(file);
+        e.target.value = "";
+      }}
+    />
+  );
+
   const card = "rounded-2xl border border-white/10 bg-white/[0.02]";
   const btn = "rounded-full border border-white/20 px-3 py-1 text-xs hover:border-white/50";
 
@@ -83,6 +129,24 @@ export default function MemoryScreen() {
         </span>
       </div>
       {msg && <p className={`text-sm ${msg.ok ? "text-[var(--green)]" : "text-[#ff8a8a]"}`}>{msg.text}</p>}
+      {pending && (
+        <div className="rounded-2xl border border-[var(--amber)]/50 p-5 text-sm">
+          <p className="font-semibold text-[var(--amber)]">Review this recipe before it becomes a plan: &ldquo;{pending.plan?.name}&rdquo;</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-white/70">
+            {pending.reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+          <div className="mt-4 flex gap-2">
+            <button className="rounded-full bg-[var(--amber)] px-3 py-1 text-xs font-semibold text-black" onClick={() => void saveRecipePlan(pending)}>
+              I reviewed it: save the plan
+            </button>
+            <button className="rounded-full border border-white/20 px-3 py-1 text-xs" onClick={() => setPending(null)}>
+              Drop it
+            </button>
+          </div>
+        </div>
+      )}
 
       <section>
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -91,17 +155,11 @@ export default function MemoryScreen() {
             <button className={btn} onClick={() => fileRef.current?.click()}>
               Import a plan file
             </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void importPlan(f);
-                e.target.value = "";
-              }}
-            />
+            {fileInput(fileRef, "application/json,.json", (f) => void importPlan(f))}
+            <button className={btn} onClick={() => recipeRef.current?.click()}>
+              Import a recipe (athos)
+            </button>
+            {fileInput(recipeRef, "text/markdown,.md,text/plain", (f) => void importRecipe(f))}
             <a href="/hud" className="rounded-full bg-[var(--green)] px-3 py-1 text-xs font-semibold text-black">
               Plan on the phone →
             </a>
@@ -131,6 +189,9 @@ export default function MemoryScreen() {
                   )}
                   <button className={btn} onClick={() => download(`${slug(p.name)}.plan.json`, JSON.stringify(p, null, 2), "application/json")}>
                     Download
+                  </button>
+                  <button className={btn} onClick={() => download(`${slug(p.name)}.recipe.md`, recipeFromPlan(p), "text/markdown")}>
+                    As a recipe
                   </button>
                   {!builtIn && (
                     <button
@@ -193,8 +254,16 @@ export default function MemoryScreen() {
         </ul>
       </section>
 
+      <Compare jobs={jobs ?? []} />
+
       <section>
-        <h2 className="text-xl font-semibold">Jobs</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-xl font-semibold">Jobs</h2>
+          <button className={btn} onClick={() => ledgerRef.current?.click()}>
+            Verify a ledger file
+          </button>
+          {fileInput(ledgerRef, "application/json,.json", (f) => void checkLedger(f))}
+        </div>
         {jobs && jobs.length === 0 && <p className="mt-3 text-sm text-white/50">No jobs yet. On the phone, drill the plan&apos;s holes and tap Finish job.</p>}
         <ul className="mt-4 space-y-3">
           {(jobs ?? []).map((r) => {
@@ -223,6 +292,9 @@ export default function MemoryScreen() {
                   <button className={btn} onClick={() => download(`${slug(j.plan.name)}-ledger.json`, JSON.stringify(jobLedger(j), null, 2), "application/json")}>
                     agentvcs ledger
                   </button>
+                  <button className={btn} onClick={() => download(`${slug(j.plan.name)}-${j.ended.slice(0, 10)}.recipe.md`, recipeFromJob(j), "text/markdown")}>
+                    As a recipe (athos)
+                  </button>
                   <button
                     className={`${btn} text-white/50`}
                     onClick={async () => {
@@ -239,5 +311,56 @@ export default function MemoryScreen() {
         </ul>
       </section>
     </div>
+  );
+}
+
+const METRICS = [
+  { key: "depth.error_mm", label: "Depth error", unit: "mm" },
+  { key: "angle.max_deg", label: "Max angle", unit: "°" },
+];
+
+/** Which tracking setting goes with better holes, over this phone's camera jobs (agentvcs blame, lib/vcs.ts). */
+function Compare({ jobs }: { jobs: Row<JobRecord>[] }) {
+  const real = jobs.filter((r) => r.value.context.source === "camera" && r.value.holes.length);
+  const rows = real.map((r) => summarize(jobLedger(r.value) as unknown as Bundle));
+  const show = (v: string) => v.replace(/^"|"$/g, "");
+  return (
+    <section>
+      <h2 className="text-xl font-semibold">Compare jobs by setting</h2>
+      <p className="mt-1 text-sm text-white/55">
+        Each job records how the phone tracked (detector, filter, detection size, camera). Lower is better. Two or more jobs per value before it means much.
+      </p>
+      {rows.length < 2 ? (
+        <p className="mt-3 text-sm text-white/50">Needs at least two jobs with the camera, with a setting changed between them (menu ☰ → Tests).</p>
+      ) : (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {METRICS.map((m) => {
+            const b = blame(rows, m.key).slice(0, 3);
+            return (
+              <div key={m.key} className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+                <h3 className="font-semibold">{m.label}</h3>
+                {b.length === 0 && <p className="mt-2 text-sm text-white/50">No setting changed between these jobs.</p>}
+                <ul className="mt-2 space-y-2 text-sm">
+                  {b.map((x) => (
+                    <li key={x.setting}>
+                      <span className="font-mono text-xs text-white/60">{x.setting.replace(/^tracking\./, "")}</span>
+                      {x.weak && <span className="ml-2 font-mono text-[10px] text-[var(--amber)]">few jobs</span>}
+                      <div className="mt-0.5 font-mono text-xs">
+                        {x.groups.map((g, i) => (
+                          <span key={g.value} className={i === 0 ? "text-[var(--green)]" : "text-white/70"}>
+                            {i ? " · " : ""}
+                            {show(g.value)} {g.mean.toFixed(2)} {m.unit} ({g.jobs})
+                          </span>
+                        ))}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }

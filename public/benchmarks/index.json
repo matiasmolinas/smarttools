@@ -1,5 +1,16 @@
 {
   "runs": [
-    { "id": "sim-reference", "file": "sim-reference.json", "source": "simulation", "title": "Simulated reference: motor off vs motor on (modelled vibration), then the tip on A2" }
+    {
+      "id": "sim-reference",
+      "file": "sim-reference.json",
+      "source": "simulation",
+      "title": "Simulated reference: motor off vs motor on (modelled vibration), then the tip on A2"
+    },
+    {
+      "id": "sim-reference-tip",
+      "file": "sim-reference-tip.json",
+      "source": "simulation",
+      "title": "Simulated reference, filtered at the tip: motor off vs motor on, then the tip on A2"
+    }
   ]
 }

@@ -21,6 +21,7 @@ pub mod engine;
 pub mod camera;
 pub mod ffi;
 pub mod geom;
+pub mod detect;
 pub mod gesture;
 pub mod nav;
 pub mod pose;

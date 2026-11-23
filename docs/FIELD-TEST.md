@@ -220,7 +220,28 @@ No background music, or just the app's tone. I can edit the final cut if you sen
 
 ---
 
-## 10. If something goes wrong
+## 10. Alternatives to evaluate (menu ☰ → Tests)
+
+The defaults stay as they are; each of these is a switch, kept on the phone until you change it back.
+
+| Switch | What it changes | What to compare |
+|---|---|---|
+| **detector js / rust** | The marker detector: js-aruco2 (default) or the one written in Rust (WebAssembly). In simulation the Rust one is ~3× faster, finds no false markers, and the pose is as accurate | Latency (TRACKER SPEED), markers seen, steadiness in Motor off / on |
+| **compare on** | Runs the other detector on the same frames: its time, its markers, and how far its corners are | Leave it on for a minute on each phone, then off (it costs time) |
+| **filter at camera / tip** | Where the engine smooths the pose. In simulation, filtering at the tip halves the motor's shake at the tip (0.16 vs 0.32 mm) | Motor on: the filtered tip jitter in the table |
+| **60 fps** | Asks the camera for 60 frames/s (the line "camera runs at" says what it gives) | Latency, and the shake while moving |
+| **lock focus** | Locks focus and exposure (Chrome on Android; Safari on iPhone does not allow it, and says so) | Steadiness with the motor on: autofocus hunting adds jitter |
+| **record camera 10 s** | Saves 10 s of the frames the tracker sees, with the calibration, as a `.strec` file | Send it to me: I replay it on the laptop with both detectors and both filters (`node scripts/replay.mts file.strec`) |
+
+A good order, with the drill fixed as in test 2:
+1. **record camera 10 s** with the motor off, and again with the motor on (two files);
+2. Motor off / on with **detector js**, then with **detector rust**, saving a run each time;
+3. the same with **filter at tip**;
+4. on the Redmi: **detector rust** and **detect 640**, to see the latency drop.
+
+---
+
+## 11. If something goes wrong
 
 | Symptom | What to do |
 |---|---|
@@ -234,7 +255,7 @@ No background music, or just the app's tone. I can edit the final cut if you sen
 
 ---
 
-## 11. Results table
+## 12. Results table
 
 | Measure | Value |
 |---|---|

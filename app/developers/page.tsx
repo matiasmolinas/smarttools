@@ -26,7 +26,7 @@ const FOUR = [
 const ENGINE = [
   {
     k: "Navigation",
-    d: "Rust compiled to WebAssembly (~206 KB), a 120 Hz clock fed by 30 Hz camera poses. A scene graph of frames (sheet, parts, holes, tool), registration by touch, parts that move, the go / no-go gate, depth and angle alarms, no-go zones, gestures. Every decision uses measured poses; prediction is only for drawing.",
+    d: "Rust compiled to WebAssembly (~244 KB), a 120 Hz clock fed by 30 Hz camera poses. A scene graph of frames (sheet, parts, holes, tool), registration by touch, parts that move, the go / no-go gate, depth and angle alarms, no-go zones, gestures. Every decision uses measured poses; prediction is only for drawing. A marker detector in Rust is the alternative to js-aruco2: about 3× faster, as accurate.",
     files: [["engine/src/", "engine/src"], ["lib/engine.ts", "lib/engine.ts"], ["Engine spec", "docs/ENGINE_SPEC.md"]],
   },
   {
@@ -47,7 +47,7 @@ const NUMBERS = [
   { k: "< 0.3°", v: "angle error while driving, 95th percentile" },
   { k: "120 Hz", v: "the engine's clock, on the phone" },
   { k: "0", v: "language-model tokens in the real-time loop" },
-  { k: "195", v: "automated checks: 64 Rust, 78 TypeScript, 53 end-to-end" },
+  { k: "213", v: "automated checks: 68 Rust, 92 TypeScript, 53 end-to-end" },
 ];
 
 type Project = {
@@ -73,10 +73,10 @@ const PROJECTS: Project[] = [
     what: "Keeps how a person works as Markdown steps (When / Do / Check / Because), learned by a frontier model, verified, and replayed by any model.",
     inSmartTools: "A master's recipe becomes the job: the phone shows one step at a time, and every Check is a physical measurement from the engine (depth, angle, located).",
     stack: "Python CLI and agent hooks, ~170 Python files. Runs on a computer, next to an AI agent.",
-    verdict: "Use from its repository; read its format natively.",
-    native: "A small TypeScript reader of the piece format, and a binder from each Check to an engine measurement. A few hundred lines, tested against pieces exported by athos.",
-    stays: "Learning, verification, the router and the audit log: they need an AI agent and a computer, not a phone in a browser.",
-    next: "Pin a version of the piece format and add conformance tests with real pieces.",
+    verdict: "Native here: the part the phone works with (lib/recipe.ts).",
+    native: "Reads pieces; binds each Check to the engine's measurements (depth, angle, score, no alarm) and leaves other words for the person; turns a recipe's Drill steps into a plan and back; writes a finished job as a recipe someone else can follow. Import and export in /memory.",
+    stays: "Learning on a frontier model, verification by a second one, the router and the agent hooks: they need an AI agent and a computer, not a phone in a browser.",
+    next: "Show the recipe's steps one at a time on the phone, with each Check passing live.",
   },
   {
     id: "gatekeeper",
@@ -86,10 +86,10 @@ const PROJECTS: Project[] = [
     what: "A deterministic pre-PR and CI check: did a change stay inside one module and keep its contract, or did it cross a boundary?",
     inSmartTools: "Each tool (drill, screwdriver, then the saw) becomes a capsule with a contract. A new tool, written by a person or an agent, cannot touch the engine's core unchecked.",
     stack: "TypeScript, zero runtime dependencies, Node 22. A development and CI tool: it never runs on the phone.",
-    verdict: "Use from its repository, as a pinned dev dependency.",
-    native: "Nothing of its code. SmartTools adds the capsules (one folder per tool, with its contract) and the gatekeeper.config.json that names them.",
-    stays: "All of it: it has its own users and releases, and copying it would fork it.",
-    next: "Split the tool-specific code into lib/tools/<tool>/ capsules, then run the check in CI.",
+    verdict: "Native here: its verdicts, where SmartTools needs them (lib/gate.ts).",
+    native: "Two gates with its three verdicts. A recipe from outside is fast-tracked, escalated to a person, or rejected before the engine sees it. A change set is gated before deploying (npm run gate, gate.config.json): the engine or tracking escalate to the end-to-end run, a stale WebAssembly or an ABI mismatch is rejected.",
+    stays: "The general tool for any repository, with its own users and releases.",
+    next: "One capsule per tool when the saw starts, and the gate in CI.",
   },
   {
     id: "agentvcs",
@@ -99,16 +99,16 @@ const PROJECTS: Project[] = [
     what: "Version control for running agent harnesses: every step stamped with the exact version that produced it, patches gated, and blame and bisect on metrics.",
     inSmartTools: "Every hole and screw becomes a step record with its depth and angle errors, stamped with the engine version that guided it. A precision regression is bisected to one change.",
     stack: "Rust workspace (core with SQLite and BLAKE3), CLI, MCP server, Python SDK. 117/117 protocol conformance cases.",
-    verdict: "Use from its repository; write its records natively.",
-    native: "A writer of its ledger format (canonical JSON, BLAKE3 hashes, step records with metrics) next to the job report, so the phone exports a ledger file.",
-    stays: "The store, blame, bisect, diff and merge: they run on a computer or in CI, on the exported ledgers.",
-    next: "Export each job's report as an agentvcs ledger and check it with the agentvcs CLI in a test.",
+    verdict: "Native here: the ledger and its checks (lib/ledger.ts, lib/vcs.ts).",
+    native: "Writes each job as a ledger (canonical JSON, BLAKE3, the tracking settings in the manifest); verifies ledgers (hashes, chain, manifests); blame ranks which setting goes with better holes, bisect finds the first bad job and what changed. /memory compares the phone's jobs by setting.",
+    stays: "The store, diff, merge and the MCP server: they run on a computer, on the exported ledgers.",
+    next: "Compare the alternatives (Rust detector, filter at the tip, 60 fps) on real jobs.",
   },
 ];
 
 const STATUS = [
   { k: "Works today", c: "var(--green)", items: ["The navigation engine (Rust → WebAssembly), tested end to end on simulated camera images", "The phone app in the browser (/hud): live camera tracking of the marker sheet, lens and dock calibration", "The dock design, checked for fit and for what the camera can see"] },
-  { k: "Next weeks", c: "var(--amber)", items: ["The SmartTools app, first public release", "The dock printed and measured on a real drill against a reference jig", "The three integrations, as above"] },
+  { k: "Next weeks", c: "var(--amber)", items: ["The SmartTools app, first public release", "The dock printed and measured on a real drill against a reference jig", "Recipes worked step by step on the phone, jobs compared by setting"] },
   { k: "After", c: "var(--cyan)", items: ["Circular-saw bevel and cut lines", "A field pilot with workshops, error data logged per screw", "Our own camera module, if the phone turns out to be the limit"] },
 ];
 
@@ -216,10 +216,11 @@ export default function Developers() {
         <div className="rounded-2xl border border-[var(--amber)]/30 bg-[var(--amber)]/[0.04] p-6">
           <p className="font-mono text-xs uppercase tracking-wider text-[var(--amber)]">The integration question</p>
           <p className="mt-2 max-w-4xl text-white/75">
-            Use each project from its own repository, or migrate it here as a native module? Our analysis: <b className="text-white">migrate none of
-            them whole.</b> They are written in other languages for other runtimes (Python on a computer, a Node CI tool, a
-            Rust workspace with SQLite), and each has its own users. What comes in natively is the thin edge each one
-            meets the phone at: athos&apos;s step format, agentvcs&apos;s ledger format, and the tool capsules gatekeeper checks.
+            Use each project from its own repository, or migrate it here as a native module? Our answer: <b className="text-white">rewrite natively
+            the part SmartTools uses, not the whole project.</b> They are written for other runtimes (Python on a computer,
+            a Node CI tool, a Rust workspace with SQLite) and each has its own users. What SmartTools needs is small and
+            now lives here in TypeScript: athos&apos;s recipes with Checks the engine answers, agentvcs&apos;s ledger with
+            verify, blame and bisect, and gatekeeper&apos;s verdicts on recipes and on code changes.
           </p>
           <a href={src("docs/INTEGRATIONS.md")} className="mt-3 inline-block text-sm text-[var(--cyan)] hover:underline">
             Read the full analysis ↗

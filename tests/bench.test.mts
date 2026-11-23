@@ -71,6 +71,15 @@ test("the published simulated reference: labelled as simulation, the filter halv
   assert.ok(idx.runs.some((r: { id: string; source: string }) => r.id === run.id && r.source === "simulation"));
 });
 
+test("simulated reference filtered at the tip: the motor's shake reaches the tip less than raw, and less than filtering at the camera", () => {
+  const load = (f: string) => JSON.parse(readFileSync(new URL(`../public/benchmarks/${f}`, import.meta.url), "utf8")) as BenchRun;
+  const on = (r: BenchRun) => r.summary.find((s) => s.phase === "motor-on")!;
+  const cam = on(load("sim-reference.json")), tip = on(load("sim-reference-tip.json"));
+  assert.ok(tip.filtered!.tipJitterMm < tip.raw!.tipJitterMm, `tip filtered ${tip.filtered!.tipJitterMm} vs raw ${tip.raw!.tipJitterMm}`);
+  assert.ok(tip.filtered!.tipJitterMm < cam.filtered!.tipJitterMm, `at the tip ${tip.filtered!.tipJitterMm} vs at the camera ${cam.filtered!.tipJitterMm}`);
+  assert.ok(tip.filtered!.angleJitterDeg < 0.6 * tip.raw!.angleJitterDeg);
+});
+
 test("the demo plan: four valid holes on a 40 mm square, clear of every marker and of A2", () => {
   assert.equal(validatePlan(DEMO_PLAN).ok, true);
   assert.equal(DEMO_PLAN.holes.length, 4);

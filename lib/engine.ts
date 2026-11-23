@@ -157,6 +157,7 @@ interface Exports {
   st_solve_pose(world: number, img: number, n: number, f: number, cx: number, cy: number, out: number): number;
   st_focal_from_homography(h: number, cx: number, cy: number): number;
   st_refine_corners(rgba: number, width: number, height: number, corners: number, out: number): number;
+  st_detect_markers(rgba: number, width: number, height: number, codes: number, nCodes: number, params: number, out: number, max: number): number;
   st_undistort_points(cam: number, pts: number, n: number, out: number): number;
   st_project_points(cam: number, pose: number, world: number, n: number, out: number): number;
   st_calibrate_camera(init: number, nViews: number, counts: number, world: number, img: number, flags: number, outCam: number, outRms: number): number;
@@ -201,7 +202,7 @@ interface Exports {
   st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
-export const ENGINE_ABI = 5;
+export const ENGINE_ABI = 6;
 
 // ---------------- engine (scene graph + clock) ----------------
 
@@ -235,6 +236,8 @@ export interface EngineConfig {
   rotMinCutoff: number;
   rotBeta: number;
   dCutoff: number;
+  /** filter the tool's pose (at the tip) rather than the camera's */
+  filterAtTool: boolean;
 }
 export const ENGINE_DEFAULTS: EngineConfig = {
   tickHz: 120,
@@ -256,6 +259,7 @@ export const ENGINE_DEFAULTS: EngineConfig = {
   rotMinCutoff: 2,
   rotBeta: 300,
   dCutoff: 1,
+  filterAtTool: false,
 };
 
 export interface TargetNav {
@@ -474,6 +478,27 @@ export class NavCore {
     }
     new Uint8Array(this.x.memory.buffer, this.img.ptr, bytes).set(img.data);
   }
+  private codesBuf: { ptr: number; n: number; src: Uint8Array | null } = { ptr: 0, n: 0, src: null };
+  /** Detect markers in Rust (detect.rs): the alternative to js-aruco2's detector, same output. `codes`: 36 per id
+   * (scene.markerCodes). */
+  detectMarkers(img: { width: number; height: number; data: Uint8ClampedArray }, codes: Uint8Array, max = 128): { id: number; corners: P[]; distance: number }[] {
+    this.stage(img);
+    const n = Math.floor(codes.length / 36);
+    if (this.codesBuf.src !== codes) {
+      if (this.codesBuf.ptr) this.x.st_free(this.codesBuf.ptr, this.codesBuf.n * 36);
+      const ptr = this.x.st_alloc(n * 36);
+      new Uint8Array(this.x.memory.buffer, ptr, n * 36).set(codes.subarray(0, n * 36));
+      this.codesBuf = { ptr, n, src: codes };
+    }
+    return this.with([max * 80], ([o]) => {
+      const k = this.x.st_detect_markers(this.img.ptr, img.width, img.height, this.codesBuf.ptr, n, 0, o, max);
+      const a = this.f64(o, Math.max(0, k) * 10);
+      const out: { id: number; corners: P[]; distance: number }[] = [];
+      for (let i = 0; i < k; i++) out.push({ id: a[i * 10], distance: a[i * 10 + 1], corners: [0, 1, 2, 3].map((c) => ({ x: a[i * 10 + 2 + c * 2], y: a[i * 10 + 3 + c * 2] })) });
+      return out;
+    });
+  }
+
   /** Sub-pixel corners of several markers on one frame (one copy of the image). */
   refineMany(img: { width: number; height: number; data: Uint8ClampedArray }, quads: P[][]): P[][] {
     this.stage(img);
@@ -708,7 +733,7 @@ export class NavCore {
         const k = { ...ENGINE_DEFAULTS, ...c, limits: { ...ENGINE_DEFAULTS.limits, ...(c.limits ?? {}) } };
         const l = k.limits;
         this.with([26 * 8], ([p]) => {
-          this.f64(p, 26).set([k.tickHz, k.maxCatchup, k.predictMaxS, k.predict ? 1 : 0, k.staleAfterS, k.lostAfterS, k.historyS, k.lockTimeS, k.steadyWindowS, k.depthTargetMm, k.engageGapMm, k.engageOffsetMm, k.requirementAngleDeg, l.maxAngleDeg, l.maxOffsetMm, l.maxRmsPx, l.minMarkers, l.maxPoseAgeS, l.maxJitterMm, l.maxJitterDeg, k.posMinCutoff, k.posBeta, k.rotMinCutoff, k.rotBeta, k.dCutoff, 0]);
+          this.f64(p, 26).set([k.tickHz, k.maxCatchup, k.predictMaxS, k.predict ? 1 : 0, k.staleAfterS, k.lostAfterS, k.historyS, k.lockTimeS, k.steadyWindowS, k.depthTargetMm, k.engageGapMm, k.engageOffsetMm, k.requirementAngleDeg, l.maxAngleDeg, l.maxOffsetMm, l.maxRmsPx, l.minMarkers, l.maxPoseAgeS, l.maxJitterMm, l.maxJitterDeg, k.posMinCutoff, k.posBeta, k.rotMinCutoff, k.rotBeta, k.dCutoff, k.filterAtTool ? 1 : 0]);
           x.st_engine_configure(h, p);
         });
       },

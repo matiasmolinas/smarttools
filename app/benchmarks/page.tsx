@@ -18,6 +18,14 @@ export const metadata: Metadata = {
 
 const LOG = [
   {
+    date: "2026-11-22",
+    title: "Filtering at the tip, and a second marker detector",
+    body: [
+      "The engine can now filter the tool's pose at the tip instead of the camera's (Tests → filter at tip). In the simulated reference with the motor running, the filtered tip moves 0.160 mm RMS, against 0.319 mm filtering at the camera and 0.225 mm raw; the angle is the same (0.085°). Second simulated run above; the phone runs will say whether it holds.",
+      "A marker detector written in Rust and compiled to WebAssembly, as an option next to js-aruco2 (Tests → detector rust, compare on). On rendered frames it finds the same markers with no false or duplicate ids, its corners sit 0.16 px from the truth before refinement (js-aruco2: 1.45 px), the pose is as accurate, and a whole frame takes 3.4 ms instead of 9.2 ms.",
+    ],
+  },
+  {
     date: "2026-11-21",
     title: "The bench lab, and what the simulation already shows",
     body: [
