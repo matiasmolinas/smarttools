@@ -13,7 +13,7 @@ import BenchPanel from "./BenchPanel";
 import SetupWizard, { type Step as WizardStep } from "./SetupWizard";
 import type { SimState } from "@/lib/sim";
 import { SoundGuide, toneFromHud } from "@/lib/audio";
-import { CHANGES, ago, autoPauseReason, onStart, pausedFor, planFor, readRun, writeRun, type Change, type RunRecord } from "@/lib/runstate";
+import { CHANGES, ago, autoPauseReason, explainStartError, onStart, pausedFor, planFor, readRun, writeRun, type Change, type RunRecord, type StartStage } from "@/lib/runstate";
 import type { Overlay } from "@/lib/hud";
 import { drawGuide } from "@/lib/hudguide";
 import { BrowserNav } from "@/lib/tracker";
@@ -22,7 +22,9 @@ import { DICTIONARY } from "@/lib/board";
 import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerCodes, toolWorldFromHold, truthAt } from "@/lib/scene";
 import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { BUILT_IN_PLANS, SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
-import { activePlanId, browserMemory, setActivePlanId } from "@/lib/memory";
+import { activePlanId, browserMemory, clearJobDraft, readJobDraft, setActivePlanId, writeJobDraft } from "@/lib/memory";
+import { draftAction, resumableHoles, versionLine } from "@/lib/jobrecord";
+import { recordingFileName, sizeText } from "@/lib/recording";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 type VideoFrameMeta = { captureTime?: number; expectedDisplayTime?: number };
@@ -39,6 +41,10 @@ export default function HudScreen() {
   const [status, setStatus] = useState<Status>("start");
   const statusRef = useRef<Status>("start");
   const [toast, setToast] = useState<string | null>(null);
+  // the tracker failed for good: shown on top of everything until the page is reloaded
+  const [fault, setFault] = useState<string | null>(null);
+  // why the last Start failed (status "blocked"), shown on the start screen
+  const [startError, setStartError] = useState<{ title: string; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const soundRef = useRef<SoundGuide | null>(null);
   const [soundOn, setSoundOn] = useState(false);
@@ -54,7 +60,7 @@ export default function HudScreen() {
   const [done, setDone] = useState(0);
   const [tol, setTol] = useState(0.5);
   // sheets: one at a time
-  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench" | "changed" | "resume" | "stop">(null);
+  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench" | "changed" | "resume" | "stop" | "recording">(null);
   // working / paused / stopped, kept per device (lib/runstate.ts)
   const runRef = useRef<RunRecord | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>("sheet");
@@ -62,6 +68,11 @@ export default function HudScreen() {
   const needCheckRef = useRef<{ since: string } | null>(null);
   const [stopped, setStopped] = useState(false);
   const [recNote, setRecNote] = useState<string | null>(null);
+  // the recording in progress (its number; 0: none), and the last one made, kept until Done or Discard
+  const recordingRef = useRef(0);
+  const recSeq = useRef(0);
+  const [recFile, setRecFile] = useState<{ file: File; canShare: boolean } | null>(null);
+  const recUrlRef = useRef<string | null>(null);
   const [pausedMin, setPausedMin] = useState(0);
   const [, tick] = useState(0);
   const setupDecided = useRef(false);
@@ -121,6 +132,7 @@ export default function HudScreen() {
     if (trackerRef.current) return trackerRef.current;
     const tr = await BrowserNav.create();
     tr.onMessage = say;
+    tr.onFault = setFault;
     if (simRef.current) {
       tr.onSimImage = (img) => {
         const c = (simCanvasRef.current ??= document.createElement("canvas"));
@@ -140,6 +152,22 @@ export default function HudScreen() {
         const p = (await browserMemory().plan(id).catch(() => undefined)) ?? BUILT_IN_PLANS.find((b) => b.id === id);
         if (p) applyPlan(p, tr, false);
       }
+      // after the plan: a draft left behind means the page died mid-job (never in the simulator)
+      tr.onJobProgress = writeJobDraft;
+      const draft = readJobDraft();
+      const act = draftAction(draft, tr.plan);
+      if (draft && act === "resume") {
+        tr.resumeJob(draft);
+        say(`Job recovered · ${resumableHoles(draft, tr.plan).length}/${tr.plan.holes.length} holes`);
+      } else if (draft && act === "save") {
+        try {
+          await browserMemory().saveJob(draft);
+          clearJobDraft();
+          say("Unfinished job saved");
+        } catch {
+          say("The unfinished job could not be saved");
+        }
+      } else clearJobDraft();
     }
     trackerRef.current = tr;
     return tr;
@@ -156,21 +184,38 @@ export default function HudScreen() {
    * locking or the page closing can never skip the question. */
   const persist = (state: RunRecord["state"]) => (runRef.current = writeRun(needCheckRef.current ? "stopped" : state));
 
+  /** Cancel a recording in progress. True if one was running (the caller says so). */
+  function cancelRecording(): boolean {
+    trackerRef.current?.cancelRecording();
+    if (!recordingRef.current) return false;
+    recordingRef.current = 0;
+    setRecNote(null);
+    return true;
+  }
+
   function pause(reason?: string) {
     if (statusRef.current !== "running") return;
     trackerRef.current?.cancelCalibration();
+    const recCancelled = cancelRecording();
     stopCamera();
     setStatusBoth("paused");
-    setSheet(null);
+    // a finished recording stays: on iOS the share sheet itself sends the app to the background
+    setSheet((s) => (s === "recording" ? s : null));
     persist("paused");
     soundRef.current?.vibrate("depth-reached");
-    if (reason) say(reason);
+    const note = [reason, recCancelled ? "Recording cancelled" : null].filter(Boolean).join(" · ");
+    if (note) say(note);
   }
 
   /** Everything off. The job is saved or dropped; the next start asks what changed. */
   async function stop(save: boolean) {
     const tr = trackerRef.current;
+    const recCancelled = cancelRecording();
     if (save) await finishJob();
+    else if (!simRef.current) {
+      clearJobDraft();
+      tr?.resumeJob(null);
+    }
     tr?.cancelCalibration();
     stopCamera();
     if (!simRef.current) tr?.forgetCalibrationSilently(); // frees the engine and the worker; stored calibrations stay, but are asked about
@@ -180,6 +225,7 @@ export default function HudScreen() {
     setDone(0);
     setStopped(true);
     setStatusBoth("start");
+    if (recCancelled) say("Recording cancelled");
   }
 
   function answerChange(c: Change) {
@@ -196,28 +242,66 @@ export default function HudScreen() {
     setSheet(needCheckRef.current ? "changed" : null);
   }
 
+  /** Record 10 s of camera frames. The file is kept and offered in a sheet (Share, Download): a download started
+   * by itself, seconds after the tap, may do nothing in an installed iOS app. */
   async function recordCamera() {
     const tr = trackerRef.current;
     if (!tr) return;
+    if (recordingRef.current) return say("Already recording");
     setSheet(null);
+    const id = ++recSeq.current;
+    recordingRef.current = id;
     setRecNote("● Recording 10 s");
     const blob = await tr.record(10, "phone app");
-    if (!blob) {
-      setRecNote(null);
-      return say("Nothing to record: point at the sheet");
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `smarttools-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.strec`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    if (recordingRef.current !== id) return; // cancelled by a pause or a stop, which said so
+    recordingRef.current = 0;
     setRecNote(null);
-    say(`Recording saved · ${(blob.size / 1e6).toFixed(1)} MB`);
+    if (!blob) return say("Nothing recorded: point at the sheet and try again");
+    const file = new File([blob], recordingFileName(new Date()), { type: "application/octet-stream" });
+    dropRecording();
+    let canShare = false;
+    try {
+      canShare = !!navigator.canShare?.({ files: [file] });
+    } catch {}
+    setRecFile({ file, canShare });
+    // the sheet opens now, or as soon as the sheet in use closes (see the effect below)
+    if (sheetRef.current === null) setSheet("recording");
+  }
+  /** Share the recording (AirDrop to the laptop). navigator.share must be called straight from the tap. */
+  function shareRecording() {
+    const r = recFile;
+    if (!r) return;
+    let p: Promise<void>;
+    try {
+      p = navigator.share({ files: [r.file] });
+    } catch (e) {
+      p = Promise.reject(e);
+    }
+    p.catch((e: unknown) => {
+      // closing the share sheet is not an error
+      if ((e as { name?: string } | null)?.name !== "AbortError") say("Sharing failed: use Download");
+    });
+  }
+  function downloadRecording() {
+    const r = recFile;
+    if (!r) return;
+    recUrlRef.current ??= URL.createObjectURL(r.file);
+    const a = document.createElement("a");
+    a.href = recUrlRef.current;
+    a.download = r.file.name;
+    a.click();
+  }
+  /** Let the recording go (Done or Discard): its file and its download URL. */
+  function dropRecording() {
+    if (recUrlRef.current) URL.revokeObjectURL(recUrlRef.current);
+    recUrlRef.current = null;
+    setRecFile(null);
+    setSheet((s) => (s === "recording" ? null : s));
   }
 
   async function openCamera() {
     setStatusBoth("starting");
+    let stage: StartStage = "camera";
     try {
       if (!simRef.current) {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -236,15 +320,32 @@ export default function HudScreen() {
         await v.play().catch(() => {});
         setCamInfo(await applyCameraLock(stream, camOptsRef.current.lock));
       }
-      await ensureTracker();
+      stage = "engine";
+      (await ensureTracker()).cameraOpts = { ...camOptsRef.current }; // a job's draft carries the camera options in use
+      setStartError(null);
       setStatusBoth("running");
-    } catch {
+    } catch (e) {
+      if (stage === "engine") {
+        console.error("engine", e);
+        stopCamera(); // the camera must not stay on behind the error screen
+      }
+      setStartError(explainStartError(stage, e));
       setStatusBoth("blocked");
     }
   }
 
   function applyPlan(p: Plan, tr = trackerRef.current, announce = true) {
     if (!tr) return;
+    // a plan change mid-job: the holes drilled so far are kept as an unfinished job
+    if (!simRef.current && tr.recorder?.holes.length) {
+      tr.cameraOpts = { ...camOptsRef.current };
+      const rec = tr.finishJob();
+      if (rec)
+        void browserMemory()
+          .saveJob(rec)
+          .then(() => (clearJobDraft(), say(announce ? `Unfinished job saved · Plan: ${p.name}` : "Unfinished job saved")))
+          .catch(() => say("The unfinished job could not be saved"));
+    }
     tr.setPlan(p);
     setPlanState(p);
     setActivePlanId(p.id === SHEET_PLAN.id ? null : p.id);
@@ -281,6 +382,7 @@ export default function HudScreen() {
     const rec = tr?.finishJob();
     if (!rec) return say("No hole drilled yet");
     await browserMemory().saveJob(rec);
+    if (!simRef.current) clearJobDraft();
     setDone(0);
     say(`Job saved · ${rec.report.verdict}`);
   }
@@ -291,7 +393,8 @@ export default function HudScreen() {
     if (status !== "running") return;
     const iv = setInterval(() => {
       const tr = trackerRef.current;
-      if (setupDecided.current || !tr?.session) return;
+      // a recording waiting to be shared keeps its sheet: the question comes once it is closed
+      if (setupDecided.current || !tr?.session || sheetRef.current === "recording") return;
       setupDecided.current = true;
       const last = runRef.current;
       const d = onStart(last, tr.calibrated.tool);
@@ -318,7 +421,7 @@ export default function HudScreen() {
     const check = (hidden: boolean) => {
       const tr = trackerRef.current;
       if ((tr?.liveCheck().markers ?? 0) > 0) lastSeen = performance.now();
-      const busy = sheetRef.current !== null || !!tr?.calStatus() || draftRef.current;
+      const busy = sheetRef.current !== null || !!tr?.calStatus() || draftRef.current || recordingRef.current !== 0;
       const why = autoPauseReason({ hidden, noMarkersS: (performance.now() - lastSeen) / 1000, busy });
       if (why) pause(why);
     };
@@ -336,6 +439,22 @@ export default function HudScreen() {
     const iv = setInterval(() => setDone(trackerRef.current?.recorder?.holes.length ?? 0), 500);
     return () => clearInterval(iv);
   }, []);
+
+  // a recording not yet shared comes back as soon as no other sheet is open (after a stop, a setup, a menu)
+  useEffect(() => {
+    if (recFile && sheet === null) setSheet("recording");
+  }, [recFile, sheet]);
+  useEffect(
+    () => () => {
+      if (recUrlRef.current) URL.revokeObjectURL(recUrlRef.current);
+    },
+    [],
+  );
+
+  // no tone left sounding in a pause or after a stop
+  useEffect(() => {
+    if (status !== "running") soundRef.current?.silence();
+  }, [status]);
 
   // the loops: frames (camera rate), engine clock (120 Hz), drawing (display rate)
   useEffect(() => {
@@ -458,9 +577,10 @@ export default function HudScreen() {
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-8 text-center">
           <span className="inline-block h-10 w-10 rounded-full border-4 border-[#3ee59b] shadow-[0_0_24px_#3ee59b]" />
           <h1 className="text-3xl font-semibold">SmartTools</h1>
+          {status === "blocked" && startError && <h2 className="text-xl font-semibold text-[#ff6b6b]">{startError.title}</h2>}
           <p className="max-w-sm text-lg leading-snug text-white/75">
             {status === "blocked"
-              ? "The camera is blocked. Allow the camera for this site in the browser's settings, then try again."
+              ? (startError?.text ?? "Something went wrong. Try again.")
               : stopped
                 ? "Stopped. When you start again, the app asks what you changed: the bit, the tip or the phone."
                 : "Phone on the drill, printed sheet on the work. Tap Start and point the camera at the sheet."}
@@ -476,6 +596,7 @@ export default function HudScreen() {
               Plans & jobs
             </a>
           </div>
+          <VersionLine className="absolute inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))]" />
         </div>
       )}
 
@@ -517,6 +638,27 @@ export default function HudScreen() {
               </BigButton>
             )}
             <BigButton onClick={() => setSheet(null)}>Cancel</BigButton>
+          </div>
+        </TopSheet>
+      )}
+
+      {/* a finished recording: shown in any status (running, paused, start), kept until Done or Discard */}
+      {sheet === "recording" && recFile && (
+        <TopSheet title={`Recording ready · ${sizeText(recFile.file.size)}`}>
+          <p className="text-lg leading-snug text-white/75">Send it to the laptop: Share (AirDrop) or Download.</p>
+          <div className="mt-4 flex flex-col gap-3">
+            {recFile.canShare && (
+              <BigButton strong onClick={shareRecording}>
+                Share
+              </BigButton>
+            )}
+            <BigButton strong={!recFile.canShare} onClick={downloadRecording}>
+              Download
+            </BigButton>
+            <div className="grid grid-cols-2 gap-3">
+              <BigButton onClick={() => (dropRecording(), say("Recording discarded"))}>Discard</BigButton>
+              <BigButton onClick={dropRecording}>Done</BigButton>
+            </div>
           </div>
         </TopSheet>
       )}
@@ -681,6 +823,7 @@ export default function HudScreen() {
                 <BigButton onClick={fullscreen}>Full screen</BigButton>
                 <BigButton onClick={() => (window.location.href = "/memory")}>Plans & jobs</BigButton>
               </div>
+              <VersionLine className="mt-4" />
             </TopSheet>
           )}
 
@@ -713,8 +856,24 @@ export default function HudScreen() {
           )}
         </>
       )}
+
+      {/* a tracker failure: a phone has no console, so it is shown here, above every sheet, until reload */}
+      {fault && (
+        <div role="alert" className="absolute inset-x-0 top-0 z-50 border-b-4 border-white/40 bg-[#d62828] px-5 pb-5 pt-[max(1rem,env(safe-area-inset-top))] text-white shadow-2xl">
+          <h2 className="text-3xl font-bold">Tracking stopped</h2>
+          <p className="mt-2 break-words text-xl leading-snug">{fault}</p>
+          <button onClick={() => location.reload()} className="mt-4 h-16 w-full rounded-2xl bg-white text-2xl font-semibold text-[#d62828] active:scale-[0.99]">
+            Reload
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Which build runs, in small dim text: app version, commit, engine ABI. */
+function VersionLine({ className = "" }: { className?: string }) {
+  return <p className={`text-center text-xs text-white/35 ${className}`}>{versionLine(process.env.NEXT_PUBLIC_BUILD)}</p>;
 }
 
 /** Lock focus and exposure where the browser allows it (Chrome on Android; not Safari on iPhone), and say

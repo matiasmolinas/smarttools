@@ -10,7 +10,12 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.12";
+export const APP_VERSION = "0.0.13";
+
+/** What runs, for the screen: "SmartTools 0.0.13 · build abc1234 · engine ABI 6". An empty build reads "dev". */
+export function versionLine(build: string | undefined, abi: number = ENGINE_ABI, app: string = APP_VERSION): string {
+  return `SmartTools ${app} · build ${build?.trim() || "dev"} · engine ABI ${abi}`;
+}
 
 export interface HoleRecord extends ScrewRecord {
   startedAt: string;
@@ -67,14 +72,18 @@ export class JobRecorder {
   private done: HoleRecord[] = [];
   private labelOf: (id: number) => string | undefined;
 
-  /** wall: engine time (s) to wall-clock ms (defaults to "now"); t0: the engine time the job starts at */
-  constructor(plan: Plan, context: Ctx, labelOf: (nodeId: number) => string | undefined, o: { wall?: (t: number) => number; t0?: number } = {}) {
+  /** wall: engine time (s) to wall-clock ms (defaults to "now"); t0: the engine time the job starts at;
+   * resume: a job the page lost (a draft): its id, start time and the holes that are in this plan carry on */
+  constructor(plan: Plan, context: Ctx, labelOf: (nodeId: number) => string | undefined, o: { wall?: (t: number) => number; t0?: number; resume?: JobRecord } = {}) {
     this.plan = plan;
     this.context = context;
     this.labelOf = labelOf;
     this.wall = o.wall ?? (() => Date.now());
-    this.startedMs = o.t0 != null ? this.wall(o.t0) : Date.now();
-    this.id = globalThis.crypto?.randomUUID?.() ?? `job-${Date.now().toString(36)}`;
+    const r = o.resume;
+    const resumedMs = r ? Date.parse(r.started) : NaN;
+    this.startedMs = Number.isFinite(resumedMs) ? resumedMs : o.t0 != null ? this.wall(o.t0) : Date.now();
+    this.id = r?.id ?? globalThis.crypto?.randomUUID?.() ?? `job-${Date.now().toString(36)}`;
+    if (r) this.done = resumableHoles(r, plan).map((h) => ({ ...h }));
   }
 
   /** Feed one snapshot (each one once). */
@@ -134,6 +143,21 @@ export class JobRecorder {
     const report = buildReport(this.plan.name, this.done, this.plan.holes.length, iso(ended));
     return { kind: JOB_KIND, v: JOB_VERSION, id: this.id, started: iso(this.startedMs), ended: iso(ended), status, plan: this.plan, report, holes: [...this.done], context: tracking ? { ...this.context, tracking } : this.context };
   }
+}
+
+/** The holes of a draft that belong to this plan (by name), each once. */
+export function resumableHoles(draft: JobRecord, plan: Plan): HoleRecord[] {
+  const out: HoleRecord[] = [];
+  for (const h of draft.holes) if (plan.holes.some((p) => p.label === h.name) && !out.some((o) => o.name === h.name)) out.push(h);
+  return out;
+}
+
+/** What to do with a draft found at start (the page died mid-job): carry on with it when it is the plan being
+ * worked and has holes in it, keep it as an unfinished job when it is another plan, drop it when it is empty. */
+export function draftAction(draft: JobRecord | null, plan: Plan): "none" | "resume" | "save" {
+  if (!draft || !draft.holes.length) return "none";
+  if (draft.plan.id === plan.id && resumableHoles(draft, plan).length) return "resume";
+  return "save";
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;

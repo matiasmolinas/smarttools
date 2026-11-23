@@ -188,6 +188,8 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
    - pull out.
    The app records the hole by itself.
 5. When all 4 are done, **menu ☰ → Job → Finish job and save**. You will see *Job saved* with the verdict.
+   The job in progress is kept after every hole: if the app closes before you save, the next **Start** carries on
+   with it (*Job recovered*). Changing the plan mid-job saves the holes drilled so far as an unfinished job.
 6. **Measure with the caliper** and write down:
    - each hole's real **depth**, with the caliper's depth rod;
    - the **spacing** between centres: D1–D2 and D4–D3 (horizontal), D2–D3 and D1–D4 (vertical). They should all be
@@ -247,7 +249,7 @@ The defaults stay as they are; each of these is a switch, kept on the phone unti
 | **filter at camera / tip** | Where the engine smooths the pose. In simulation, filtering at the tip halves the motor's shake at the tip (0.16 vs 0.32 mm) | Motor on: the filtered tip jitter in the table |
 | **60 fps** | Asks the camera for 60 frames/s (the line "camera runs at" says what it gives) | Latency, and the shake while moving |
 | **lock focus** | Locks focus and exposure (Chrome on Android; Safari on iPhone does not allow it, and says so) | Steadiness with the motor on: autofocus hunting adds jitter |
-| **record camera 10 s** | Saves 10 s of the frames the tracker sees, with the calibration, as a `.strec` file | Send it to me: I replay it on the laptop with both detectors and both filters (`node scripts/replay.mts file.strec`) |
+| **record camera 10 s** | Records 10 s of the frames the tracker sees, with the calibration, as a `.strec` file. When it is ready, a sheet offers **Share** (AirDrop it to the laptop) and **Download** | Send it to me: I replay it on the laptop with both detectors and both filters (`node scripts/replay.mts file.strec`) |
 
 A good order, with the drill fixed as in test 2:
 1. **record camera 10 s** with the motor off, and again with the motor on (two files);

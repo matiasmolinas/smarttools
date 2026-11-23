@@ -25,14 +25,88 @@ function scaleWhileCopying(): boolean {
   return !ios && /Chrome\/|Chromium\//.test(ua);
 }
 
+/** What a pending calibration gets when the tracker stops before it answers. */
+export const TRACKER_STOPPED = "the tracker stopped: try again";
+
+/** Calibrations waiting for the worker's answer, with their kind, so each one can be settled even if the worker
+ * dies: a promise that never settles would block every later calibration. */
+export class CaptureWaits {
+  private m = new Map<number, { kind: CaptureKind; res: (r: CaptureResult) => void }>();
+  get size() {
+    return this.m.size;
+  }
+  add(id: number, kind: CaptureKind, res: (r: CaptureResult) => void) {
+    this.m.set(id, { kind, res });
+  }
+  /** The worker answered: settle that wait (false if it is not pending). */
+  settle(id: number, r: CaptureResult): boolean {
+    const w = this.m.get(id);
+    if (!w) return false;
+    this.m.delete(id);
+    w.res(r);
+    return true;
+  }
+  /** Settle every pending wait with an error of its own kind. Returns how many there were. */
+  failAll(error: string): number {
+    const all = [...this.m.values()];
+    this.m.clear();
+    for (const w of all) w.res({ kind: w.kind, error });
+    return all.length;
+  }
+}
+
+/** What the worker sends back for a recording. */
+export interface RecordedFrames {
+  times: number[];
+  frames: ArrayBuffer[];
+  width: number;
+  height: number;
+}
+
+/** The one recording waiting for the worker. It always settles: with the frames, or with null when it is cancelled,
+ * replaced by a newer one, or the tracker stops. A late answer for an old recording is ignored. */
+export class RecordWait {
+  private w: { id: number; res: (r: RecordedFrames | null) => void } | null = null;
+  get pending() {
+    return this.w !== null;
+  }
+  /** Wait for recording `id` (a recording still waiting is settled with null first). */
+  start(id: number, res: (r: RecordedFrames | null) => void) {
+    this.cancel();
+    this.w = { id, res };
+  }
+  /** The worker sent recording `id`: settle it (false if it is not the one waiting). */
+  done(id: number, r: RecordedFrames): boolean {
+    if (!this.w || this.w.id !== id) return false;
+    const w = this.w;
+    this.w = null;
+    w.res(r);
+    return true;
+  }
+  /** Settle the waiting recording with null. False if none was waiting. */
+  cancel(): boolean {
+    const w = this.w;
+    if (!w) return false;
+    this.w = null;
+    w.res(null);
+    return true;
+  }
+}
+
 export class TrackerClient {
   private w: Worker;
   private busy = false;
   private nextId = 1;
-  private waits = new Map<number, (r: CaptureResult) => void>();
+  private waits = new CaptureWaits();
+  /** the capture running in the worker (its kind goes with the wait for its result) */
+  private capturing: CaptureKind | null = null;
+  private stopped = false;
+  private faulted = false;
   readyPromise: Promise<void>;
   onResult: (r: WorkerResult) => void = () => {};
-  private onRecorded: ((m: { times: number[]; frames: ArrayBuffer[]; width: number; height: number }) => void) | null = null;
+  /** The worker failed for good (engine error, or its script did not load). Not called after terminate(). */
+  onFatal: (message: string) => void = () => {};
+  private recWait = new RecordWait();
   /** frames sent / dropped because the worker was busy */
   sent = 0;
   dropped = 0;
@@ -51,24 +125,34 @@ export class TrackerClient {
     this.w.onmessage = (e: MessageEvent) => {
       const m = e.data;
       if (m.type === "ready") resolveReady();
-      if (m.type === "fatal") {
-        console.error(`[SmartTools] ${m.message}`);
-        this.busy = false;
-      }
+      if (m.type === "fatal") this.fail(String(m.message ?? "the tracker failed"));
       if (m.type === "result") {
         this.busy = false;
         this.onResult(m as WorkerResult);
       }
-      if (m.type === "recorded") {
-        this.onRecorded?.(m);
-        this.onRecorded = null;
-      }
+      if (m.type === "recorded") this.recWait.done(m.id, m as RecordedFrames);
       if (m.type === "captured") {
-        this.waits.get(m.id)?.(m.result);
-        this.waits.delete(m.id);
+        this.waits.settle(m.id, m.result);
       }
     };
+    // the worker script failed to load or threw outside a message, or a message could not be read
+    this.w.onerror = (e: ErrorEvent) => {
+      e.preventDefault?.();
+      this.fail(e.message || "the tracker did not load");
+    };
+    this.w.onmessageerror = () => this.fail("the tracker could not read a message");
     this.send({ type: "init", camera, cameraCalibrated, maxSide, detector, compare });
+  }
+
+  /** A fatal worker error: log it, settle every pending calibration and recording, and tell the page once. */
+  private fail(message: string) {
+    console.error(`[SmartTools] ${message}`);
+    this.busy = false;
+    this.waits.failAll(TRACKER_STOPPED);
+    this.recWait.cancel();
+    if (this.stopped || this.faulted) return;
+    this.faulted = true;
+    this.onFatal(message);
   }
 
   private send(m: ToWorker, transfer: Transferable[] = []) {
@@ -115,12 +199,19 @@ export class TrackerClient {
     }
   }
 
-  /** Record the next `frames` analysed frames (JPEG at the detection size) with their capture times. */
-  record(frames: number): Promise<{ times: number[]; frames: ArrayBuffer[]; width: number; height: number }> {
+  /** Record the next `frames` analysed frames (JPEG at the detection size) with their capture times. Null when
+   * cancelled (cancelRecord, a newer recording, or the tracker stopped). */
+  record(frames: number): Promise<RecordedFrames | null> {
+    if (this.stopped || this.faulted) return Promise.resolve(null);
+    const id = this.nextId++;
     return new Promise((res) => {
-      this.onRecorded = res;
-      this.send({ type: "record", frames });
+      this.recWait.start(id, res);
+      this.send({ type: "record", frames, id });
     });
+  }
+  /** Stop the recording in progress: its promise resolves null. */
+  cancelRecord() {
+    if (this.recWait.cancel() && !this.stopped) this.send({ type: "cancelRecord" });
   }
 
   /** Which marker detector the worker uses, and whether it also runs the other one to compare. */
@@ -150,20 +241,29 @@ export class TrackerClient {
     this.send({ type: "setCamera", camera, calibrated });
   }
   beginCapture(kind: CaptureKind) {
+    this.capturing = kind;
     this.send({ type: "beginCapture", kind });
   }
   cancelCapture() {
+    this.capturing = null;
     this.send({ type: "cancelCapture" });
   }
   endCapture(tool: ToolCalib): Promise<CaptureResult> {
+    const kind = this.capturing ?? "pivot";
+    this.capturing = null;
+    if (this.stopped) return Promise.resolve({ kind, error: TRACKER_STOPPED });
     const id = this.nextId++;
     return new Promise((res) => {
-      this.waits.set(id, res);
+      this.waits.add(id, kind, res);
       this.send({ type: "endCapture", tool, id });
     });
   }
 
+  /** Stop the worker. A calibration still waiting for it gets an error, a recording null, instead of waiting forever. */
   terminate() {
+    this.stopped = true;
     this.w.terminate();
+    this.waits.failAll(TRACKER_STOPPED);
+    this.recWait.cancel();
   }
 }

@@ -243,7 +243,7 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 68 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 97 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run test:unit     # TypeScript: 119 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped, job drafts, the service worker); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
 npm run gate          # the verdict for this branch against main: FAST_TRACK, ESCALATE (run the engine tests and e2e too) or REJECTED
 npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```

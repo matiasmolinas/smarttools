@@ -13,7 +13,8 @@ import type { Xf } from "../xform";
 export type ToWorker =
   | { type: "init"; camera: Camera; cameraCalibrated: boolean; maxSide: number; detector?: DetectorKind; compare?: boolean }
   | { type: "setDetector"; detector: DetectorKind; compare: boolean }
-  | { type: "record"; frames: number }
+  | { type: "record"; frames: number; id: number }
+  | { type: "cancelRecord" }
   | { type: "frame"; bitmap: ImageBitmap; tCapture: number; srcWidth: number; bitmapMs: number }
   | { type: "setMaxSide"; maxSide: number }
   | { type: "sim"; rig: Rig; codes: Uint8Array; toolW: Xf; tCapture: number; seed: number }
@@ -30,7 +31,7 @@ let detectorKind: DetectorKind = "js";
 let compare = false;
 let altDet: { kind: DetectorKind; det: ReturnType<typeof makeDetector> } | null = null;
 // a recording in progress: frames left, and the JPEGs (encoded as the frames are analysed)
-let rec: { left: number; times: number[]; jpegs: Promise<ArrayBuffer>[] } | null = null;
+let rec: { id: number; left: number; times: number[]; jpegs: Promise<ArrayBuffer>[] } | null = null;
 /** Compare mode: run the other detector on the same frame and note its time, markers and corner distance. */
 function compareOn(img: { width: number; height: number; data: Uint8ClampedArray }, f: ReturnType<MarkerTracker["frame"]>) {
   if (!compare || !tracker || !core) return;
@@ -52,7 +53,7 @@ function recordFrame(img: ImageData, t: number) {
   if (--rec.left <= 0) {
     const r = rec;
     rec = null;
-    Promise.all(r.jpegs).then((frames) => post({ type: "recorded", times: r.times, frames, width: img.width, height: img.height }, frames));
+    Promise.all(r.jpegs).then((frames) => post({ type: "recorded", id: r.id, times: r.times, frames, width: img.width, height: img.height }, frames));
   }
 }
 let codes: Uint8Array | null = null;
@@ -113,7 +114,10 @@ async function handle(e: MessageEvent<ToWorker>) {
       maxSide = m.maxSide;
       break;
     case "record":
-      rec = { left: m.frames, times: [], jpegs: [] };
+      rec = { id: m.id, left: m.frames, times: [], jpegs: [] };
+      break;
+    case "cancelRecord":
+      rec = null;
       break;
     case "setDetector":
       useDetector(m.detector);

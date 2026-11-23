@@ -91,3 +91,27 @@ export function writeRun(state: RunState, at = new Date().toISOString()): RunRec
   } catch {}
   return r;
 }
+
+// ---------------- a failed start ----------------
+
+export type StartStage = "camera" | "engine";
+
+/** Why Start failed, in words for the start screen. stage: the camera (getUserMedia) or the engine (the tracker). */
+export function explainStartError(stage: StartStage, err: unknown): { title: string; text: string } {
+  const name = typeof err === "object" && err !== null && typeof (err as { name?: unknown }).name === "string" ? (err as { name: string }).name : "";
+  const raw = err instanceof Error || (typeof err === "object" && err !== null && "message" in err) ? String((err as { message?: unknown }).message ?? "") : err == null ? "" : String(err);
+  const message = raw.trim();
+  if (stage === "engine") {
+    return { title: "The engine did not load", text: `${message ? `${message}${/[.!?]$/.test(message) ? "" : "."} ` : ""}Check the connection, then close the app and open it again.` };
+  }
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return { title: "The camera is blocked", text: "Allow the camera for this site in the browser's settings, then try again." };
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return { title: "No usable camera", text: "This phone has no back camera the app can use." };
+  }
+  if (name === "NotReadableError" || name === "AbortError") {
+    return { title: "The camera is in use", text: "Another app is using the camera. Close it and try again." };
+  }
+  return { title: "The camera did not start", text: message || "Try again." };
+}
