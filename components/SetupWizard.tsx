@@ -15,7 +15,7 @@ import type { SceneFocus } from "./CalibrationScene";
 
 const CalibrationScene = dynamic(() => import("./CalibrationScene"), { ssr: false, loading: () => <div className="h-40 rounded-2xl bg-black/30 sm:h-56" /> });
 
-type Step = "sheet" | "lens" | "tip" | "check" | "ready";
+export type Step = "sheet" | "lens" | "tip" | "check" | "ready";
 const ORDER: Step[] = ["sheet", "lens", "tip", "check", "ready"];
 const DOTS: { s: Step; label: string }[] = [
   { s: "sheet", label: "Sheet" },
@@ -32,14 +32,20 @@ export default function SetupWizard({
   onOpenBench,
   phoneName,
   onNextPhone,
+  initialStep = "sheet",
+  onChecked = () => {},
 }: {
   tracker: () => BrowserNav | null;
   onClose: () => void;
   onOpenBench: () => void;
   phoneName: string;
   onNextPhone: () => void;
+  /** where to open: "check" (nothing changed), "tip" (the bit or the phone's seat changed), "sheet" (from the start) */
+  initialStep?: Step;
+  /** the tip was confirmed on A2: the calibration holds */
+  onChecked?: () => void;
 }) {
-  const [step, setStep] = useState<Step>("sheet");
+  const [step, setStep] = useState<Step>(initialStep);
   const [live, setLive] = useState<ReturnType<BrowserNav["liveCheck"]> | null>(null);
   const [cal, setCal] = useState<ReturnType<BrowserNav["calStatus"]>>(null);
   const [calibrated, setCalibrated] = useState({ camera: false, tool: false });
@@ -170,7 +176,7 @@ export default function SetupWizard({
         note={markers < 4 ? `Only ${markers} markers: turn the sheet so more markers are in front of the bit` : d == null ? "Show the sheet" : d < 1 ? "Very good" : d < 2 ? "OK" : "Too far: calibrate the tip again"}
       />
     );
-    primary = { label: "Yes, it's on the tip", onClick: next };
+    primary = { label: "Yes, it's on the tip", onClick: () => (onChecked(), next()) };
     secondary = { label: "No: calibrate the tip again", onClick: () => go("tip") };
   } else {
     title = "Ready ✓";

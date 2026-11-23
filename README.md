@@ -25,7 +25,7 @@ your hands.
 | [`/benchmarks`](https://smarttools-nav.vercel.app/benchmarks) | Motor off vs motor on: raw and filtered poses from the bench lab (`/hud` → Bench), the tip checked on A2, and the build log. Simulated runs are labelled; the field-test protocol is [docs/FIELD-TEST.md](docs/FIELD-TEST.md) |
 | [`/memory`](https://smarttools-nav.vercel.app/memory) | What this phone keeps: plans (made with the tool as a pointer, or imported) and jobs, with the report, the agentvcs ledger and an athos recipe to download; recipes imported through the gate; jobs compared by tracking setting. Works offline |
 | [`/engine`](https://smarttools-nav.vercel.app/engine) | The engine lab: one engine drawn in 3D, as a 2D plan and as the HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone app, only what is needed to work: **Start** (the rear camera), then a GPS-style guide over the camera. The guided **Setup** (lens, tip, check) opens by itself; one menu for Setup, Job, Tests and Sound. (`/hud?sim=1` replaces the camera with the scene simulator, for development) |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone app, only what is needed to work: **Start** (the rear camera), then a GPS-style guide over the camera. The guided **Setup** (lens, tip, check) opens by itself; one menu for Setup, Job, Tests, Record and Sound. **Pause** turns the camera off and keeps the calibration; **Stop** (held) turns everything off, and the next start asks what changed and redoes only that. (`/hud?sim=1` replaces the camera with the scene simulator, for development) |
 | [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
 
 ## How the demo works
@@ -243,7 +243,7 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 68 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 92 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run test:unit     # TypeScript: 97 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
 npm run gate          # the verdict for this branch against main: FAST_TRACK, ESCALATE (run the engine tests and e2e too) or REJECTED
 npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```

@@ -67,7 +67,7 @@ const CAL_TEXT: Record<CaptureKind, string> = {
 };
 
 /** v2: calibrations saved before the iOS frame-scaling fix (v1) may have been measured on a mis-scaled image */
-type Stored<T> = { v: 2; width: number; height: number; value: T };
+type Stored<T> = { v: 2; width: number; height: number; value: T; /** ISO time it was measured */ at?: string };
 
 export class BrowserNav {
   readonly core: NavCore;
@@ -518,6 +518,23 @@ export class BrowserNav {
     return phoneById(d.phone.id).name;
   }
 
+  /** When this phone's drill calibration was measured (null if none, or saved before times were kept). */
+  toolCalibratedAt(): string | null {
+    try {
+      const s = JSON.parse(localStorage.getItem(key("tool", this.phone.id)) ?? "null") as Stored<unknown> | null;
+      return s?.v === 2 ? (s.at ?? null) : null;
+    } catch {
+      return null;
+    }
+  }
+  /** Drop the drill calibration only (the bit or the phone's seat changed); the lens stays. */
+  forgetDrillCalibration() {
+    try {
+      localStorage.removeItem(key("tool", this.phone.id));
+    } catch {}
+    this.forgetCalibrationSilently();
+  }
+
   forgetCalibration() {
     try {
       localStorage.removeItem(key("camera", this.phone.id));
@@ -598,7 +615,7 @@ function load<T>(key: string, w: number, h: number, rescale: (v: T, k: number) =
 }
 function save<T>(key: string, size: { w: number; h: number }, value: T) {
   try {
-    localStorage.setItem(key, JSON.stringify({ v: 2, width: size.w, height: size.h, value } satisfies Stored<T>));
+    localStorage.setItem(key, JSON.stringify({ v: 2, width: size.w, height: size.h, value, at: new Date().toISOString() } satisfies Stored<T>));
   } catch {}
 }
 
