@@ -24,7 +24,7 @@ import type { DetectorKind } from "./detectors";
 import { encodeRecording } from "./recording";
 import { compose, fromPose, inverse } from "./xform";
 import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
-import { JobRecorder, defaultContext, type JobRecord, type TrackingSettings } from "./jobrecord";
+import { JobRecorder, defaultContext, type HoleRecord, type JobRecord, type TrackingSettings } from "./jobrecord";
 
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
 /** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
@@ -99,6 +99,10 @@ export class BrowserNav {
   recorder: JobRecorder | null = null;
   /** a hole was finished: the job so far, to keep as a draft (the page may die before the job is saved) */
   onJobProgress: (draft: JobRecord) => void = () => {};
+  /** a hole was finished: that hole and the job so far (for its Check; also in the simulator when it records) */
+  onHoleDone: (hole: HoleRecord, job: JobRecord) => void = () => {};
+  /** the simulator records the job of this plan (recordInSimulator): never a draft, never saved */
+  private simPlan: Plan | null = null;
   /** a job the page lost, to carry on with when the next job starts on its plan */
   private pendingResume: JobRecord | null = null;
   /** the bench lab (motor off / on): raw and filtered poses of every tracker frame, when open */
@@ -135,6 +139,24 @@ export class BrowserNav {
     this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), { camera, cameraCalibrated: true, tool, toolCalibrated: true, t0 });
     this.attachWorker(camera, true);
     this.applyFilter();
+    this.recorder = null;
+    this.startSimJob(t0);
+  }
+
+  /** Simulation only: record the job of `plan` (its holes must be the sheet's A1-A3, the simulator's scene), so the
+   * live Checks can be seen. Its holes reach onHoleDone; nothing reaches onJobProgress and finishJob saves nothing. */
+  recordInSimulator(plan: Plan) {
+    this.simPlan = plan;
+    this.plan = plan;
+    if (this.session && this.ephemeral) this.startSimJob(performance.now() / 1000);
+  }
+  private startSimJob(t0: number) {
+    const s = this.session, plan = this.simPlan;
+    if (!s || !plan || !this.ephemeral) return;
+    this.recorder = new JobRecorder(plan, defaultContext({ source: "simulation" }), (id) => (plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined), {
+      wall: (t) => Date.now() - (performance.now() / 1000 - t) * 1000,
+      t0,
+    });
   }
 
   private attachWorker(camera: Camera, calibrated: boolean) {
@@ -234,7 +256,11 @@ export class BrowserNav {
     if (n > 0 && s.snapshot && r) {
       const before = r.holes.length;
       r.feed(s.snapshot);
-      if (r.holes.length > before && !this.ephemeral) this.onJobProgress(r.finish(tWall, this.trackingSettings()));
+      if (r.holes.length > before) {
+        const job = r.finish(tWall, this.trackingSettings());
+        if (!this.ephemeral) this.onJobProgress(job);
+        for (const h of r.holes.slice(before)) this.onHoleDone(h, job);
+      }
     }
     this.stepCalibration(tWall);
     return n;
@@ -455,6 +481,18 @@ export class BrowserNav {
       { wall, t0, resume },
     );
   }
+  /** The person's answer to a recipe step (its statement id): kept with the job, and the draft is written again.
+   * Nothing happens without a job in progress. */
+  confirmStep(id: string, ok: boolean) {
+    const r = this.recorder;
+    if (!r) return;
+    r.confirm(id, ok);
+    if (!this.ephemeral) this.onJobProgress(r.finish(performance.now() / 1000, this.trackingSettings()));
+  }
+  /** The job so far (null without one in progress): for the Checks on screen. */
+  jobSoFar(): JobRecord | null {
+    return this.recorder?.finish(performance.now() / 1000, this.trackingSettings()) ?? null;
+  }
   /** How the phone is tracking now: recorded with each job, so jobs can be compared by setting. */
   trackingSettings(): TrackingSettings {
     return { detector: this.detector, filter: !this.filterOn ? "off" : this.filterAtTool ? "tip" : "camera", detectPx: this.maxSide, camera: { ...this.cameraOpts } };
@@ -463,9 +501,11 @@ export class BrowserNav {
   finishJob(): JobRecord | null {
     const r = this.recorder, s = this.session;
     if (!r || !s) return null;
-    const rec = r.holes.length ? r.finish(performance.now() / 1000, this.trackingSettings()) : null;
+    // the simulator's job is never saved: it starts again, and there is no record to keep
+    const rec = r.holes.length && !this.ephemeral ? r.finish(performance.now() / 1000, this.trackingSettings()) : null;
     s.engine.resetJob();
-    this.startJob(performance.now() / 1000);
+    if (this.ephemeral) this.startSimJob(performance.now() / 1000);
+    else this.startJob(performance.now() / 1000);
     return rec;
   }
 

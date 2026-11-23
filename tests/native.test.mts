@@ -10,7 +10,7 @@ import { defaultContext, type HoleRecord, type JobRecord, type TrackingSettings 
 import { buildReport } from "../lib/report.ts";
 import { jobLedger } from "../lib/ledger.ts";
 import { blame, bisect, summarize, verifyBundle, type Bundle } from "../lib/vcs.ts";
-import { bindCheck, checkJob, drillOf, evaluate, parseRecipe, planFromRecipe, recipeFromJob, recipeFromPlan } from "../lib/recipe.ts";
+import { bindCheck, checkJob, declaredAuthor, drillOf, evaluate, parseRecipe, planFromRecipe, recipeFromJob, recipeFromPlan } from "../lib/recipe.ts";
 import { gateChanges, gateRecipe, glob, type GateConfig } from "../lib/gate.ts";
 
 const TRACK: TrackingSettings = { detector: "js", filter: "camera", detectPx: 640, camera: { fps60: false, lock: false } };
@@ -173,6 +173,91 @@ test("a recipe is gated before the engine sees it: fast track, escalate to a per
   assert.match(deep.reasons.join(), /depth must be/);
   assert.match(gateRecipe(recipeFromPlan(DEMO_PLAN).replace("Ø6 mm at (0, 60) mm", "Ø6 mm near the corner")).reasons.join(), /not a hole the engine can read/);
   assert.equal(gateRecipe("hello").verdict, "REJECTED");
+});
+
+// ---------------- authorship: who wrote a recipe, and the plan that keeps it ----------------
+
+const BRACKET = readFileSync(new URL("./fixtures/athos/bracket.md", import.meta.url), "utf8");
+const front = (lines: string[]) => `---\nid: t\ntitle: T\n${lines.join("\n")}\n---\n\n## #a\n**Do:** Drill A: Ø6 mm at (0, 60) mm, 20 mm deep\n**Check:** depth within 0.5 mm\n`;
+
+test("one level of nested front matter is kept as dotted keys", () => {
+  const r = parseRecipe(BRACKET);
+  assert.equal(r.meta["origin.platform"], "claude-code");
+  assert.equal(r.meta.version, "1"); // the key after the nested block is top level again
+  assert.equal(r.meta["origin.version"], undefined);
+  const deep = parseRecipe(front(["a:", "  b: 1", "    c: 2", "d: x", "  e: 3"]));
+  assert.equal(deep.meta["a.b"], "1");
+  assert.equal(deep.meta["a.c"], "2"); // deeper indentation still counts as one level under a
+  assert.equal(deep.meta["d.e"], undefined); // d has a value: nothing nests under it
+});
+
+test("declaredAuthor: what the recipe says about who wrote it", () => {
+  const of = (lines: string[]) => declaredAuthor(parseRecipe(front(lines)));
+  assert.deepEqual(of(["author: ai"]), { kind: "ai", why: "the recipe says an AI wrote it" });
+  assert.deepEqual(of(["author: Expert", "author_name: A. Carpenter"]), { kind: "expert", name: "A. Carpenter", why: "the recipe says an expert wrote it" });
+  assert.equal(of(["author: manual"])?.kind, "manual");
+  assert.deepEqual(of(["origin:", "  platform: claude-code"]), { kind: "ai", why: "learned by an agent (claude-code)" });
+  assert.equal(of(["author: expert", "origin:", "  platform: claude-code"])?.kind, "expert"); // author: wins over the origin
+  assert.equal(of(["author: someone"]), null);
+  assert.equal(of([]), null);
+});
+
+test("recipeFromPlan writes the author; a recipe written from an AI's plan gates back as an AI's", () => {
+  assert.match(recipeFromPlan(DEMO_PLAN), /^author: manual\nauthor_name: SmartTools$/m);
+  assert.match(recipeFromPlan({ ...DEMO_PLAN, author: { kind: "pointer" } }), /^author: manual$/m);
+  assert.doesNotMatch(recipeFromPlan({ ...DEMO_PLAN, author: { kind: "pointer" } }), /author_name/);
+  const ai = gateRecipe(recipeFromPlan({ ...DEMO_PLAN, author: { kind: "ai" } }));
+  assert.equal(ai.verdict, "ESCALATE");
+  assert.equal(ai.declared, true);
+  assert.deepEqual(ai.author, { kind: "ai" });
+  assert.match(ai.reasons.join(), /written by an AI \(the recipe says an AI wrote it\)/);
+  assert.match(recipeFromJob(job(20, good)), /^author: manual$/m);
+});
+
+test("a recipe that names nobody is treated as an AI's; a declared or given author decides", () => {
+  const nobody = recipeFromPlan(DEMO_PLAN).replace(/^author.*\n/gm, "");
+  const g = gateRecipe(nobody);
+  assert.equal(g.verdict, "ESCALATE");
+  assert.equal(g.declared, false);
+  assert.deepEqual(g.author, { kind: "ai" });
+  assert.deepEqual(g.reasons, ["nobody is named as its author: treated as written by an AI, a person reviews it before the first hole"]);
+  assert.equal(g.plan?.author.kind, "ai");
+  // the caller vouches for it: an expert's recipe with measurable Checks goes straight through
+  const trusted = gateRecipe(nobody, { kind: "expert" });
+  assert.equal(trusted.verdict, "FAST_TRACK");
+  assert.equal(trusted.declared, true);
+  const expert = gateRecipe(nobody.replace("projects:", "author: expert\nprojects:"));
+  assert.equal(expert.verdict, "FAST_TRACK");
+  assert.deepEqual(expert.author, { kind: "expert" });
+  // the athos fixture was learned by an agent: with no author passed it is an AI's
+  const b = gateRecipe(BRACKET);
+  assert.equal(b.author.kind, "ai");
+  assert.equal(b.declared, true);
+  assert.match(b.reasons.join(), /written by an AI \(learned by an agent \(claude-code\)\)/);
+  assert.doesNotMatch(gateRecipe(BRACKET, { kind: "expert" }).reasons.join(), /AI/);
+  // nothing to read: still says who it would be
+  assert.deepEqual(gateRecipe("hello"), { verdict: "REJECTED", reasons: ["not a recipe: no statements (## #id)"], manual: [], author: { kind: "ai" }, declared: false });
+});
+
+test("the plan a recipe makes carries the recipe, and validatePlan checks recipe and reviewed", () => {
+  const md = recipeFromPlan(DEMO_PLAN);
+  const g = gateRecipe(md, undefined, DEMO_PLAN.created);
+  assert.deepEqual(g.plan?.recipe, { id: "demo-4-holes-40-mm-square-20-mm-deep", md });
+  assert.equal(validatePlan(g.plan).ok, true);
+  assert.equal(validatePlan({ ...g.plan, reviewed: "2026-11-23T10:00:00.000Z" }).ok, true);
+  const errs = (p: unknown) => (validatePlan(p) as { ok: false; errors: string[] }).errors.join(" | ");
+  assert.match(errs({ ...DEMO_PLAN, reviewed: "yesterday" }), /reviewed is not a date/);
+  assert.match(errs({ ...DEMO_PLAN, reviewed: 5 }), /reviewed is not a date/);
+  assert.match(errs({ ...DEMO_PLAN, recipe: { id: "", md } }), /recipe\.id is missing/);
+  assert.match(errs({ ...DEMO_PLAN, recipe: { id: "x" } }), /recipe\.md must be text/);
+  assert.match(errs({ ...DEMO_PLAN, recipe: { id: "x", md: "# a title, no steps" } }), /not a recipe/);
+  assert.match(errs({ ...DEMO_PLAN, recipe: { id: "x", md: md + " ".repeat(20_001) } }), /longer than 20000/);
+  assert.match(errs({ ...DEMO_PLAN, recipe: null }), /recipe must be an object/);
+  assert.equal(validatePlan(DEMO_PLAN).ok, true); // old plans, with neither, stay valid
+  // too long to keep: the gate refuses it rather than dropping the recipe
+  const long = gateRecipe(`${md}\n## History\n${"x".repeat(20_001)}\n`);
+  assert.equal(long.verdict, "REJECTED");
+  assert.match(long.reasons.join(), /longer than 20000/);
 });
 
 const CFG = JSON.parse(readFileSync(new URL("../gate.config.json", import.meta.url), "utf8")) as GateConfig;

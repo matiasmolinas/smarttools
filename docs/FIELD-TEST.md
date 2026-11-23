@@ -187,6 +187,9 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
    - drill until the screen shows the depth;
    - pull out.
    The app records the hole by itself.
+   If the plan came from a recipe, a card under the banner shows the hole's Check: green passes by itself, red
+   stays until **OK**, amber asks **Yes** / **No** for what the engine cannot measure. The recipe's steps that are
+   not holes (clamping, for example) come up as a **Step** sheet before the hole they precede: tap **Done** or **Skip**.
 5. When all 4 are done, **menu ☰ → Job → Finish job and save**. You will see *Job saved* with the verdict.
    The job in progress is kept after every hole: if the app closes before you save, the next **Start** carries on
    with it (*Job recovered*). Changing the plan mid-job saves the holes drilled so far as an unfinished job.

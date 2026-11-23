@@ -34,6 +34,10 @@ export interface Plan {
   reference: { kind: "sheet"; id: typeof SHEET_ID };
   holes: PlanHole[];
   notes?: string;
+  /** the recipe this plan came from: its id and its Markdown, so the phone can work its steps and Checks */
+  recipe?: { id: string; md: string };
+  /** ISO time a person reviewed it (set when an escalated recipe is approved) */
+  reviewed?: string;
 }
 
 export const LIMITS = {
@@ -47,6 +51,8 @@ export const LIMITS = {
   labelChars: 12,
   /** the tip must touch the surface to mark (|z| on the sheet's plane, mm) */
   touchMm: 3,
+  /** a recipe kept with its plan (characters of Markdown) */
+  recipeChars: 20_000,
 };
 
 export const DEFAULT_HOLE = { depthMm: 30, diameterMm: 6 };
@@ -120,6 +126,18 @@ export function validatePlan(x: unknown): Checked {
           e.push(`holes ${i + 1} and ${j + 1} are closer than ${LIMITS.minSpacingMm} mm`);
       }
   }
+  // only the shape here: lib/recipe.ts imports this file, so lib/gate.ts is where a recipe is parsed
+  if (p.recipe !== undefined) {
+    const r = p.recipe as Partial<NonNullable<Plan["recipe"]>> | null;
+    if (!r || typeof r !== "object") e.push("recipe must be an object with an id and its Markdown");
+    else {
+      if (!str(r.id) || !r.id.trim()) e.push("recipe.id is missing");
+      if (!str(r.md)) e.push("recipe.md must be text");
+      else if (r.md.length > LIMITS.recipeChars) e.push(`recipe.md is longer than ${LIMITS.recipeChars} characters`);
+      else if (!/^##\s+#[\w.-]+\s*$/m.test(r.md)) e.push("recipe.md is not a recipe: no statements (## #id)");
+    }
+  }
+  if (p.reviewed !== undefined && (!str(p.reviewed) || Number.isNaN(Date.parse(p.reviewed)))) e.push("reviewed is not a date");
   return e.length ? { ok: false, errors: e } : { ok: true, plan: p as Plan };
 }
 
