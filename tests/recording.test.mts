@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeRecording, encodeRecording, type RecordingHeader } from "../lib/recording.ts";
+import { decodeRecording, encodeRecording, recordingFileName, sizeText, type RecordingHeader } from "../lib/recording.ts";
 import { DEFAULT_RIG } from "../lib/scene.ts";
 
 test("a recording round-trips: header and every frame, byte for byte", async () => {
@@ -31,4 +31,10 @@ test("a recording round-trips: header and every frame, byte for byte", async () 
   assert.equal(back.frames[1].length, 0);
   assert.equal(back.frames[2].length, 1000);
   assert.throws(() => decodeRecording(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])), /not a SmartTools recording/);
+});
+
+test("a recording's file name sorts by time, and its size reads in MB", () => {
+  assert.equal(recordingFileName(new Date("2026-11-23T14:05:59.000Z")), "smarttools-2026-11-23-14-05.strec");
+  assert.equal(sizeText(12_345_678), "12.3 MB");
+  assert.equal(sizeText(0), "0.0 MB");
 });

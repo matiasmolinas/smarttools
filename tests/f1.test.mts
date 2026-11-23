@@ -157,6 +157,41 @@ test("a job stopped early is recorded as aborted, with the holes it has", () => 
   assert.match(job.report.verdict, /1 of 3 done/);
 });
 
+test("a lost job resumes from its draft: same id and start, the next holes added, none recorded twice", () => {
+  const sc = SCENARIOS.find((s) => s.id === "drill-three")!;
+  // the first page: A1 drilled, then the page dies; the draft is what onJobProgress wrote
+  let r = new ScenarioRun(core, sc);
+  let f = r.step(0);
+  const first = new JobRecorder(SHEET_PLAN, defaultContext(), (id) => f.scene.names[id], { wall: (t) => T0 + t * 1000, t0: 0 });
+  let tick = -1;
+  for (let t = 0; t <= 12; t += 1 / 60) {
+    f = r.step(t);
+    if (f.snap && f.snap.tick !== tick) (tick = f.snap.tick), first.feed(f.snap);
+  }
+  r.dispose();
+  const draft: JobRecord = JSON.parse(JSON.stringify(first.finish(12)));
+  assert.deepEqual(draft.holes.map((h) => h.name), ["A1"]);
+  // the next page: a later start, the engine guides through every hole again (it does not know A1 is done)
+  r = new ScenarioRun(core, sc);
+  f = r.step(0);
+  const T1 = T0 + 3600_000;
+  const rec = new JobRecorder(SHEET_PLAN, defaultContext(), (id) => f.scene.names[id], { wall: (t) => T1 + t * 1000, t0: 0, resume: draft });
+  assert.equal(rec.holes.length, 1);
+  tick = -1;
+  for (let t = 0; t <= sc.duration; t += 1 / 60) {
+    f = r.step(t);
+    if (f.snap && f.snap.tick !== tick) (tick = f.snap.tick), rec.feed(f.snap);
+  }
+  r.dispose();
+  const job = rec.finish(sc.duration);
+  assert.equal(job.id, draft.id);
+  assert.equal(job.started, draft.started);
+  assert.equal(job.status, "completed");
+  assert.deepEqual(job.holes.map((h) => h.name), ["A1", "A2", "A3"]);
+  assert.deepEqual(job.holes[0], draft.holes[0], "the recovered A1 is kept as it was, not recorded again");
+  assert.ok(Date.parse(job.holes[1].endedAt) >= T1);
+});
+
 // ---------------- local memory ----------------
 
 test("local memory keeps plans and jobs, refuses invalid plans, and lists what is not synced", async () => {

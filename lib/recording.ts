@@ -56,6 +56,16 @@ export function decodeRecording(buf: Uint8Array): { header: RecordingHeader; fra
   return { header, frames };
 }
 
+/** The file name of a recording made at `d`: smarttools-2026-11-23-14-05.strec (UTC, sorts by time). */
+export function recordingFileName(d: Date): string {
+  return `smarttools-${d.toISOString().slice(0, 16).replace(/[:T]/g, "-")}.strec`;
+}
+
+/** A file size for people: "12.3 MB". */
+export function sizeText(bytes: number): string {
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
 function u32(n: number) {
   const b = new Uint8Array(4);
   new DataView(b.buffer).setUint32(0, n, true);

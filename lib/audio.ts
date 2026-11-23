@@ -117,6 +117,15 @@ export class SoundGuide {
     this.amp.gain.setTargetAtTime(g * 0.25, now, 0.008);
   }
 
+  /** Quiet now (a pause or a stop): no last tone left sounding, and the next pulse starts from the top. */
+  silence() {
+    const now = this.ctx.currentTime;
+    this.amp.gain.cancelScheduledValues(now);
+    this.amp.gain.setValueAtTime(0, now);
+    this.phase = 0;
+    this.last = 0;
+  }
+
   vibrate(event: string) {
     const p = VIBRATE[event];
     if (p && this.enabled && typeof navigator !== "undefined" && "vibrate" in navigator) navigator.vibrate(p);

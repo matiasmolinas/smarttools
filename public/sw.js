@@ -1,10 +1,14 @@
 // SmartTools service worker (F1, docs/ARCHITECTURE.md): the app works with no network.
 //   pages (/hud, /memory, /markers ...)  network first, the cached copy when offline
 //   /_next/static/*                      cache first (file names are content hashes)
-//   /engine, /models, /icons             cached, refreshed in the background (stale-while-revalidate)
+//   /engine/*                            network first (3 s), the cached copy when offline or slow: a deploy
+//                                        always brings its own engine, never the previous one
+//   /models, /icons, the manifest        cached, refreshed in the background (stale-while-revalidate)
 // Nothing here is on the real-time path: it only serves files.
 
-const VERSION = "st-v1";
+const VERSION = "st-v2";
+/** How long the engine waits for the network before it uses the cached copy. */
+const ENGINE_TIMEOUT_MS = 3000;
 const SHELL = ["/hud", "/memory", "/markers", "/", "/engine/nav_core.wasm", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -50,7 +54,9 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirst(req));
   } else if (url.pathname.startsWith("/_next/static/")) {
     event.respondWith(cacheFirst(req));
-  } else if (/^\/(engine|models|icons)\//.test(url.pathname) || url.pathname === "/manifest.webmanifest") {
+  } else if (url.pathname.startsWith("/engine/")) {
+    event.respondWith(networkFirstTimed(req, event));
+  } else if (/^\/(models|icons)\//.test(url.pathname) || url.pathname === "/manifest.webmanifest") {
     event.respondWith(staleWhileRevalidate(req, event));
   }
 });
@@ -65,6 +71,28 @@ async function networkFirst(req) {
     const hit = (await cache.match(new URL(req.url).pathname)) || (await cache.match("/hud"));
     return hit || new Response("Offline, and this page was never opened online.", { status: 503, headers: { "content-type": "text/plain" } });
   }
+}
+
+/** The network if it answers within ENGINE_TIMEOUT_MS, else the cached copy. A late answer still updates the cache. */
+async function networkFirstTimed(req, event) {
+  const cache = await caches.open(VERSION);
+  const net = fetch(req).then((res) => {
+    if (res.ok) event.waitUntil(cache.put(req, res.clone()).catch(() => {}));
+    return res;
+  });
+  // keeps the worker alive for a late answer; a failed fetch is handled here, never an unhandled rejection
+  event.waitUntil(net.catch(() => {}));
+  let timer;
+  const slow = new Promise((resolve) => {
+    timer = setTimeout(resolve, ENGINE_TIMEOUT_MS, null);
+  });
+  const res = await Promise.race([net, slow]).catch(() => null);
+  clearTimeout(timer);
+  if (res && res.ok) return res;
+  const hit = await cache.match(req);
+  if (hit) return hit;
+  // nothing cached: the network's answer (an error status), or wait for it
+  return res || net;
 }
 
 async function cacheFirst(req) {

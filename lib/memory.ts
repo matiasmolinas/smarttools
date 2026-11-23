@@ -164,3 +164,28 @@ export function setActivePlanId(id: string | null) {
     else localStorage.removeItem(ACTIVE);
   } catch {}
 }
+
+// the job in progress, written after every finished hole: if the page dies (iOS discards it in the background),
+// the next start finds it here. A clean end (saved, or stopped without saving) clears it.
+const DRAFT = "st-job-draft";
+type DraftStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+export function readJobDraft(store?: DraftStore): JobRecord | null {
+  try {
+    const raw = (store ?? localStorage).getItem(DRAFT);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as JobRecord;
+    return j && j.kind === JOB_KIND && typeof j.id === "string" && Array.isArray(j.holes) && typeof j.plan?.id === "string" ? j : null;
+  } catch {
+    return null;
+  }
+}
+export function writeJobDraft(j: JobRecord, store?: DraftStore) {
+  try {
+    (store ?? localStorage).setItem(DRAFT, JSON.stringify(j));
+  } catch {}
+}
+export function clearJobDraft(store?: DraftStore) {
+  try {
+    (store ?? localStorage).removeItem(DRAFT);
+  } catch {}
+}

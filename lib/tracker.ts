@@ -75,6 +75,8 @@ export class BrowserNav {
   private client: TrackerClient | null = null;
   private size = { w: 0, h: 0 };
   private ending = false;
+  /** which endCapture `ending` belongs to: an old one that settles late must not clear a newer one's flag */
+  private endingSeq = 0;
   /** simulated frames rendered by the worker, for display */
   onSimImage: (img: ImageData) => void = () => {};
   /** frame px -> source px */
@@ -82,6 +84,8 @@ export class BrowserNav {
   private cal: { step: CaptureKind; t0: number; until: number; then: CaptureKind | null } | null = null;
   private ephemeral = false;
   onMessage: (m: string) => void = () => {};
+  /** The tracker worker failed for good: the page must show it (a phone has no console). */
+  onFault: (message: string) => void = () => {};
   /** a calibration step finished: what it measured, or why it failed (for the guided setup) */
   onCalResult: (r: CalResult) => void = () => {};
   extraInfo: () => string = () => "";
@@ -93,6 +97,10 @@ export class BrowserNav {
   plan: Plan = SHEET_PLAN;
   /** the job in progress: every hole of the plan, as the engine measures it */
   recorder: JobRecorder | null = null;
+  /** a hole was finished: the job so far, to keep as a draft (the page may die before the job is saved) */
+  onJobProgress: (draft: JobRecord) => void = () => {};
+  /** a job the page lost, to carry on with when the next job starts on its plan */
+  private pendingResume: JobRecord | null = null;
   /** the bench lab (motor off / on): raw and filtered poses of every tracker frame, when open */
   bench: BenchRecorder | null = null;
   /** the engine's One Euro pose filter on (default) or off (raw poses on screen, for comparison) */
@@ -133,6 +141,9 @@ export class BrowserNav {
     this.client?.terminate();
     const c = new TrackerClient(camera, calibrated, this.maxSide, this.detector, this.compare);
     c.onResult = (r: WorkerResult) => this.onWorkerResult(r);
+    c.onFatal = (m) => {
+      if (this.client === c) this.onFault(m);
+    };
     this.client = c;
   }
 
@@ -219,7 +230,12 @@ export class BrowserNav {
     const s = this.session;
     if (!s) return 0;
     const n = s.advance(tWall);
-    if (n > 0 && s.snapshot) this.recorder?.feed(s.snapshot);
+    const r = this.recorder;
+    if (n > 0 && s.snapshot && r) {
+      const before = r.holes.length;
+      r.feed(s.snapshot);
+      if (r.holes.length > before && !this.ephemeral) this.onJobProgress(r.finish(tWall, this.trackingSettings()));
+    }
     this.stepCalibration(tWall);
     return n;
   }
@@ -291,12 +307,16 @@ export class BrowserNav {
     };
   }
   /** Record about `seconds` of camera frames as the tracker sees them, with the calibration in use: a .strec
-   * file to analyse again on a laptop (scripts/replay.mts). */
+   * file to analyse again on a laptop (scripts/replay.mts). Null if there is nothing to record, or it was cancelled
+   * (cancelRecording, the tracker stopped, or no frames came for 3 × `seconds`). */
   async record(seconds: number, notes = ""): Promise<Blob | null> {
     const c = this.client, s = this.session;
     if (!c || !s) return null;
     const fps = Math.max(5, Math.min(60, this.perf()?.fps ?? 30));
-    const r = await c.record(Math.round(seconds * fps));
+    // a safety net: frames that stop coming (camera off, worker stuck) must not leave the recording open forever
+    const timer = setTimeout(() => c.cancelRecord(), seconds * 3 * 1000);
+    const r = await c.record(Math.round(seconds * fps)).finally(() => clearTimeout(timer));
+    if (!r) return null;
     const cal = this.calibrated;
     return encodeRecording(
       {
@@ -317,6 +337,11 @@ export class BrowserNav {
       },
       r.frames,
     );
+  }
+
+  /** Stop a recording in progress: its record() returns null. */
+  cancelRecording() {
+    this.client?.cancelRecord();
   }
 
   /** Choose the marker detector (kept per device), and whether to run the other one alongside to compare. */
@@ -408,9 +433,18 @@ export class BrowserNav {
     const nav = s.scene.def.navigation;
     return tipOnSheet(s.snapshot, s.id(nav.tool), s.id(nav.tracked));
   }
+  /** Carry on with a job the page lost (a draft), once, if it is the plan being worked; null drops it. If a
+   * session already runs, its job is replaced now. The engine is not told which holes are done (it has no call
+   * for that): it may guide to one again, and the recorder ignores a hole it already has. */
+  resumeJob(draft: JobRecord | null) {
+    this.pendingResume = draft;
+    if (draft && this.session && !this.ephemeral) this.startJob(performance.now() / 1000);
+  }
   private startJob(t0: number) {
     const s = this.session;
     if (!s || this.ephemeral) return;
+    const resume = this.pendingResume?.plan.id === this.plan.id ? this.pendingResume : undefined;
+    this.pendingResume = null;
     const c = this.calibrated;
     // engine time is performance.now() in seconds; map it to the wall clock when asked
     const wall = (t: number) => Date.now() - (performance.now() / 1000 - t) * 1000;
@@ -418,7 +452,7 @@ export class BrowserNav {
       this.plan,
       defaultContext({ phone: { id: this.phone.id, name: this.phone.name, provisional: this.phone.provisional }, calibration: { lens: c.camera, dock: c.tool }, source: "camera" }),
       (id) => (this.plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined),
-      { wall, t0 },
+      { wall, t0, resume },
     );
   }
   /** How the phone is tracking now: recorded with each job, so jobs can be compared by setting. */
@@ -473,6 +507,7 @@ export class BrowserNav {
   cancelCalibration() {
     this.client?.cancelCapture();
     this.cal = null;
+    this.ending = false;
   }
   /** Stop the worker and free the engine without touching stored calibrations. */
   forgetCalibrationSilently() {
@@ -481,6 +516,8 @@ export class BrowserNav {
     this.recorder = null;
     this.client?.terminate();
     this.client = null;
+    this.cal = null;
+    this.ending = false;
   }
   /** Switch phones: its own calibrations are loaded on the next frame. */
   setPhone(id: string) {
@@ -542,17 +579,27 @@ export class BrowserNav {
     } catch {}
     this.session?.dispose();
     this.session = null;
+    this.recorder = null;
     this.client?.terminate();
     this.client = null;
+    this.cal = null;
+    this.ending = false;
   }
   private stepCalibration(t: number) {
     const c = this.cal, s = this.session;
     if (!c || !s || !this.client || t < c.until || this.ending) return;
     this.ending = true;
-    this.client.endCapture(s.tool).then((r) => {
-      this.ending = false;
-      this.finishStep(c, s, r, performance.now() / 1000);
-    });
+    const seq = ++this.endingSeq;
+    this.client
+      .endCapture(s.tool)
+      .then((r) => {
+        // cancelled, replaced or the engine restarted while it was computed: the result belongs to nobody
+        if (this.cal !== c || this.session !== s) return;
+        this.finishStep(c, s, r, performance.now() / 1000);
+      })
+      .finally(() => {
+        if (this.endingSeq === seq) this.ending = false;
+      });
   }
   private finishStep(c: NonNullable<BrowserNav["cal"]>, s: NavSession, r0: CaptureResult, t: number) {
     // a tip that would sit outside the camera image (or behind it) cannot be the real tip: refuse it

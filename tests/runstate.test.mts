@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AUTO_PAUSE_NO_MARKERS_S, CHANGES, ago, autoPauseReason, onStart, pausedFor, planFor } from "../lib/runstate.ts";
+import { AUTO_PAUSE_NO_MARKERS_S, CHANGES, ago, autoPauseReason, explainStartError, onStart, pausedFor, planFor } from "../lib/runstate.ts";
 
 const T = Date.UTC(2026, 10, 23, 15);
 const at = (minAgo: number) => new Date(T - minAgo * 60000).toISOString();
@@ -44,4 +44,29 @@ test("calibration age in words", () => {
   assert.equal(ago(at(12), T), "12 min ago");
   assert.equal(ago(at(150), T), "3 h ago");
   assert.equal(ago(at(3 * 1440), T), "3 days ago");
+});
+
+test("a failed start says why: blocked, no camera, camera in use, the engine, anything else", () => {
+  const dom = (name: string, message = "") => Object.assign(new Error(message), { name });
+  for (const n of ["NotAllowedError", "SecurityError"]) {
+    const e = explainStartError("camera", dom(n));
+    assert.equal(e.title, "The camera is blocked");
+    assert.match(e.text, /browser's settings/);
+  }
+  for (const n of ["NotFoundError", "OverconstrainedError"]) assert.match(explainStartError("camera", dom(n)).text, /no back camera/);
+  for (const n of ["NotReadableError", "AbortError"]) assert.match(explainStartError("camera", dom(n)).text, /Another app is using the camera\. Close it and try again/);
+  // a DOMException-like object, not an Error
+  assert.equal(explainStartError("camera", { name: "NotAllowedError", message: "denied" }).title, "The camera is blocked");
+
+  const engine = explainStartError("engine", new Error("nav_core ABI 5, expected 6"));
+  assert.equal(engine.title, "The engine did not load");
+  assert.equal(engine.text, "nav_core ABI 5, expected 6. Check the connection, then close the app and open it again.");
+  assert.equal(explainStartError("engine", new Error("Failed to fetch.")).text, "Failed to fetch. Check the connection, then close the app and open it again.");
+  assert.equal(explainStartError("engine", undefined).text, "Check the connection, then close the app and open it again.");
+  // the engine stage wins even when the error has a camera-like name
+  assert.equal(explainStartError("engine", dom("NotAllowedError", "x")).title, "The engine did not load");
+
+  assert.equal(explainStartError("camera", new Error("video.play failed")).text, "video.play failed");
+  assert.equal(explainStartError("camera", "odd").text, "odd");
+  assert.equal(explainStartError("camera", null).text, "Try again.");
 });
