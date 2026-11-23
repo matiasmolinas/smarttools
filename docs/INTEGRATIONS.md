@@ -9,6 +9,26 @@ The three "Platform" demos in the gallery are still illustrations: they run the 
 card, the gatekeeper verdict and the agentvcs record are drawn by the demo (`lib/gallery/scenarios.ts`,
 `lib/sim.ts`). The modules below are real and tested.
 
+## Update (2026-11-23): who wrote a recipe, and its Checks answered live
+
+A recipe now says who wrote it, and the plan it makes keeps it. Then the phone works it step by step.
+
+- **Authorship and review.** A recipe names its author in its front matter (`author: ai | expert | manual`, or
+  an agent's `origin.platform`). When it names nobody, it is treated as written by an AI. The gate sends an AI's
+  recipe to a person: in `/memory` the review box says who wrote it, and the plan keeps when it was reviewed.
+- **The recipe travels with the plan.** The plan keeps the recipe's id and its Markdown (`plan.recipe`), so the
+  phone has every step and every Check, offline.
+- **Checks answered live.** On `/hud`, each finished hole shows a card with its Check answered by the engine:
+  green (pass, goes by itself), red (fail, stays until OK), or amber (words the engine cannot measure: Yes / No).
+  The steps that are not holes ("Clamp the board") come up as a sheet, Done or Skip. The answers are kept with
+  the job (`confirmations`); the hole Checks are recomputed from the hole records, never stored. `/memory` lists
+  each job's Checks, step by step.
+
+`lib/recipe.ts` (`checkHole`, `dueManual`, `checkJob`, `tallySoFar`), `lib/jobrecord.ts` (`confirmations`),
+`lib/tracker.ts` (`onHoleDone`, `confirmStep`). Tests: `tests/livechecks.test.mts`, `tests/native.test.mts`.
+
+**Still to do:** the agent that writes recipes, and sending a job's Checks back to it.
+
 ## Update (2026-11-23): the part SmartTools uses is now native
 
 The first decision (below) was to keep each project upstream and implement only its file format here. Working

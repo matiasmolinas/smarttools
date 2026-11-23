@@ -10,7 +10,7 @@
 //   REJECTED     breaks the contract: stop, with the reasons
 
 import { validatePlan, type Plan } from "./plan.ts";
-import { bindCheck, drillOf, parseRecipe, planFromRecipe, type Recipe } from "./recipe.ts";
+import { bindCheck, declaredAuthor, drillOf, parseRecipe, planFromRecipe, type Recipe } from "./recipe.ts";
 
 export type Verdict = "FAST_TRACK" | "ESCALATE" | "REJECTED";
 
@@ -25,18 +25,26 @@ export interface RecipeGate {
   plan?: Plan;
   /** steps the person confirms on the phone (no measurement answers them) */
   manual: string[];
+  /** who wrote it: the caller's word, else what the recipe declares, else an AI */
+  author: Plan["author"];
+  /** false when nobody was named (neither the caller nor the recipe): it is then treated as written by an AI */
+  declared: boolean;
 }
 
-/** Gate a recipe (its Markdown). A plan comes out only when it is not rejected. */
-export function gateRecipe(md: string, author: Plan["author"] = { kind: "expert" }, now?: string): RecipeGate {
+/** Gate a recipe (its Markdown). A plan comes out only when it is not rejected; it carries the recipe as given.
+ * author: the caller's decision; omitted, the recipe's own declaration counts, and when in doubt it is an AI's. */
+export function gateRecipe(md: string, author?: Plan["author"], now?: string): RecipeGate {
   let recipe: Recipe;
   try {
     recipe = parseRecipe(md);
   } catch (e) {
-    return { verdict: "REJECTED", reasons: [(e as Error).message], manual: [] };
+    return { verdict: "REJECTED", reasons: [(e as Error).message], manual: [], author: author ?? { kind: "ai" }, declared: !!author };
   }
+  const said = author ? null : declaredAuthor(recipe);
+  const by: Plan["author"] = author ?? (said ? { kind: said.kind, ...(said.name ? { name: said.name } : {}) } : { kind: "ai" });
+  const declared = !!(author || said);
   const reject: string[] = [], escalate: string[] = [], manual: string[] = [];
-  const plan = planFromRecipe(recipe, author, now);
+  const plan: Plan = { ...planFromRecipe(recipe, by, now), recipe: { id: recipe.id, md } };
   const drills = recipe.statements.filter((s) => drillOf(s.do));
   // a step that looks like a hole but does not read as one would be silently skipped: refuse it instead
   for (const s of recipe.statements) if (/^\s*drill\b/i.test(s.do) && !drillOf(s.do)) reject.push(`#${s.id}: "${s.do}" is not a hole the engine can read (Drill D1: Ø6 mm at (x, y) mm, 20 mm deep)`);
@@ -60,9 +68,10 @@ export function gateRecipe(md: string, author: Plan["author"] = { kind: "expert"
         escalate.push(`#${s.id}: angle under ${m.maxDeg}° is outside what the engine checks well (${CHECK_BAND.angleDeg[0]}° to ${CHECK_BAND.angleDeg[1]}°)`);
     }
   }
-  if (author.kind === "ai") escalate.push("written by an AI: a person reviews it before the first hole");
-  if (reject.length) return { verdict: "REJECTED", reasons: reject, recipe, manual };
-  return { verdict: escalate.length ? "ESCALATE" : "FAST_TRACK", reasons: escalate, recipe, plan, manual };
+  if (!declared) escalate.push("nobody is named as its author: treated as written by an AI, a person reviews it before the first hole");
+  else if (by.kind === "ai") escalate.push(`written by an AI${said ? ` (${said.why})` : ""}: a person reviews it before the first hole`);
+  if (reject.length) return { verdict: "REJECTED", reasons: reject, recipe, manual, author: by, declared };
+  return { verdict: escalate.length ? "ESCALATE" : "FAST_TRACK", reasons: escalate, recipe, plan, manual, author: by, declared };
 }
 
 // ---------------- change sets of this repository ----------------

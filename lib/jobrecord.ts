@@ -10,7 +10,7 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.13";
+export const APP_VERSION = "0.0.14";
 
 /** What runs, for the screen: "SmartTools 0.0.13 · build abc1234 · engine ABI 6". An empty build reads "dev". */
 export function versionLine(build: string | undefined, abi: number = ENGINE_ABI, app: string = APP_VERSION): string {
@@ -23,6 +23,13 @@ export interface HoleRecord extends ScrewRecord {
   score: number | null;
 }
 
+/** The person's answer to a recipe step the engine cannot measure. id: the statement id. */
+export interface Confirmation {
+  id: string;
+  ok: boolean;
+  at: string;
+}
+
 export interface JobRecord {
   kind: typeof JOB_KIND;
   v: typeof JOB_VERSION;
@@ -33,6 +40,8 @@ export interface JobRecord {
   plan: Plan;
   report: JobReport;
   holes: HoleRecord[];
+  /** the person's answers to the recipe's steps the engine cannot measure (hole Checks are recomputed, not kept) */
+  confirmations?: Confirmation[];
   /** what produced the measurements: the ledger's manifest is built from this */
   context: {
     app: string;
@@ -70,6 +79,7 @@ export class JobRecorder {
   private flags = new Map<string, string>();
   private firstT = new Map<string, number>();
   private done: HoleRecord[] = [];
+  private answers: Confirmation[] = [];
   private labelOf: (id: number) => string | undefined;
 
   /** wall: engine time (s) to wall-clock ms (defaults to "now"); t0: the engine time the job starts at;
@@ -84,6 +94,7 @@ export class JobRecorder {
     this.startedMs = Number.isFinite(resumedMs) ? resumedMs : o.t0 != null ? this.wall(o.t0) : Date.now();
     this.id = r?.id ?? globalThis.crypto?.randomUUID?.() ?? `job-${Date.now().toString(36)}`;
     if (r) this.done = resumableHoles(r, plan).map((h) => ({ ...h }));
+    if (r?.confirmations) for (const c of r.confirmations) this.confirm(c.id, c.ok, c.at);
   }
 
   /** Feed one snapshot (each one once). */
@@ -137,11 +148,21 @@ export class JobRecorder {
     return this.done;
   }
 
+  /** The person's answer to a recipe step (its statement id): one per step, a new answer replaces the old one. */
+  confirm(id: string, ok: boolean, at = new Date().toISOString()) {
+    this.answers = [...this.answers.filter((c) => c.id !== id), { id, ok, at }];
+  }
+
+  /** The answers so far, in the order they were last given. */
+  get confirmations(): readonly Confirmation[] {
+    return this.answers;
+  }
+
   finish(endT?: number, tracking?: TrackingSettings): JobRecord {
     const ended = endT == null ? Date.now() : this.wall(endT);
     const status = this.done.length >= this.plan.holes.length ? "completed" : "aborted";
     const report = buildReport(this.plan.name, this.done, this.plan.holes.length, iso(ended));
-    return { kind: JOB_KIND, v: JOB_VERSION, id: this.id, started: iso(this.startedMs), ended: iso(ended), status, plan: this.plan, report, holes: [...this.done], context: tracking ? { ...this.context, tracking } : this.context };
+    return { kind: JOB_KIND, v: JOB_VERSION, id: this.id, started: iso(this.startedMs), ended: iso(ended), status, plan: this.plan, report, holes: [...this.done], ...(this.answers.length ? { confirmations: this.answers.map((c) => ({ ...c })) } : {}), context: tracking ? { ...this.context, tracking } : this.context };
   }
 }
 

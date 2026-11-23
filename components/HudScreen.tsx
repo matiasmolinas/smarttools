@@ -6,9 +6,12 @@
 // Like the drill's trigger (lib/runstate.ts): Pause turns the camera and tracking off and keeps the calibration;
 // Stop (held 1 s) turns everything off, and the next start asks what changed and redoes only that.
 // Three loops run independently: camera frames (tracked in a worker), the engine clock (120 Hz), drawing.
-// For development only, /hud?sim=1 replaces the camera with the scene simulator (no button for it).
+// For development only, /hud?sim=1 replaces the camera with the scene simulator (no button for it); with
+// &recipe=1 it works the sheet's holes from a recipe, so the live Checks can be seen.
+// A plan that came from a recipe (plan.recipe): each finished hole shows its Check answered by the engine (a card
+// under the banner), and the steps that are not holes are confirmed by the person (the "Step" sheet).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BenchPanel from "./BenchPanel";
 import SetupWizard, { type Step as WizardStep } from "./SetupWizard";
 import type { SimState } from "@/lib/sim";
@@ -23,13 +26,16 @@ import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerC
 import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { BUILT_IN_PLANS, SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
 import { activePlanId, browserMemory, clearJobDraft, readJobDraft, setActivePlanId, writeJobDraft } from "@/lib/memory";
-import { draftAction, resumableHoles, versionLine } from "@/lib/jobrecord";
+import { draftAction, resumableHoles, versionLine, type HoleRecord } from "@/lib/jobrecord";
+import { bindCheck, checkHole, dueManual, recipeOfPlan, simulatorRecipePlan, tallySoFar, tallyText, type Recipe, type Statement, type StepCheck } from "@/lib/recipe";
 import { recordingFileName, sizeText } from "@/lib/recording";
 
 type WakeLockSentinelLike = { release: () => Promise<void> };
 type VideoFrameMeta = { captureTime?: number; expectedDisplayTime?: number };
 type VideoWithRvfc = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: VideoFrameMeta) => void) => number; cancelVideoFrameCallback?: (id: number) => void };
 type Status = "start" | "starting" | "running" | "paused" | "blocked";
+/** A finished hole's Check on screen; words: what the person confirms ("" when the engine answers all of it) */
+type CheckCardData = { hole: HoleRecord; check: StepCheck; words: string };
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -60,7 +66,21 @@ export default function HudScreen() {
   const [done, setDone] = useState(0);
   const [tol, setTol] = useState(0.5);
   // sheets: one at a time
-  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench" | "changed" | "resume" | "stop" | "recording">(null);
+  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench" | "changed" | "resume" | "stop" | "recording" | "step">(null);
+  // the recipe the plan came from (null: no Checks, no steps, nothing new on screen); read by the tracker's callbacks
+  const recipeRef = useRef<Recipe | null>(null);
+  const recipe = useMemo(() => recipeOfPlan(plan), [plan]);
+  // the Check card (not a sheet: tracking and Pause / Stop go on under it), and the holes waiting for it while it
+  // waits for a Yes / No answer
+  const [card, setCardState] = useState<CheckCardData | null>(null);
+  const cardRef = useRef<CheckCardData | null>(null);
+  const cardQueue = useRef<HoleRecord[]>([]);
+  const setCard = useCallback((c: CheckCardData | null) => {
+    cardRef.current = c;
+    setCardState(c);
+  }, []);
+  // the recipe step shown in the "step" sheet
+  const [step, setStep] = useState<Statement | null>(null);
   // working / paused / stopped, kept per device (lib/runstate.ts)
   const runRef = useRef<RunRecord | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>("sheet");
@@ -72,6 +92,10 @@ export default function HudScreen() {
   const recordingRef = useRef(0);
   const recSeq = useRef(0);
   const [recFile, setRecFile] = useState<{ file: File; canShare: boolean } | null>(null);
+  const recFileRef = useRef(false);
+  useEffect(() => {
+    recFileRef.current = !!recFile;
+  }, [recFile]);
   const recUrlRef = useRef<string | null>(null);
   const [pausedMin, setPausedMin] = useState(0);
   const [, tick] = useState(0);
@@ -133,6 +157,7 @@ export default function HudScreen() {
     const tr = await BrowserNav.create();
     tr.onMessage = say;
     tr.onFault = setFault;
+    tr.onHoleDone = (h) => showCard(h);
     if (simRef.current) {
       tr.onSimImage = (img) => {
         const c = (simCanvasRef.current ??= document.createElement("canvas"));
@@ -144,6 +169,13 @@ export default function HudScreen() {
       };
       const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
       tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
+      // ?recipe=1: the sheet's holes from a recipe, recorded (never saved) so the Check cards and the steps show
+      if (new URLSearchParams(window.location.search).get("recipe") === "1") {
+        const p = simulatorRecipePlan();
+        tr.recordInSimulator(p);
+        recipeRef.current = recipeOfPlan(p);
+        setPlanState(p);
+      }
     } else {
       setPhoneName(tr.phone.name);
       setTol(tr.tolDeg);
@@ -221,6 +253,7 @@ export default function HudScreen() {
     if (!simRef.current) tr?.forgetCalibrationSilently(); // frees the engine and the worker; stored calibrations stay, but are asked about
     runRef.current = writeRun("stopped");
     setSheet(null);
+    clearCards();
     setDraft(null);
     setDone(0);
     setStopped(true);
@@ -347,6 +380,8 @@ export default function HudScreen() {
           .catch(() => say("The unfinished job could not be saved"));
     }
     tr.setPlan(p);
+    recipeRef.current = recipeOfPlan(p);
+    clearCards();
     setPlanState(p);
     setActivePlanId(p.id === SHEET_PLAN.id ? null : p.id);
     if (announce) say(`Plan: ${p.name} · ${p.holes.length} holes`);
@@ -383,8 +418,50 @@ export default function HudScreen() {
     if (!rec) return say("No hole drilled yet");
     await browserMemory().saveJob(rec);
     if (!simRef.current) clearJobDraft();
+    clearCards();
     setDone(0);
     say(`Job saved · ${rec.report.verdict}`);
+  }
+
+  // ---------------- the recipe's Checks (only when the plan came from a recipe) ----------------
+  /** A finished hole's Check as a card, with the answers given so far; null when no step is that hole. */
+  function cardFor(h: HoleRecord): CheckCardData | null {
+    const r = recipeRef.current;
+    if (!r) return null;
+    const check = checkHole(r, h, trackerRef.current?.recorder?.confirmations);
+    if (!check) return null;
+    const s = r.statements.find((x) => x.id === check.id);
+    return { hole: h, check, words: s ? bindCheck(s.check).manual : "" };
+  }
+  /** A hole was finished: its card replaces the one shown, unless that one waits for a Yes / No (then it queues). */
+  function showCard(h: HoleRecord) {
+    if (!recipeRef.current) return;
+    if (cardRef.current?.check.outcome.status === "manual") return void cardQueue.current.push(h);
+    const c = cardFor(h);
+    if (!c) return;
+    setCard(c);
+    if (c.check.outcome.status === "fail") soundRef.current?.vibrate("alarm");
+  }
+  /** Yes / No on a card that asks: kept with the job, and the card shows the answered Check. */
+  function answerCard(ok: boolean) {
+    const cur = cardRef.current;
+    if (!cur) return;
+    trackerRef.current?.confirmStep(cur.check.id, ok);
+    const answered = cardFor(cur.hole);
+    setCard(answered);
+    const queued = cardQueue.current.splice(0);
+    if (queued.length && answered) say(`${answered.check.hole} ${answered.check.outcome.status === "pass" ? "✓" : "✗"}`); // the next hole's card replaces it
+    for (const h of queued) showCard(h);
+  }
+  function clearCards() {
+    cardQueue.current = [];
+    setCard(null);
+  }
+  /** Done / Skip on a step: answered either way (Skip is "no"), so it is not asked again. */
+  function answerStep(ok: boolean) {
+    if (step) trackerRef.current?.confirmStep(step.id, ok);
+    setStep(null);
+    setSheet((s) => (s === "step" ? null : s));
   }
 
   // on each start or Continue, once the engine runs: the setup when the drill is not calibrated, "What did you
@@ -439,6 +516,32 @@ export default function HudScreen() {
     const iv = setInterval(() => setDone(trackerRef.current?.recorder?.holes.length ?? 0), 500);
     return () => clearInterval(iv);
   }, []);
+
+  // a recipe step to confirm: decided from the job's data whenever nothing else is open (after the start decision,
+  // after each hole, after a sheet closes), so it waits its turn behind every other sheet and is never lost
+  useEffect(() => {
+    if (status !== "running") return;
+    const iv = setInterval(() => {
+      const r = recipeRef.current, rec = trackerRef.current?.recorder;
+      if (!r || !rec || !setupDecided.current || sheetRef.current !== null || draftRef.current || recFileRef.current || recordingRef.current) return;
+      const due = dueManual(
+        r,
+        rec.holes.map((h) => h.name),
+        rec.confirmations.map((c) => c.id),
+      )[0];
+      if (!due) return;
+      setStep(due);
+      setSheet((s) => (s === null ? "step" : s)); // never in place of another sheet
+    }, 500);
+    return () => clearInterval(iv);
+  }, [status]);
+
+  // a passed Check goes away after 5 s on screen (the time does not run in a pause or under a sheet)
+  useEffect(() => {
+    if (status !== "running" || sheet !== null || draft || card?.check.outcome.status !== "pass") return;
+    const t = setTimeout(() => cardRef.current === card && setCard(null), 5000);
+    return () => clearTimeout(t);
+  }, [card, status, sheet, draft, setCard]);
 
   // a recording not yet shared comes back as soon as no other sheet is open (after a stop, a setup, a menu)
   useEffect(() => {
@@ -663,9 +766,11 @@ export default function HudScreen() {
         </TopSheet>
       )}
 
-      {toast && (
-        <div className="pointer-events-none absolute inset-x-0 top-[max(8rem,calc(env(safe-area-inset-top)+7rem))] z-40 flex justify-center px-4">
-          <div className="rounded-2xl bg-black/75 px-5 py-2.5 text-lg font-medium text-white backdrop-blur-md">{toast}</div>
+      {/* under the banner: the Check card (while working, nothing else open), and the toast below it */}
+      {(toast || card) && (
+        <div className="pointer-events-none absolute inset-x-0 top-[max(8rem,calc(27vmin+0.5rem),calc(env(safe-area-inset-top)+7rem))] z-40 flex flex-col items-center gap-2 px-4">
+          {card && status === "running" && sheet === null && !draft && <CheckCard card={card} onOk={() => setCard(null)} onAnswer={answerCard} />}
+          {toast && <div className="rounded-2xl bg-black/75 px-5 py-2.5 text-lg font-medium text-white backdrop-blur-md">{toast}</div>}
         </div>
       )}
 
@@ -769,11 +874,26 @@ export default function HudScreen() {
             </TopSheet>
           )}
 
+          {sheet === "step" && step && (
+            <TopSheet title="Step">
+              <p className="text-2xl font-semibold leading-snug">{step.do}</p>
+              {step.check && <p className="mt-2 text-xl leading-snug text-white/80">Check: {step.check}</p>}
+              {step.because && <p className="mt-2 text-base text-white/50">{step.because}</p>}
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <BigButton strong onClick={() => answerStep(true)}>
+                  Done
+                </BigButton>
+                <BigButton onClick={() => answerStep(false)}>Skip</BigButton>
+              </div>
+            </TopSheet>
+          )}
+
           {sheet === "job" && !draft && (
             <TopSheet title="Job" onClose={() => setSheet(null)}>
               <p className="text-lg text-white/75">
                 Plan: <b className="text-white">{plan.name}</b> · {done} of {plan.holes.length} holes done
               </p>
+              {recipe && <JobChecks recipe={recipe} plan={plan} job={trackerRef.current?.jobSoFar() ?? null} />}
               <div className="mt-4 flex flex-col gap-3">
                 <BigButton onClick={nextPlan}>Change plan</BigButton>
                 <BigButton
@@ -902,6 +1022,63 @@ async function applyCameraLock(stream: MediaStream, lock: boolean): Promise<stri
   }
   const s = track.getSettings();
   return `${s.width}×${s.height} · ${Math.round(s.frameRate ?? 0)} fps · ${lockNote}`;
+}
+
+/** The Job sheet's recipe lines: who wrote it, and its Checks so far (holes not drilled yet are to do, not fails). */
+function JobChecks({ recipe, plan, job }: { recipe: Recipe; plan: Plan; job: ReturnType<BrowserNav["jobSoFar"]> }) {
+  const by = { ai: "an AI", expert: "an expert", manual: "hand", pointer: "the tool as a pointer" }[plan.author.kind];
+  return (
+    <>
+      <p className="mt-1 text-lg text-white/75">
+        Recipe by {by}
+        {plan.reviewed ? " · reviewed" : ""}
+      </p>
+      {job && <p className="mt-1 text-lg text-white/75">Checks: {tallyText(tallySoFar(recipe, job))}</p>}
+    </>
+  );
+}
+
+const CARD_STYLE = {
+  pass: { box: "border-[#3ee59b]", text: "text-[#3ee59b]", mark: "✓" },
+  fail: { box: "border-[#ff6b6b]", text: "text-[#ff6b6b]", mark: "✗" },
+  manual: { box: "border-[#ffb547]", text: "text-[#ffb547]", mark: "· confirm" },
+} as const;
+
+/** A finished hole's Check, readable at arm's length: pass (goes by itself), fail (until OK), or words for the
+ * person to confirm (until Yes / No). */
+function CheckCard({ card, onOk, onAnswer }: { card: CheckCardData; onOk: () => void; onAnswer: (ok: boolean) => void }) {
+  const { status, detail } = card.check.outcome;
+  const st = CARD_STYLE[status];
+  const measured = detail
+    .split(" · ")
+    .filter((p) => !p.startsWith("confirm: "))
+    .join(" · ");
+  return (
+    <div role="status" className={`pointer-events-auto w-full max-w-md rounded-2xl border-2 bg-black/85 px-5 py-3 backdrop-blur-md ${st.box}`}>
+      <div className={`text-2xl font-semibold ${st.text}`}>
+        {card.check.hole ?? card.check.id} {st.mark}
+      </div>
+      {status === "manual" ? (
+        <>
+          <p className="mt-1 text-xl leading-snug text-white">{card.words}</p>
+          {measured && <p className="mt-1 text-base text-white/55">{measured}</p>}
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <BigButton strong onClick={() => onAnswer(true)}>
+              Yes
+            </BigButton>
+            <BigButton onClick={() => onAnswer(false)}>No</BigButton>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-xl leading-snug text-white/85">{detail}</p>
+      )}
+      {status === "fail" && (
+        <div className="mt-3 flex">
+          <BigButton onClick={onOk}>OK</BigButton>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TopSheet({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {

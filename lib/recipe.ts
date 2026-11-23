@@ -17,8 +17,8 @@
 // Learning pieces on a frontier model, verifying them with a second one, routing and the agent hooks stay in
 // athos: they need a computer and an AI agent.
 
-import { DEFAULT_HOLE, PLAN_KIND, PLAN_VERSION, SHEET_ID, type Plan, type PlanHole } from "./plan.ts";
-import type { HoleRecord, JobRecord } from "./jobrecord.ts";
+import { DEFAULT_HOLE, PLAN_KIND, PLAN_VERSION, SHEET_ID, SHEET_PLAN, type Plan, type PlanHole } from "./plan.ts";
+import type { Confirmation, HoleRecord, JobRecord } from "./jobrecord.ts";
 
 export interface Statement {
   id: string;
@@ -47,9 +47,16 @@ export function parseRecipe(md: string): Recipe {
   const meta: Record<string, string> = {};
   let i = 0;
   if (lines[0]?.trim() === "---") {
+    let parent = ""; // a key with no value on its line: its indented keys follow ("origin:\n  platform: x" → "origin.platform")
     for (i = 1; i < lines.length && lines[i].trim() !== "---"; i++) {
-      const m = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[i]); // nested keys (indented) are not needed here
-      if (m) meta[m[1]] = unquote(m[2].trim());
+      const m = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[i]);
+      if (m) {
+        meta[m[1]] = unquote(m[2].trim());
+        parent = m[2].trim() ? "" : m[1];
+        continue;
+      }
+      const n = /^\s+([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[i]); // one level of nesting, no deeper
+      if (n && parent) meta[`${parent}.${n[1]}`] = unquote(n[2].trim());
     }
     i++;
   }
@@ -82,6 +89,23 @@ export function parseRecipe(md: string): Recipe {
   }
   if (!statements.length) throw new Error("not a recipe: no statements (## #id)");
   return { id: meta.id ?? slug(title), title, when: meta.when ?? "", meta, statements };
+}
+
+export interface DeclaredAuthor {
+  kind: "ai" | "expert" | "manual";
+  name?: string;
+  why: string;
+}
+
+/** Who the recipe says wrote it (author:, author_name:, or an agent's origin.platform); null when it says nothing. */
+export function declaredAuthor(r: Recipe): DeclaredAuthor | null {
+  const kind = r.meta.author?.trim().toLowerCase();
+  const name = r.meta.author_name?.trim() || undefined;
+  const why = { ai: "the recipe says an AI wrote it", expert: "the recipe says an expert wrote it", manual: "the recipe says a person wrote it by hand" };
+  if (kind === "ai" || kind === "expert" || kind === "manual") return { kind, ...(name ? { name } : {}), why: why[kind] };
+  const platform = r.meta["origin.platform"]?.trim();
+  if (platform) return { kind: "ai", why: `learned by an agent (${platform})` };
+  return null;
 }
 
 const unquote = (s: string) => (/^".*"$/.test(s) ? JSON.parse(s) : /^'.*'$/.test(s) ? s.slice(1, -1) : s);
@@ -191,7 +215,9 @@ export function recipeFromPlan(plan: Plan, o: { check?: string; because?: (h: Pl
       `**Links:** ${next ? `[[#${sid(next)}]]` : ""}`.trimEnd(),
     ].join("\n");
   });
-  const front = ["---", `id: ${id}`, `title: ${plan.name}`, `when: ${JSON.stringify(o.when ?? `drilling the ${plan.holes.length} holes of "${plan.name}" on the SmartTools sheet`)}`, `projects: [smarttools]`, "---"].join("\n");
+  // a plan marked with the tool as a pointer was made by a person's hand
+  const author = [`author: ${plan.author.kind === "pointer" ? "manual" : plan.author.kind}`, ...(plan.author.name ? [`author_name: ${plan.author.name}`] : [])];
+  const front = ["---", `id: ${id}`, `title: ${plan.name}`, `when: ${JSON.stringify(o.when ?? `drilling the ${plan.holes.length} holes of "${plan.name}" on the SmartTools sheet`)}`, ...author, `projects: [smarttools]`, "---"].join("\n");
   return `${front}\n\n${body.join("\n\n")}\n`;
 }
 
@@ -208,14 +234,123 @@ export function recipeFromJob(job: JobRecord, check = DEFAULT_CHECK): string {
   });
 }
 
-/** Every step of a recipe against a finished job: holes answered by their records, other steps for the person. */
-export function checkJob(r: Recipe, job: JobRecord): { id: string; do: string; outcome: Outcome }[] {
-  return r.statements.map((s) => {
-    const b = bindCheck(s.check);
+// ---------------- Checks while a job is worked ----------------
+
+/** One step of a recipe, answered: by the engine's measurements (a hole), by the person, or still open. */
+export interface StepCheck {
+  /** the statement id */
+  id: string;
+  do: string;
+  /** the hole's label, for a Drill step */
+  hole?: string;
+  outcome: Outcome;
+}
+
+const answerOf = (id: string, confirmations?: readonly Confirmation[]) => confirmations?.find((c) => c.id === id);
+
+/** A finished hole against its step: the statement whose Drill label is the hole's name (null when none is).
+ * A Check with words the engine cannot measure stays "manual" until the person answers it: yes, and the
+ * measurements decide; no, and it fails. */
+export function checkHole(r: Recipe, h: HoleRecord, confirmations?: readonly Confirmation[]): StepCheck | null {
+  const s = r.statements.find((x) => drillOf(x.do)?.label === h.name);
+  if (!s) return null;
+  const b = bindCheck(s.check);
+  const out = evaluate(b, h);
+  const a = b.manual ? answerOf(s.id, confirmations) : undefined;
+  const step = { id: s.id, do: s.do, hole: h.name };
+  if (out.status !== "manual" || !a) return { ...step, outcome: out };
+  // what the measurements said, without the words left for the person
+  const seen = evaluate({ measures: b.measures, manual: "" }, h).detail;
+  if (!a.ok) return { ...step, outcome: { status: "fail", detail: [seen, `the person said no: ${b.manual}`].filter(Boolean).join(" · ") } };
+  return { ...step, outcome: { status: "pass", detail: [seen, `confirmed: ${b.manual}`].filter(Boolean).join(" · ") } };
+}
+
+/** The steps for the person to confirm now, in order: not holes, not yet answered, and every Drill step written
+ * before them done (before the first hole: the steps written before it). */
+export function dueManual(r: Recipe, doneHoles: readonly string[], confirmed: readonly string[]): Statement[] {
+  const out: Statement[] = [];
+  let open = false; // an earlier hole is not done yet: nothing after it is due
+  for (const s of r.statements) {
     const hole = drillOf(s.do);
-    if (!hole) return { id: s.id, do: s.do, outcome: { status: "manual", detail: s.check ? `confirm: ${s.check}` : "confirm it was done" } };
+    if (hole) {
+      if (!doneHoles.includes(hole.label)) open = true;
+      continue;
+    }
+    if (open) break;
+    if (!confirmed.includes(s.id)) out.push(s);
+  }
+  return out;
+}
+
+/** Every step of a recipe against a job (finished or so far): holes answered by their records (a hole not in the
+ * job fails, "not drilled"), other steps by the person's answers in job.confirmations, "manual" when unanswered. */
+export function checkJob(r: Recipe, job: JobRecord): StepCheck[] {
+  const conf = job.confirmations;
+  return r.statements.map((s) => {
+    const hole = drillOf(s.do);
+    if (!hole) {
+      const a = answerOf(s.id, conf);
+      const words = s.check ? `: ${s.check}` : "";
+      const outcome: Outcome = !a ? { status: "manual", detail: s.check ? `confirm: ${s.check}` : "confirm it was done" } : a.ok ? { status: "pass", detail: `confirmed${words}` } : { status: "fail", detail: `the person said no${words}` };
+      return { id: s.id, do: s.do, outcome };
+    }
     const rec = job.holes.find((h) => h.name === hole.label);
-    if (!rec) return { id: s.id, do: s.do, outcome: { status: "fail", detail: "not drilled" } };
-    return { id: s.id, do: s.do, outcome: evaluate(b, rec) };
+    if (!rec) return { id: s.id, do: s.do, hole: hole.label, outcome: { status: "fail", detail: "not drilled" } };
+    return checkHole(r, rec, conf) ?? { id: s.id, do: s.do, hole: hole.label, outcome: evaluate(bindCheck(s.check), rec) };
   });
+}
+
+/** How many steps passed, failed and wait for the person. */
+export function tallyChecks(list: readonly StepCheck[]): { pass: number; fail: number; manual: number } {
+  const t = { pass: 0, fail: 0, manual: 0 };
+  for (const c of list) t[c.outcome.status]++;
+  return t;
+}
+
+export interface Tally {
+  pass: number;
+  fail: number;
+  manual: number;
+  /** holes not drilled yet, in a job still in progress */
+  todo: number;
+}
+
+/** The tally of a job still in progress: a hole not drilled yet is still to do, not a fail (in a finished job,
+ * tallyChecks(checkJob(...)) counts it as failed). */
+export function tallySoFar(r: Recipe, job: JobRecord): Tally {
+  const drilled = new Set(job.holes.map((h) => h.name));
+  const t: Tally = { pass: 0, fail: 0, manual: 0, todo: 0 };
+  for (const c of checkJob(r, job)) {
+    if (c.hole && !drilled.has(c.hole)) t.todo++;
+    else t[c.outcome.status]++;
+  }
+  return t;
+}
+
+/** A tally in words: "2 pass · 1 fail · 1 to confirm · 1 to drill" (pass and fail always, the others when not 0). */
+export function tallyText(t: { pass: number; fail: number; manual: number; todo?: number }): string {
+  return [`${t.pass} pass`, `${t.fail} fail`, ...(t.manual ? [`${t.manual} to confirm`] : []), ...(t.todo ? [`${t.todo} to drill`] : [])].join(" · ");
+}
+
+/** Development only (/hud?sim=1&recipe=1): the sheet's plan (A1-A3, the simulator's scene) with a recipe of its
+ * own, so the three kinds of Check card can be seen: a step to confirm before the first hole, A2's Check with words
+ * the engine cannot measure, and A1 / A3 answered by the measurements alone. */
+export function simulatorRecipePlan(): Plan {
+  const plan: Plan = { ...SHEET_PLAN, author: { kind: "ai" }, reviewed: SHEET_PLAN.created };
+  const clamp = ["## #clamp", "**When:** Before the first hole", "**Do:** Clamp the work to the bench", "**Check:** the work does not move when pushed", "**Because:** a part that moves spoils every hole", "**Links:** [[#a1]]"].join("\n");
+  const md = recipeFromPlan(plan, { id: "sheet-targets-sim" })
+    .replace("\n## #a1\n", `\n${clamp}\n\n## #a1\n`)
+    .replace(/(## #a2\n[\s\S]*?\*\*Check:\*\* )[^\n]*/, "$1depth within 0.5 mm and angle under 1° and flush with the surface");
+  return { ...plan, recipe: { id: "sheet-targets-sim", md } };
+}
+
+/** The recipe a plan came from (plan.recipe), parsed; null when it has none or it cannot be read. Never throws. */
+export function recipeOfPlan(plan: Plan): Recipe | null {
+  const md = plan.recipe?.md;
+  if (typeof md !== "string") return null;
+  try {
+    return parseRecipe(md);
+  } catch {
+    return null;
+  }
 }

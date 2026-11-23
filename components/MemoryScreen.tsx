@@ -12,7 +12,7 @@ import { activePlanId, browserMemory, setActivePlanId, type Row } from "@/lib/me
 import { reportHtml } from "@/lib/report";
 import { jobLedger } from "@/lib/ledger";
 import { blame, summarize, verifyBundle, type Bundle } from "@/lib/vcs";
-import { recipeFromJob, recipeFromPlan } from "@/lib/recipe";
+import { checkJob, recipeFromJob, recipeFromPlan, recipeOfPlan, tallyChecks, tallyText, type Recipe } from "@/lib/recipe";
 import { gateRecipe, type RecipeGate } from "@/lib/gate";
 import { PHASES, type BenchRun } from "@/lib/bench";
 
@@ -78,7 +78,8 @@ export default function MemoryScreen() {
   };
 
   const importRecipe = async (f: File) => {
-    const g = gateRecipe(await f.text(), { kind: "expert", name: f.name.replace(/\.md$/i, "") });
+    // no author passed: the recipe's own declaration counts, and a recipe that names nobody is treated as an AI's
+    const g = gateRecipe(await f.text());
     setPending(null);
     if (g.verdict === "REJECTED" || !g.plan) return setMsg({ ok: false, text: `Recipe refused: ${g.reasons.join("; ")}.` });
     if (g.verdict === "ESCALATE") {
@@ -87,11 +88,24 @@ export default function MemoryScreen() {
     }
     await saveRecipePlan(g);
   };
-  const saveRecipePlan = async (g: RecipeGate) => {
-    const r = await browserMemory().savePlan(g.plan);
+  /** reviewed: a person approved an escalated recipe; the plan keeps when */
+  const saveRecipePlan = async (g: RecipeGate, reviewed = false) => {
+    const r = await browserMemory().savePlan(reviewed && g.plan ? { ...g.plan, reviewed: new Date().toISOString() } : g.plan);
     setPending(null);
     setMsg(r.ok ? { ok: true, text: `Recipe "${r.plan.name}" saved as a plan (${r.plan.holes.length} holes)${g.manual.length ? `. Steps to do by hand: ${g.manual.join("; ")}` : ""}.` } : { ok: false, text: `Not saved: ${r.errors.join("; ")}.` });
     void load();
+  };
+  /** The person vouches for an undeclared recipe: gate it again as an expert's. */
+  const trustRecipe = async (g: RecipeGate) => {
+    const md = g.plan?.recipe?.md;
+    if (!md) return;
+    const again = gateRecipe(md, { kind: "expert" });
+    if (again.verdict === "REJECTED" || !again.plan) {
+      setPending(null);
+      return setMsg({ ok: false, text: `Recipe refused: ${again.reasons.join("; ")}.` });
+    }
+    if (again.verdict === "ESCALATE") return setPending(again);
+    await saveRecipePlan(again);
   };
   const checkLedger = async (f: File) => {
     try {
@@ -132,15 +146,21 @@ export default function MemoryScreen() {
       {pending && (
         <div className="rounded-2xl border border-[var(--amber)]/50 p-5 text-sm">
           <p className="font-semibold text-[var(--amber)]">Review this recipe before it becomes a plan: &ldquo;{pending.plan?.name}&rdquo;</p>
+          <p className="mt-2 text-white/80">{writtenBy(pending)}</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-white/70">
             {pending.reasons.map((r) => (
               <li key={r}>{r}</li>
             ))}
           </ul>
-          <div className="mt-4 flex gap-2">
-            <button className="rounded-full bg-[var(--amber)] px-3 py-1 text-xs font-semibold text-black" onClick={() => void saveRecipePlan(pending)}>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="rounded-full bg-[var(--amber)] px-3 py-1 text-xs font-semibold text-black" onClick={() => void saveRecipePlan(pending, true)}>
               I reviewed it: save the plan
             </button>
+            {!pending.declared && (
+              <button className="rounded-full border border-white/20 px-3 py-1 text-xs" onClick={() => void trustRecipe(pending)}>
+                A person I trust wrote it
+              </button>
+            )}
             <button className="rounded-full border border-white/20 px-3 py-1 text-xs" onClick={() => setPending(null)}>
               Drop it
             </button>
@@ -178,6 +198,8 @@ export default function MemoryScreen() {
                 </div>
                 <p className="mt-1 font-mono text-[11px] text-white/45">
                   {p.holes.length} holes · by {p.author.kind}
+                  {p.reviewed ? " · reviewed" : ""}
+                  {p.recipe ? " · recipe" : ""}
                   {builtIn ? " · built in" : ` · ${when(r.updated)}${r.synced ? "" : " · not synced"}`}
                 </p>
                 <p className="mt-2 text-xs text-white/55">{p.holes.map((h) => `${h.label} ${h.depthMm} mm`).join(" · ")}</p>
@@ -282,6 +304,7 @@ export default function MemoryScreen() {
                 <p className="mt-1 font-mono text-[11px] text-white/50">
                   {j.holes.map((h) => `${h.name} ${h.seatedMm.toFixed(1)}/${h.plannedMm} mm ${h.maxAngleDeg.toFixed(2)}°`).join(" · ")}
                 </p>
+                <JobChecks job={j} recipe={recipeOfPlan(j.plan)} />
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button className={btn} onClick={() => download(`${slug(j.plan.name)}-report.html`, reportHtml(j.report, j.context.source), "text/html")}>
                     Report (HTML)
@@ -312,6 +335,33 @@ export default function MemoryScreen() {
       </section>
     </div>
   );
+}
+
+const CHECK_MARK = { pass: { mark: "✓", cls: "text-[var(--green)]" }, fail: { mark: "✗", cls: "text-[#ff8a8a]" }, manual: { mark: "?", cls: "text-[var(--amber)]" } } as const;
+
+/** A job whose plan came from a recipe: its Checks, one per step (a hole not drilled fails: the job is finished). */
+function JobChecks({ job, recipe }: { job: JobRecord; recipe: Recipe | null }) {
+  if (!recipe) return null;
+  const checks = checkJob(recipe, job);
+  return (
+    <div className="mt-2 font-mono text-[11px] text-white/50">
+      <p className="text-white/70">Checks: {tallyText(tallyChecks(checks))}</p>
+      <ul className="mt-1 space-y-0.5">
+        {checks.map((c) => (
+          <li key={c.id}>
+            <span className={CHECK_MARK[c.outcome.status].cls}>{CHECK_MARK[c.outcome.status].mark}</span> {c.do} · {c.outcome.detail}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Who wrote a recipe the gate escalated, for the review box. */
+function writtenBy(g: RecipeGate): string {
+  if (!g.declared) return "Author not stated: treated as written by an AI.";
+  const who = g.author.kind === "ai" ? "an AI" : g.author.kind === "expert" ? "an expert" : "a person, by hand";
+  return `Written by ${who}${g.author.name ? ` (${g.author.name})` : ""}.`;
 }
 
 const METRICS = [
