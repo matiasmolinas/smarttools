@@ -24,7 +24,7 @@ import type { DetectorKind } from "./detectors";
 import { encodeRecording } from "./recording";
 import { compose, fromPose, inverse } from "./xform";
 import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
-import { JobRecorder, defaultContext, type JobRecord } from "./jobrecord";
+import { JobRecorder, defaultContext, type JobRecord, type TrackingSettings } from "./jobrecord";
 
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
 /** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
@@ -106,6 +106,8 @@ export class BrowserNav {
   /** the marker detector: js-aruco2 (default) or the Rust one; compare runs both on each frame */
   detector: DetectorKind = readDetector();
   compare = false;
+  /** the camera options in use (set by the screen that opened the camera) */
+  cameraOpts = { fps60: false, lock: false };
   private videoSize = { w: 0, h: 0 };
   private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number; altMs: number; altMarkers: number; altCornerPx: number; altKind: string }[] = [];
   private droppedLog: { t: number; n: number }[] = [];
@@ -419,11 +421,15 @@ export class BrowserNav {
       { wall, t0 },
     );
   }
+  /** How the phone is tracking now: recorded with each job, so jobs can be compared by setting. */
+  trackingSettings(): TrackingSettings {
+    return { detector: this.detector, filter: !this.filterOn ? "off" : this.filterAtTool ? "tip" : "camera", detectPx: this.maxSide, camera: { ...this.cameraOpts } };
+  }
   /** End the job: its record (null if no hole was drilled), and a fresh job on the same plan. */
   finishJob(): JobRecord | null {
     const r = this.recorder, s = this.session;
     if (!r || !s) return null;
-    const rec = r.holes.length ? r.finish(performance.now() / 1000) : null;
+    const rec = r.holes.length ? r.finish(performance.now() / 1000, this.trackingSettings()) : null;
     s.engine.resetJob();
     this.startJob(performance.now() / 1000);
     return rec;

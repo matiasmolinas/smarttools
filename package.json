@@ -11,7 +11,8 @@
     "engine:test": "cd engine && cargo test && cd .. && node --no-warnings scripts/engine-parity.mts",
     "test:unit": "node --no-warnings --test tests/*.test.mts",
     "test:e2e": "node --no-warnings scripts/e2e.mts",
-    "test": "npm run engine:test && npm run test:unit && npm run test:e2e -- --quick"
+    "test": "npm run engine:test && npm run test:unit && npm run test:e2e -- --quick",
+    "gate": "node --no-warnings scripts/gate.mts"
   },
   "dependencies": {
     "@noble/hashes": "2.0.1",

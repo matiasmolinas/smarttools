@@ -184,6 +184,7 @@ export default function HudScreen() {
   }
   async function finishJob() {
     const tr = trackerRef.current;
+    if (tr) tr.cameraOpts = { ...camOptsRef.current };
     const rec = tr?.finishJob();
     if (!rec) return say("No hole drilled yet");
     await browserMemory().saveJob(rec);

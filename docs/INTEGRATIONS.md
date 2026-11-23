@@ -5,9 +5,43 @@ SmartTools sits next to three open-source projects:
 - contract-gatekeeper (evolve safely);
 - agentvcs (learn in the field).
 
-Today none of them is wired in. The three "Platform" demos are illustrations: they run the real engine, but the
-athos step card, the gatekeeper verdict and the agentvcs record are drawn by the demo (`lib/gallery/scenarios.ts`,
-`lib/sim.ts`).
+The three "Platform" demos in the gallery are still illustrations: they run the real engine, but the athos step
+card, the gatekeeper verdict and the agentvcs record are drawn by the demo (`lib/gallery/scenarios.ts`,
+`lib/sim.ts`). The modules below are real and tested.
+
+## Update (2026-11-23): the part SmartTools uses is now native
+
+The first decision (below) was to keep each project upstream and implement only its file format here. Working
+on the phone showed that the formats alone are not enough. The phone has to answer a recipe's Checks, compare its
+own jobs, and refuse a bad plan, all offline. So the part SmartTools uses is now rewritten natively, in TypeScript,
+for this project. Each project still lives upstream for its own users, so nothing here is a fork of their code:
+these modules implement their formats and their rules.
+
+| | Native module | What it does here | Tests |
+|---|---|---|---|
+| athos | `lib/recipe.ts` | Reads pieces (front matter, `## #statement`, When / Do / Check / Because / Links). `bindCheck` turns a Check's words into engine measurements (depth within, angle under, score at least, no alarm) and leaves the rest for the person. `Drill D1: Ø6 mm at (0, 60) mm, 20 mm deep` steps become a plan, and a plan or a finished job is written back as a recipe. `checkJob` answers every step with the job's records. | `tests/native.test.mts`, `tests/fixtures/athos/`; the pieces in the local athos store when the CLI is installed |
+| agentvcs | `lib/ledger.ts`, `lib/vcs.ts` | Writes each job as a ledger, with the tracking settings (detector, filter, detection size, camera) in the manifest. `verifyBundle` checks hashes, the chain, manifest ids and entry order. `blame` ranks which setting goes with a change in a metric. `bisect` finds the first bad job in time order and what changed from the last good one. | `tests/native.test.mts`, `tests/f1.test.mts` (conformance hashes; `agentvcs verify` with `AGENTVCS_BIN`) |
+| contract-gatekeeper | `lib/gate.ts`, `scripts/gate.mts`, `gate.config.json` | Its three verdicts in two places. **Recipes:** FAST_TRACK, ESCALATE (a Check the engine does not measure, a tolerance outside what it checks well, an AI author: a person reviews it), or REJECTED (an invalid plan, a Drill step it cannot read, no hole at all). **Change sets:** `npm run gate` sorts the branch's files into capsules. The engine, tracking and scene escalate to the engine tests and the end-to-end run. Rust changed without a rebuilt WebAssembly, or an ABI mismatch, is rejected. | `tests/native.test.mts` (also: every file in the repository falls in a capsule) |
+
+**In the app (`/memory`):**
+- import a recipe through the gate, with a review step when it escalates;
+- download any plan or job as a recipe;
+- verify a ledger file;
+- compare jobs by tracking setting (blame on depth error and maximum angle).
+
+**Still upstream:**
+- athos: learning, verification by a second model, the router and the agent hooks;
+- agentvcs: the store, diff, merge and the MCP server;
+- gatekeeper: the general tool for any repository.
+
+All of these need a computer or an AI agent, not a phone.
+
+**Still to do:**
+- work a recipe step by step on the phone, with each Check passing live;
+- one capsule per tool when the saw starts;
+- the gate in CI.
+
+The analysis that led to the first decision follows, unchanged.
 
 This document decides, for each one, how it should come in:
 - **A. Use from its repository:** a pinned dependency, a CLI, or a file format.

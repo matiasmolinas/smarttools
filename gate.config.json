@@ -1,0 +1,16 @@
+{
+  "$comment": "scripts/gate.mts: the verdict for a change set (lib/gate.ts). ESCALATE capsules need the engine tests and the end-to-end run before merging; FAST_TRACK ones the unit tests and the build. A file in no capsule escalates.",
+  "capsules": [
+    { "name": "engine", "paths": ["engine/**", "public/engine/**", "lib/engine.ts"], "verdict": "ESCALATE", "why": "the engine's core, its gate and safety rules, and the ABI the phone calls" },
+    { "name": "tracking", "paths": ["lib/markertracker.ts", "lib/detectors.ts", "lib/subpix.ts", "lib/pose.ts", "lib/aruco.ts", "lib/tracker.ts", "lib/trackerclient.ts", "lib/workers/**", "lib/board.ts", "lib/phones.ts"], "verdict": "ESCALATE", "why": "how the phone sees the sheet: every measurement goes through it" },
+    { "name": "scene", "paths": ["lib/scene.ts", "lib/scenedef.ts", "lib/xform.ts", "lib/session.ts", "lib/assembly.ts", "lib/dockrig.ts", "lib/dockgeom.ts", "lib/anchors.ts", "lib/surfaces.ts"], "verdict": "ESCALATE", "why": "the scene graph and the rig the engine is configured from" },
+    { "name": "job", "paths": ["lib/plan.ts", "lib/jobrecord.ts", "lib/report.ts", "lib/coach.ts", "lib/memory.ts", "lib/ledger.ts", "lib/vcs.ts", "lib/recipe.ts", "lib/gate.ts", "lib/recording.ts", "lib/bench.ts"], "verdict": "FAST_TRACK", "why": "plans, recipes, records and the local memory: pure functions with unit tests" },
+    { "name": "screens", "paths": ["app/**", "components/**", "lib/render/**", "lib/hud.ts", "lib/hudguide.ts", "lib/guidance.ts", "lib/audio.ts", "lib/sim.ts", "lib/gallery/**", "lib/architecture.ts", "types/**", "public/**"], "verdict": "FAST_TRACK", "why": "what is drawn and the site" },
+    { "name": "docs", "paths": ["docs/**", "*.md", "hardware/**", "LICENSE", "NOTICE", ".gitignore", ".vercelignore"], "verdict": "FAST_TRACK", "why": "documents and print files" },
+    { "name": "tooling", "paths": ["tests/**", "scripts/**", "package.json", "package-lock.json", "tsconfig.json", "next.config.ts", "gate.config.json"], "verdict": "FAST_TRACK", "why": "tests and scripts" }
+  ],
+  "commands": {
+    "FAST_TRACK": ["npm run test:unit", "npx tsc --noEmit", "npm run build"],
+    "ESCALATE": ["npm run engine:test", "npm run test:unit", "npx tsc --noEmit", "npm run test:e2e", "npm run build"]
+  }
+}

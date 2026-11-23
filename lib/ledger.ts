@@ -53,6 +53,7 @@ export function jobManifest(job: JobRecord) {
     calibration: dim({ lens: c.calibration.lens, dock: c.calibration.dock }),
     plan: dim({ id: job.plan.id, hash: hash(job.plan), holes: job.plan.holes.length }),
   };
+  if (c.tracking) dimensions.tracking = dim(c.tracking as unknown as Json);
   const manifest_id = hash({ protocol: PROTOCOL, dimensions });
   return { protocol: PROTOCOL, type: "harness_manifest", name: `smarttools ${c.app} · ${job.plan.name}`, parent_ids: [] as string[], dimensions, manifest_id };
 }

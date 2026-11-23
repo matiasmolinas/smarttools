@@ -10,7 +10,7 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.7";
+export const APP_VERSION = "0.0.12";
 
 export interface HoleRecord extends ScrewRecord {
   startedAt: string;
@@ -36,7 +36,18 @@ export interface JobRecord {
     calibration: { lens: boolean; dock: boolean };
     /** "camera" = a real job; "simulation" = the demo or a test */
     source: "camera" | "simulation";
+    /** how the phone tracked during the job (the alternatives under evaluation): what blame compares */
+    tracking?: TrackingSettings;
   };
+}
+
+export interface TrackingSettings {
+  detector: string;
+  /** the One Euro filter: off, at the camera, at the tool's tip */
+  filter: "off" | "camera" | "tip";
+  /** detection resolution, longest side, px */
+  detectPx: number;
+  camera: { fps60: boolean; lock: boolean };
 }
 
 type Ctx = JobRecord["context"];
@@ -117,11 +128,11 @@ export class JobRecorder {
     return this.done;
   }
 
-  finish(endT?: number): JobRecord {
+  finish(endT?: number, tracking?: TrackingSettings): JobRecord {
     const ended = endT == null ? Date.now() : this.wall(endT);
     const status = this.done.length >= this.plan.holes.length ? "completed" : "aborted";
     const report = buildReport(this.plan.name, this.done, this.plan.holes.length, iso(ended));
-    return { kind: JOB_KIND, v: JOB_VERSION, id: this.id, started: iso(this.startedMs), ended: iso(ended), status, plan: this.plan, report, holes: [...this.done], context: this.context };
+    return { kind: JOB_KIND, v: JOB_VERSION, id: this.id, started: iso(this.startedMs), ended: iso(ended), status, plan: this.plan, report, holes: [...this.done], context: tracking ? { ...this.context, tracking } : this.context };
   }
 }
 
