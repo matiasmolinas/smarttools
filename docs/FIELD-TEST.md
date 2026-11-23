@@ -44,8 +44,24 @@ Estimated time: 2 hours, including the mount.
    from the icon: it runs full screen and works offline.
 2. Tap **Start** and allow the camera. The **Setup** opens by itself the first time; on its first screen, tap
    *Phone: … (tap to change)* to pick your phone.
-3. Everything else is in the **menu ☰** (top right): **Setup**, **Job**, **Tests**, **Sound**, **Full screen**.
-4. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
+3. Everything else is in the **menu ☰** (top right): **Setup**, **Job**, **Tests**, **Record 10 s**, **Sound**,
+   **Full screen**.
+4. **Pause and Stop**, bottom right, work like the drill's trigger:
+   - **Pause** turns the camera and tracking off and keeps the calibration. Use it between holes or tests.
+     **Continue** goes straight back to work. After more than 30 min, it offers a 5 s check on A2.
+   - **■ Stop**: hold it 1 s. Everything turns off and the job is saved or dropped. Use it when you change the bit
+     or the tip, or take the phone out of the dock.
+   - After a Stop, the next **Start** asks **What did you change?** and redoes only what that affects:
+
+     | Answer | What it redoes |
+     |---|---|
+     | Nothing | The 5 s check on A2 |
+     | The bit or the tip | The drill calibration (10 s) |
+     | I took the phone out | The drill calibration (10 s) |
+     | Another phone | Lens and drill |
+
+   - The app also pauses by itself when it goes to the background, or after a minute with no markers in view.
+5. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
 
 ### The sheet
 

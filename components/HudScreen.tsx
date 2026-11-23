@@ -2,15 +2,18 @@
 
 // The phone app (/hud): only what is needed to work. A start screen (the browser needs a tap to turn on the
 // camera), then the live camera with the GPS-style guide (lib/hudguide.ts). The guided setup opens by itself
-// when the drill is not calibrated. One menu: Setup, Job, Tests, Sound, Full screen.
+// when the drill is not calibrated. One menu: Setup, Job, Tests, Record, Sound, Full screen.
+// Like the drill's trigger (lib/runstate.ts): Pause turns the camera and tracking off and keeps the calibration;
+// Stop (held 1 s) turns everything off, and the next start asks what changed and redoes only that.
 // Three loops run independently: camera frames (tracked in a worker), the engine clock (120 Hz), drawing.
 // For development only, /hud?sim=1 replaces the camera with the scene simulator (no button for it).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import BenchPanel from "./BenchPanel";
-import SetupWizard from "./SetupWizard";
+import SetupWizard, { type Step as WizardStep } from "./SetupWizard";
 import type { SimState } from "@/lib/sim";
 import { SoundGuide, toneFromHud } from "@/lib/audio";
+import { CHANGES, ago, autoPauseReason, onStart, pausedFor, planFor, readRun, writeRun, type Change, type RunRecord } from "@/lib/runstate";
 import type { Overlay } from "@/lib/hud";
 import { drawGuide } from "@/lib/hudguide";
 import { BrowserNav } from "@/lib/tracker";
@@ -24,7 +27,7 @@ import { activePlanId, browserMemory, setActivePlanId } from "@/lib/memory";
 type WakeLockSentinelLike = { release: () => Promise<void> };
 type VideoFrameMeta = { captureTime?: number; expectedDisplayTime?: number };
 type VideoWithRvfc = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: VideoFrameMeta) => void) => number; cancelVideoFrameCallback?: (id: number) => void };
-type Status = "start" | "starting" | "running" | "blocked";
+type Status = "start" | "starting" | "running" | "paused" | "blocked";
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,11 +46,24 @@ export default function HudScreen() {
   const [phoneName, setPhoneName] = useState(phoneById(DEFAULT_PHONE_ID).name);
   // plans and jobs
   const [draft, setDraft] = useState<Plan | null>(null);
+  const draftRef = useRef(false);
+  useEffect(() => {
+    draftRef.current = !!draft;
+  }, [draft]);
   const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
   const [done, setDone] = useState(0);
   const [tol, setTol] = useState(0.5);
   // sheets: one at a time
-  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench">(null);
+  const [sheet, setSheet] = useState<null | "menu" | "setup" | "job" | "bench" | "changed" | "resume" | "stop">(null);
+  // working / paused / stopped, kept per device (lib/runstate.ts)
+  const runRef = useRef<RunRecord | null>(null);
+  const [wizardStep, setWizardStep] = useState<WizardStep>("sheet");
+  // after a stop: the drill calibration is not trusted until the person says what changed and it is checked
+  const needCheckRef = useRef<{ since: string } | null>(null);
+  const [stopped, setStopped] = useState(false);
+  const [recNote, setRecNote] = useState<string | null>(null);
+  const [pausedMin, setPausedMin] = useState(0);
+  const [, tick] = useState(0);
   const setupDecided = useRef(false);
   const sheetRef = useRef<typeof sheet>(null);
   useEffect(() => {
@@ -71,6 +87,12 @@ export default function HudScreen() {
     statusRef.current = s;
     setStatus(s);
   };
+
+  useEffect(() => {
+    runRef.current = readRun();
+    const iv = setInterval(() => tick((n) => n + 1), 15000); // the paused screen's minutes
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     simRef.current = new URLSearchParams(window.location.search).get("sim") === "1";
@@ -123,7 +145,78 @@ export default function HudScreen() {
     return tr;
   }
 
+  /** Start from the start screen, or Continue from a pause: the camera on, then decide (setup / ask / resume). */
   async function start() {
+    setupDecided.current = false;
+    setStopped(false);
+    await openCamera();
+  }
+
+  /** Keep the state; while "What did you change?" is unanswered it stays "stopped", so a pause, the phone
+   * locking or the page closing can never skip the question. */
+  const persist = (state: RunRecord["state"]) => (runRef.current = writeRun(needCheckRef.current ? "stopped" : state));
+
+  function pause(reason?: string) {
+    if (statusRef.current !== "running") return;
+    trackerRef.current?.cancelCalibration();
+    stopCamera();
+    setStatusBoth("paused");
+    setSheet(null);
+    persist("paused");
+    soundRef.current?.vibrate("depth-reached");
+    if (reason) say(reason);
+  }
+
+  /** Everything off. The job is saved or dropped; the next start asks what changed. */
+  async function stop(save: boolean) {
+    const tr = trackerRef.current;
+    if (save) await finishJob();
+    tr?.cancelCalibration();
+    stopCamera();
+    if (!simRef.current) tr?.forgetCalibrationSilently(); // frees the engine and the worker; stored calibrations stay, but are asked about
+    runRef.current = writeRun("stopped");
+    setSheet(null);
+    setDraft(null);
+    setDone(0);
+    setStopped(true);
+    setStatusBoth("start");
+  }
+
+  function answerChange(c: Change) {
+    const tr = trackerRef.current;
+    const p = planFor(c);
+    if (p.forgetDrill && !simRef.current) tr?.forgetDrillCalibration(); // the simulator's calibration is fixed
+    setWizardStep(p.step);
+    setSheet("setup");
+  }
+  function closeSetup() {
+    const n = needCheckRef.current, at = trackerRef.current?.toolCalibratedAt();
+    if (n && at && at > n.since) needCheckRef.current = null; // calibrated again since the question
+    if (!needCheckRef.current) persist("working");
+    setSheet(needCheckRef.current ? "changed" : null);
+  }
+
+  async function recordCamera() {
+    const tr = trackerRef.current;
+    if (!tr) return;
+    setSheet(null);
+    setRecNote("● Recording 10 s");
+    const blob = await tr.record(10, "phone app");
+    if (!blob) {
+      setRecNote(null);
+      return say("Nothing to record: point at the sheet");
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `smarttools-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.strec`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setRecNote(null);
+    say(`Recording saved · ${(blob.size / 1e6).toFixed(1)} MB`);
+  }
+
+  async function openCamera() {
     setStatusBoth("starting");
     try {
       if (!simRef.current) {
@@ -192,16 +285,51 @@ export default function HudScreen() {
     say(`Job saved · ${rec.report.verdict}`);
   }
 
-  // the setup opens by itself, once, when the drill is not calibrated
+  // on each start or Continue, once the engine runs: the setup when the drill is not calibrated, "What did you
+  // change?" after a stop, or straight back to work after a pause (with the 5 s check suggested after a long one)
   useEffect(() => {
     if (status !== "running") return;
     const iv = setInterval(() => {
       const tr = trackerRef.current;
       if (setupDecided.current || !tr?.session) return;
       setupDecided.current = true;
-      if (!tr.calibrated.tool) setSheet("setup");
+      const last = runRef.current;
+      const d = onStart(last, tr.calibrated.tool);
+      if (d === "setup") {
+        setWizardStep("sheet");
+        setSheet("setup");
+      } else if (d === "ask") {
+        needCheckRef.current = { since: new Date().toISOString() };
+        setSheet("changed");
+      } else {
+        const p = pausedFor(last, Date.now());
+        setPausedMin(Math.round(p.minutes));
+        if (p.suggestCheck) setSheet("resume");
+      }
+      persist("working");
     }, 500);
     return () => clearInterval(iv);
+  }, [status]);
+
+  // pause by itself: the app in the background, or no marker for a minute (the drill was put down)
+  useEffect(() => {
+    if (status !== "running") return;
+    let lastSeen = performance.now();
+    const check = (hidden: boolean) => {
+      const tr = trackerRef.current;
+      if ((tr?.liveCheck().markers ?? 0) > 0) lastSeen = performance.now();
+      const busy = sheetRef.current !== null || !!tr?.calStatus() || draftRef.current;
+      const why = autoPauseReason({ hidden, noMarkersS: (performance.now() - lastSeen) / 1000, busy });
+      if (why) pause(why);
+    };
+    const iv = setInterval(() => check(false), 1000);
+    const onVis = () => document.visibilityState === "hidden" && check(true);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
   useEffect(() => {
@@ -282,8 +410,9 @@ export default function HudScreen() {
     };
   }, []);
 
-  // keep the screen awake while working
+  // keep the screen awake while working (in a pause it may sleep)
   useEffect(() => {
+    if (status !== "running") return;
     let lock: WakeLockSentinelLike | null = null;
     const nav = navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<WakeLockSentinelLike> } };
     const req = () => nav.wakeLock?.request("screen").then((l) => (lock = l)).catch(() => {});
@@ -294,7 +423,7 @@ export default function HudScreen() {
       document.removeEventListener("visibilitychange", onVis);
       lock?.release().catch(() => {});
     };
-  }, []);
+  }, [status]);
 
   const fullscreen = () => {
     const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
@@ -325,12 +454,16 @@ export default function HudScreen() {
       <video ref={videoRef} playsInline muted className="hidden" />
 
       {/* start: one button (the browser needs a tap to turn the camera on) */}
-      {status !== "running" && (
+      {(status === "start" || status === "starting" || status === "blocked") && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-8 text-center">
           <span className="inline-block h-10 w-10 rounded-full border-4 border-[#3ee59b] shadow-[0_0_24px_#3ee59b]" />
           <h1 className="text-3xl font-semibold">SmartTools</h1>
           <p className="max-w-sm text-lg leading-snug text-white/75">
-            {status === "blocked" ? "The camera is blocked. Allow the camera for this site in the browser's settings, then try again." : "Phone on the drill, printed sheet on the work. Tap Start and point the camera at the sheet."}
+            {status === "blocked"
+              ? "The camera is blocked. Allow the camera for this site in the browser's settings, then try again."
+              : stopped
+                ? "Stopped. When you start again, the app asks what you changed: the bit, the tip or the phone."
+                : "Phone on the drill, printed sheet on the work. Tap Start and point the camera at the sheet."}
           </p>
           <button onClick={start} disabled={status === "starting"} className="h-16 w-full max-w-xs rounded-2xl bg-[#3ee59b] text-2xl font-semibold text-black disabled:opacity-50">
             {status === "starting" ? "Starting…" : status === "blocked" ? "Try again" : "Start"}
@@ -344,6 +477,48 @@ export default function HudScreen() {
             </a>
           </div>
         </div>
+      )}
+
+      {status === "paused" && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-black/95 px-8 text-center">
+          <span className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-[#ffb547] text-2xl text-[#ffb547]">❚❚</span>
+          <h1 className="text-4xl font-semibold text-[#ffb547]">Paused</h1>
+          <p className="text-xl leading-snug text-white/80">
+            Camera off · calibration kept
+            <br />
+            {Math.round(pausedFor(runRef.current, Date.now()).minutes)} min
+          </p>
+          <p className="max-w-sm text-base text-white/55">Nothing on the drill should change during a pause. If you change the bit or move the phone, use Stop.</p>
+          <button onClick={start} className="h-20 w-full max-w-xs rounded-2xl bg-[#3ee59b] text-3xl font-semibold text-black active:scale-[0.99]">
+            ▶ Continue
+          </button>
+          <button onClick={() => setSheet("stop")} className="h-14 w-full max-w-xs rounded-2xl border border-white/25 text-xl text-white/80">
+            ■ Stop
+          </button>
+        </div>
+      )}
+
+      {sheet === "stop" && (
+        <TopSheet title="Stop?" onClose={() => setSheet(null)}>
+          <p className="text-lg leading-snug text-white/75">
+            Camera and tracking off. When you start again, the app asks what you changed (the bit, the tip, the phone) and redoes only that.
+          </p>
+          <div className="mt-4 flex flex-col gap-3">
+            {done > 0 ? (
+              <>
+                <BigButton strong onClick={() => void stop(true)}>
+                  Save the job ({done}/{plan.holes.length}) and stop
+                </BigButton>
+                <BigButton onClick={() => void stop(false)}>Stop without saving</BigButton>
+              </>
+            ) : (
+              <BigButton strong onClick={() => void stop(false)}>
+                Stop
+              </BigButton>
+            )}
+            <BigButton onClick={() => setSheet(null)}>Cancel</BigButton>
+          </div>
+        </TopSheet>
       )}
 
       {toast && (
@@ -373,7 +548,12 @@ export default function HudScreen() {
           {sheet === "setup" && (
             <SetupWizard
               tracker={tracker}
-              onClose={() => setSheet(null)}
+              initialStep={wizardStep}
+              onChecked={() => {
+                needCheckRef.current = null;
+                persist("working");
+              }}
+              onClose={closeSetup}
               onOpenBench={() => void openBench()}
               phoneName={phoneName}
               onNextPhone={() => {
@@ -399,7 +579,7 @@ export default function HudScreen() {
                   localStorage.setItem("st-cam-fps60", o.fps60 ? "1" : "0");
                   localStorage.setItem("st-cam-lock", o.lock ? "1" : "0");
                 } catch {}
-                void start();
+                void openCamera();
               }}
               onCameraRes={(r) => {
                 camResRef.current = r;
@@ -407,9 +587,44 @@ export default function HudScreen() {
                 try {
                   localStorage.setItem("st-cam-res", String(r));
                 } catch {}
-                void start();
+                void openCamera();
               }}
             />
+          )}
+
+          {sheet === "changed" && (
+            <TopSheet title="What did you change?">
+              <p className="text-lg text-white/70">
+                Since the last stop. Drill calibrated {ago(trackerRef.current?.toolCalibratedAt() ?? null, Date.now()) ?? "some time ago"}.
+              </p>
+              <div className="mt-4 grid grid-cols-1 gap-3">
+                {CHANGES.map((c) => (
+                  <button key={c.id} onClick={() => answerChange(c.id)} className={`rounded-2xl px-4 py-3 text-left active:scale-[0.99] ${c.id === "nothing" ? "bg-[#3ee59b] text-black" : "border border-white/25 text-white"}`}>
+                    <div className="text-xl font-semibold">{c.label}</div>
+                    <div className={`text-base ${c.id === "nothing" ? "text-black/70" : "text-white/60"}`}>{c.note}</div>
+                  </button>
+                ))}
+              </div>
+            </TopSheet>
+          )}
+
+          {sheet === "resume" && (
+            <TopSheet title={`Paused ${pausedMin} min`} onClose={() => setSheet(null)}>
+              <p className="text-lg text-white/75">If nothing moved on the drill, go on. To be sure, check the tip on A2 (5 s).</p>
+              <div className="mt-4 flex flex-col gap-3">
+                <BigButton strong onClick={() => setSheet(null)}>
+                  Continue
+                </BigButton>
+                <BigButton
+                  onClick={() => {
+                    setWizardStep("check");
+                    setSheet("setup");
+                  }}
+                >
+                  Check on A2 · 5 s
+                </BigButton>
+              </div>
+            </TopSheet>
           )}
 
           {sheet === "job" && !draft && (
@@ -448,13 +663,20 @@ export default function HudScreen() {
           {sheet === "menu" && (
             <TopSheet title="Menu" onClose={() => setSheet(null)}>
               <div className="grid grid-cols-2 gap-3">
-                <BigButton strong onClick={() => setSheet("setup")}>
+                <BigButton
+                  strong
+                  onClick={() => {
+                    setWizardStep("sheet");
+                    setSheet("setup");
+                  }}
+                >
                   Setup
                 </BigButton>
                 <BigButton onClick={() => setSheet("job")}>
                   Job · {done}/{plan.holes.length}
                 </BigButton>
                 <BigButton onClick={() => void openBench()}>Tests</BigButton>
+                <BigButton onClick={() => void recordCamera()}>Record 10 s</BigButton>
                 <BigButton onClick={toggleSound}>Sound: {soundOn ? "on" : "off"}</BigButton>
                 <BigButton onClick={fullscreen}>Full screen</BigButton>
                 <BigButton onClick={() => (window.location.href = "/memory")}>Plans & jobs</BigButton>
@@ -471,6 +693,23 @@ export default function HudScreen() {
             >
               ☰
             </button>
+          )}
+
+          {/* the trigger: Pause (big, in the thumb's reach, right side: the tip shows bottom left) and Stop (held) */}
+          {sheet === null && !draft && (
+            <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] z-30 flex items-end gap-2">
+              <HoldButton onHold={() => setSheet("stop")} onTap={() => say("Hold to stop")} label="■" aria="Stop (hold)" />
+              <button
+                onClick={() => pause()}
+                aria-label="Pause"
+                className="flex h-20 w-36 items-center justify-center gap-2 rounded-2xl border-2 border-[#ffb547] bg-black/60 text-2xl font-semibold text-[#ffb547] backdrop-blur-md active:scale-[0.98]"
+              >
+                ❚❚ Pause
+              </button>
+            </div>
+          )}
+          {recNote && (
+            <div className="pointer-events-none absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+6rem)] right-3 z-30 rounded-full bg-[#ff6b6b] px-4 py-1.5 text-lg font-semibold text-black">{recNote}</div>
           )}
         </>
       )}
@@ -506,14 +745,16 @@ async function applyCameraLock(stream: MediaStream, lock: boolean): Promise<stri
   return `${s.width}×${s.height} · ${Math.round(s.frameRate ?? 0)} fps · ${lockNote}`;
 }
 
-function TopSheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function TopSheet({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {
   return (
     <div className="absolute inset-x-0 top-0 z-20 rounded-b-3xl border-b border-white/15 bg-black/85 px-5 pb-5 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-2xl font-semibold">{title}</h2>
-        <button onClick={onClose} className="px-3 text-3xl text-white/70" aria-label="Close">
-          ✕
-        </button>
+        {onClose && (
+          <button onClick={onClose} className="px-3 text-3xl text-white/70" aria-label="Close">
+            ✕
+          </button>
+        )}
       </div>
       {children}
     </div>
@@ -524,6 +765,41 @@ function BigButton({ children, onClick, strong }: { children: React.ReactNode; o
   return (
     <button onClick={onClick} className={`h-14 rounded-2xl px-4 text-lg font-semibold active:scale-[0.99] ${strong ? "bg-[#3ee59b] text-black" : "border border-white/25 text-white"}`}>
       {children}
+    </button>
+  );
+}
+
+/** Acts only when held (1 s), like a guarded switch: a tap just says so. The ring fills while held. */
+function HoldButton({ onHold, onTap, label, aria }: { onHold: () => void; onTap: () => void; label: string; aria: string }) {
+  const [held, setHeld] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fired = useRef(false);
+  const down = () => {
+    fired.current = false;
+    setHeld(true);
+    timer.current = setTimeout(() => {
+      fired.current = true;
+      setHeld(false);
+      onHold();
+    }, 1000);
+  };
+  const up = () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (held && !fired.current) onTap();
+    setHeld(false);
+  };
+  return (
+    <button
+      aria-label={aria}
+      onPointerDown={down}
+      onPointerUp={up}
+      onPointerLeave={() => (timer.current && clearTimeout(timer.current), setHeld(false))}
+      onPointerCancel={() => (timer.current && clearTimeout(timer.current), setHeld(false))}
+      onContextMenu={(e) => e.preventDefault()}
+      className="relative flex h-16 w-16 select-none items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-black/60 text-2xl text-white/85 backdrop-blur-md"
+    >
+      <span className="absolute inset-x-0 bottom-0 bg-[#ff6b6b]/70" style={{ height: held ? "100%" : "0%", transition: held ? "height 1s linear" : "none" }} />
+      <span className="relative">{label}</span>
     </button>
   );
 }
