@@ -120,6 +120,8 @@ export class BrowserNav {
   compare = false;
   /** the camera options in use (set by the screen that opened the camera) */
   cameraOpts = { fps60: false, lock: false };
+  /** the display in use (set by the screen, like cameraOpts): jobs are compared by it too */
+  display: NonNullable<TrackingSettings["display"]> = "classic";
   private videoSize = { w: 0, h: 0 };
   private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number; altMs: number; altMarkers: number; altCornerPx: number; altKind: string }[] = [];
   private droppedLog: { t: number; n: number }[] = [];
@@ -495,7 +497,7 @@ export class BrowserNav {
   }
   /** How the phone is tracking now: recorded with each job, so jobs can be compared by setting. */
   trackingSettings(): TrackingSettings {
-    return { detector: this.detector, filter: !this.filterOn ? "off" : this.filterAtTool ? "tip" : "camera", detectPx: this.maxSide, camera: { ...this.cameraOpts } };
+    return { detector: this.detector, filter: !this.filterOn ? "off" : this.filterAtTool ? "tip" : "camera", detectPx: this.maxSide, camera: { ...this.cameraOpts }, display: this.display };
   }
   /** End the job: its record (null if no hole was drilled), and a fresh job on the same plan. */
   finishJob(): JobRecord | null {

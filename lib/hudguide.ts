@@ -8,11 +8,11 @@
 //   - the video zooms in around the tip as it gets close to the mark
 // The gallery and the simulated surfaces keep lib/hud.ts.
 
-import type { SimState } from "./sim";
-import type { Overlay } from "./hud";
-import { DEPTH_TARGET_MM } from "./sim";
+import type { SimState } from "./sim.ts";
+import type { Overlay } from "./hud.ts";
+import { DEPTH_TARGET_MM } from "./sim.ts";
 
-type P = { x: number; y: number };
+export type P = { x: number; y: number };
 
 const GREEN = "#3ee59b", AMBER = "#ffb547", RED = "#ff5a5a", WHITE = "#f5f8fc", CYAN = "#5ad8ff";
 const SANS = "Geist, system-ui, sans-serif";
@@ -33,7 +33,6 @@ export function drawGuide(ctx: CanvasRenderingContext2D, s: SimState, w: number,
   const ov = o.overlay;
   const u = Math.min(w, h) / 100;
   const lw = Math.max(3, u * 0.9); // thick lines
-  const now = performance.now() / 1000;
 
   // ---------- video, zoomed around the tip near the mark ----------
   const isVideo = typeof HTMLVideoElement !== "undefined" && o.video instanceof HTMLVideoElement;
@@ -42,38 +41,9 @@ export function drawGuide(ctx: CanvasRenderingContext2D, s: SimState, w: number,
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, w, h);
   if (!vw || !vh) return;
-  const sc0 = Math.max(w / vw, h / vh);
-  const offX0 = (w - vw * sc0) / 2, offY0 = (h - vh * sc0) / 2;
-  const base = (p: P): P => ({ x: offX0 + p.x * sc0, y: offY0 + p.y * sc0 });
   const tracking = !ov.lost;
-  const near = tracking && o.toolCalibrated && s.offsetMm < 25 && s.gapMm < 25 && s.phase !== "retract";
-  const zs = zooms.get(ctx) ?? { z: 1, c: null, last: now };
-  const dt = Math.min(0.1, now - zs.last);
-  zs.last = now;
-  const zTarget = near ? (s.offsetMm < 6 && s.gapMm < 6 ? 2.6 : 1.8) : 1;
-  zs.z += (zTarget - zs.z) * Math.min(1, dt * 3);
-  const tip0 = ov.tipPx ? base(ov.tipPx) : null;
-  if (tip0) zs.c = tip0;
-  zooms.set(ctx, zs);
-  // scale about the tip, and bring it up towards 60 % of the height as it zooms (it sits low in the image),
-  // so the area all around the tip is in view
-  const zc = zs.c ?? { x: w / 2, y: h * 0.7 };
-  const Z = zs.z;
-  const k = Math.min(1, Math.max(0, (Z - 1) / 1.6));
-  const goal = { x: zc.x + (w / 2 - zc.x) * k, y: zc.y + (h * 0.6 - zc.y) * k };
-  // never past the video's edges: the image always covers the screen
-  const edge = (p: P) => ({ x: goal.x + (base(p).x - zc.x) * Z, y: goal.y + (base(p).y - zc.y) * Z });
-  const tl0 = edge({ x: 0, y: 0 }), br0 = edge({ x: vw, y: vh });
-  if (tl0.x > 0) goal.x -= tl0.x;
-  else if (br0.x < w) goal.x += w - br0.x;
-  if (tl0.y > 0) goal.y -= tl0.y;
-  else if (br0.y < h) goal.y += h - br0.y;
-  const map = (p: P): P => {
-    const b = base(p);
-    return { x: goal.x + (b.x - zc.x) * Z, y: goal.y + (b.y - zc.y) * Z };
-  };
-  const tl = map({ x: 0, y: 0 });
-  ctx.drawImage(o.video, tl.x, tl.y, vw * sc0 * Z, vh * sc0 * Z);
+  const { map, tl, size, near } = frame(ctx, s, ov, w, h, vw, vh, o.toolCalibrated);
+  ctx.drawImage(o.video, tl.x, tl.y, size.w, size.h);
 
   // ---------- markers it reads: covered in white ----------
   ctx.fillStyle = "rgba(255,255,255,0.86)";
@@ -186,9 +156,56 @@ export function drawGuide(ctx: CanvasRenderingContext2D, s: SimState, w: number,
   ctx.fill();
 }
 
-type Icon = "arrow" | "down" | "level" | "drill" | "check" | "stop" | "search" | "setup";
+/** Where the video sits on the screen, zoomed in around the tip near the mark. Shared by every camera display,
+ *  so the mark and the tip fall on the same pixels whatever is drawn over them. Keeps the zoom state per context. */
+export function frame(
+  ctx: CanvasRenderingContext2D,
+  s: SimState,
+  ov: Overlay,
+  w: number,
+  h: number,
+  vw: number,
+  vh: number,
+  toolCalibrated: boolean,
+): { map: (p: P) => P; tl: P; scale: number; size: { w: number; h: number }; near: boolean } {
+  const now = performance.now() / 1000;
+  const sc0 = Math.max(w / vw, h / vh);
+  const offX0 = (w - vw * sc0) / 2, offY0 = (h - vh * sc0) / 2;
+  const base = (p: P): P => ({ x: offX0 + p.x * sc0, y: offY0 + p.y * sc0 });
+  const near = !ov.lost && toolCalibrated && s.offsetMm < 25 && s.gapMm < 25 && s.phase !== "retract";
+  const zs = zooms.get(ctx) ?? { z: 1, c: null, last: now };
+  const dt = Math.min(0.1, now - zs.last);
+  zs.last = now;
+  const zTarget = near ? (s.offsetMm < 6 && s.gapMm < 6 ? 2.6 : 1.8) : 1;
+  zs.z += (zTarget - zs.z) * Math.min(1, dt * 3);
+  const tip0 = ov.tipPx ? base(ov.tipPx) : null;
+  if (tip0) zs.c = tip0;
+  zooms.set(ctx, zs);
+  // scale about the tip, and bring it up towards 60 % of the height as it zooms (it sits low in the image),
+  // so the area all around the tip is in view
+  const zc = zs.c ?? { x: w / 2, y: h * 0.7 };
+  const Z = zs.z;
+  const k = Math.min(1, Math.max(0, (Z - 1) / 1.6));
+  const goal = { x: zc.x + (w / 2 - zc.x) * k, y: zc.y + (h * 0.6 - zc.y) * k };
+  // never past the video's edges: the image always covers the screen
+  const edge = (p: P) => ({ x: goal.x + (base(p).x - zc.x) * Z, y: goal.y + (base(p).y - zc.y) * Z });
+  const tl0 = edge({ x: 0, y: 0 }), br0 = edge({ x: vw, y: vh });
+  if (tl0.x > 0) goal.x -= tl0.x;
+  else if (br0.x < w) goal.x += w - br0.x;
+  if (tl0.y > 0) goal.y -= tl0.y;
+  else if (br0.y < h) goal.y += h - br0.y;
+  const map = (p: P): P => {
+    const b = base(p);
+    return { x: goal.x + (b.x - zc.x) * Z, y: goal.y + (b.y - zc.y) * Z };
+  };
+  const tl = map({ x: 0, y: 0 });
+  // the drawn size, computed in the same order as before so the classic display is unchanged to the bit
+  return { map, tl, scale: sc0 * Z, size: { w: vw * sc0 * Z, h: vh * sc0 * Z }, near };
+}
 
-function banner(
+export type Icon = "arrow" | "down" | "level" | "drill" | "check" | "stop" | "search" | "setup";
+
+export function banner(
   s: SimState,
   ov: Overlay,
   c: { tip: P | null; mark: P | null; onMark: boolean; touching: boolean; square: boolean; drilling: boolean; tol: number; calibrated: boolean },
@@ -258,7 +275,7 @@ function arrow(ctx: CanvasRenderingContext2D, a: P, b: P, width: number, color: 
   });
 }
 
-function icon(ctx: CanvasRenderingContext2D, kind: Icon, c: P, r: number, color: string, angle: number, lw: number) {
+export function icon(ctx: CanvasRenderingContext2D, kind: Icon, c: P, r: number, color: string, angle: number, lw: number) {
   ctx.save();
   ctx.translate(c.x, c.y);
   ctx.lineCap = "round";

@@ -45,7 +45,7 @@ Estimated time: 2 hours, including the mount.
 2. Tap **Start** and allow the camera. The **Setup** opens by itself the first time; on its first screen, tap
    *Phone: … (tap to change)* to pick your phone.
 3. Everything else is in the **menu ☰** (top right): **Setup**, **Job**, **Tests**, **Record 10 s**, **Sound**,
-   **Full screen**.
+   **Display**, **Full screen**.
 4. **Pause and Stop**, bottom right, work like the drill's trigger:
    - **Pause** turns the camera and tracking off and keeps the calibration. Use it between holes or tests.
      **Continue** goes straight back to work. After more than 30 min, it offers a 5 s check on A2.
@@ -61,7 +61,16 @@ Estimated time: 2 hours, including the mount.
      | Another phone | Lens and drill |
 
    - The app also pauses by itself when it goes to the background, or after a minute with no markers in view.
-5. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
+5. **Two displays.** Classic (the default) is the camera with the guide in words. **Simple** is one colour on black,
+   read at arm's length: switch with ☰ (or ⋯ in simple) → **Display**, and pick **Colour: green / amber** there.
+   - The **number at the top** is the one thing to do now (distance to the mark, height above it, tilt, mm left to
+     drill), with an icon. Tap it to see it in words for 3 s. A red frame blinking around the screen means STOP.
+   - The **bar on the left** is depth: its middle is the surface; the hollow pointer above is the tip's height, the
+     solid fill below is the hole's depth, with a tick at the planned depth (it blinks past it).
+   - The **five round buttons** on the right: Pause, Stop (hold 1 s), Video, Sound, More (the menu).
+   - The **Video** button only shows or hides the camera image: the camera keeps tracking either way, and the mark,
+     the tip and the level stay on the same pixels.
+6. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
 
 ### The sheet
 
@@ -252,6 +261,7 @@ The defaults stay as they are; each of these is a switch, kept on the phone unti
 | **filter at camera / tip** | Where the engine smooths the pose. In simulation, filtering at the tip halves the motor's shake at the tip (0.16 vs 0.32 mm) | Motor on: the filtered tip jitter in the table |
 | **60 fps** | Asks the camera for 60 frames/s (the line "camera runs at" says what it gives) | Latency, and the shake while moving |
 | **lock focus** | Locks focus and exposure (Chrome on Android; Safari on iPhone does not allow it, and says so) | Steadiness with the motor on: autofocus hunting adds jitter |
+| **Display classic / simple** (menu → Display) | The working screen: the guide in words over the camera, or one number and shapes on black (video optional). Each job records which one was used | Do the same 4-hole job (test 3) once in classic and once in simple, and compare time and angle in /memory |
 | **record camera 10 s** | Records 10 s of the frames the tracker sees, with the calibration, as a `.strec` file. When it is ready, a sheet offers **Share** (AirDrop it to the laptop) and **Download** | Send it to me: I replay it on the laptop with both detectors and both filters (`node scripts/replay.mts file.strec`) |
 
 A good order, with the drill fixed as in test 2:
