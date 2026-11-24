@@ -173,8 +173,9 @@ export function smartToolsScene(opts: {
   phone?: PhoneProfile | string;
   /** "driver": a hex screwdriver bit in a bit holder instead of the drill bit */
   bit?: "drill" | "driver";
-  /** the holes to drill, on the sheet (m; a plan, lib/plan.ts); defaults to the sheet's targets A1-A3 */
-  targets?: { label: string; x: number; y: number; depthMm?: number; diameterMm?: number }[];
+  /** the holes to drill, on the sheet (m; a plan, lib/plan.ts); defaults to the sheet's targets A1-A3.
+   * z: height of the hole's start above the sheet's plane (a part on the bench); absent = on the sheet */
+  targets?: { label: string; x: number; y: number; z?: number; depthMm?: number; diameterMm?: number }[];
 }): SceneDef {
   const dock = dockRig({ tiltDeg: opts.dockTiltDeg, phone: opts.phone });
   const bodyR = DOCK.drill.bodyDiameter / 2000;
@@ -187,11 +188,11 @@ export function smartToolsScene(opts: {
       meta: { width: SHEET.w, height: SHEET.h, markers: BOARD_MARKERS.length, markerSize: MARKER_SIZE },
     },
     ...(opts.targets ?? BOARD_TARGETS).map(
-      (t: { label: string; x: number; y: number; depthMm?: number; diameterMm?: number }): NodeDef => ({
+      (t: { label: string; x: number; y: number; z?: number; depthMm?: number; diameterMm?: number }): NodeDef => ({
         name: t.label,
         parent: "sheet",
         kind: "planned",
-        local: { p: [t.x, t.y, 0], q: INTO_SHEET },
+        local: { p: [t.x, t.y, t.z ?? 0], q: INTO_SHEET },
         visual3d: [
           // the planned hole: 35 mm along +Z (into the material)
           { kind: "cylinder", radius: (t.diameterMm ?? 6) / 2000, length: (t.depthMm ?? 35) / 1000, axis: "z", offset: { p: [0, 0, (t.depthMm ?? 35) / 2000] }, material: { color: C.cyan, opacity: 0.35 } },

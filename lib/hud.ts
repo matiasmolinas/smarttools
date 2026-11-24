@@ -14,6 +14,7 @@ import {
   type SimState,
 } from "./sim";
 import { SURF, getSurface } from "./surfaces";
+import type { PilotOverlay } from "./pilotnav";
 
 const WHITE = "rgba(245,248,252,0.95)";
 const SOFT = "rgba(245,248,252,0.6)";
@@ -45,6 +46,8 @@ export interface Overlay {
   /** video px: where the calibrated tip falls in the image (fixed: the camera is fixed to the drill), and a point up the bit */
   tipPx?: { x: number; y: number } | null;
   bitPx?: { x: number; y: number } | null;
+  /** the pilot job (lib/pilotnav.ts): the sheet, the block, its corners and the screws, in the same video px */
+  pilot?: PilotOverlay;
 }
 export interface HudOptions {
   background?: HudBackground;

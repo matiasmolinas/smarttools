@@ -85,7 +85,8 @@ export default function SetupWizard({
     setStep(s);
   };
   const next = () => go(ORDER[Math.min(ORDER.length - 1, ORDER.indexOf(step) + 1)]);
-  const now = () => performance.now() / 1000;
+  // the engine's time base: performance.now() on the phone, the simulator's clock in the simulator
+  const now = () => tracker()?.now() ?? performance.now() / 1000;
 
   const markers = live?.markers ?? 0;
   const markersColor = markers >= 6 ? GOOD : markers >= 3 ? WARN : BAD;

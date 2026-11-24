@@ -61,15 +61,18 @@ Estimated time: 2 hours, including the mount.
      | Another phone | Lens and drill |
 
    - The app also pauses by itself when it goes to the background, or after a minute with no markers in view.
-5. **Two displays.** Classic (the default) is the camera with the guide in words. **Simple** is one colour on black,
-   read at arm's length: switch with ☰ (or ⋯ in simple) → **Display**, and pick **Colour: green / amber** there.
-   - The **number at the top** is the one thing to do now (distance to the mark, height above it, tilt, mm left to
+5. **Two displays.** **Simple** (the default) is drawn in the colours of the 3D simulation over black or over the
+   darkened camera image, read at arm's length. Classic is the camera with the guide in words. Switch with ⋯ (or ☰
+   in classic) → **Display**.
+   - The **text at the top** is the one thing to do now (distance to the mark, height above it, tilt, mm left to
      drill), with an icon. Tap it to see it in words for 3 s. A red frame blinking around the screen means STOP.
    - The **bar on the left** is depth: its middle is the surface; the hollow pointer above is the tip's height, the
      solid fill below is the hole's depth, with a tick at the planned depth (it blinks past it).
    - The **five round buttons** on the right: Pause, Stop (hold 1 s), Video, Sound, More (the menu).
    - The **Video** button only shows or hides the camera image: the camera keeps tracking either way, and the mark,
      the tip and the level stay on the same pixels.
+   - With no saved plan active, simple runs **the pilot job** (section 6b). With a plan active (chosen in
+     /memory, or with Job → Change plan), simple works that plan as before, without the phase buttons.
 6. Screen brightness high. Turn on **Do not disturb**, so no notification interrupts a recording.
 
 ### The sheet
@@ -210,6 +213,67 @@ In your notes, tell me it was handheld: the difference from the fixed run shows 
 
 ---
 
+## 6b. The pilot job: a wood block and four screws
+
+The simple display guides this job by itself, in three phases. It needs no plan: it runs whenever no saved plan is
+active. To leave a plan, choose the sheet's own plan in /memory, or **⋯ → Job → Change plan** until it is
+the sheet's plan (A1-A3).
+
+**Prepare:**
+
+- [ ] **Up to four different marker sheets.** Print them from [/markers](/markers): **sheets 1 to 4** (each has its
+      own markers and its number in the margin; print at 100 %). Lay them **flat on the bench, side by side** (for
+      example 2 × 2, a few mm apart), and **tape them down**. **Sheet 1 is the reference** (the tool is calibrated on
+      its A2): it must not move at all. The others must not move either once they are mapped.
+- [ ] A square block of wood, **100 × 100 mm** (any thickness from about 15 mm), placed **on the sheets** (for example
+      where they meet) and **clamped**. Push it: it must not move. It hides the markers under it; that is fine.
+- [ ] A Ø4 mm bit. Each screw goes 10 mm in from two edges, one per corner.
+
+**The three round buttons on the left** are the phases. The current one is filled; one that cannot be entered yet is
+dimmed (a tap only vibrates); a finished one has a small green tick.
+
+1. **Sheet** (a grid of squares). The phone maps the table. Hold the drill, with the phone in its dock, a hand's
+   width above the bench and **look at each sheet in turn, together with one that is already green** (look across
+   the gap between them). Each sheet's outline is drawn over the video: **amber** with a ring that fills while it is
+   being mapped, **green** once it is mapped (sheet 1 is green from the start). A dashed amber outline means the sheet
+   moved or is not flat: tape it down and map again. The text at the top is the number of mapped sheets; it turns
+   green when sheet 1 is seen well (6 markers or more, steady for 1 s) and no sheet in view is still being mapped,
+   and the **Part** button starts to glow. The map is kept on the phone: next time the sheets are green at once.
+   **Hold Sheet for 1 s** to forget the map and map the table again (after moving a sheet, or a new layout).
+2. **Part** (a square with dots at its corners). Rest the tip on **a top corner of the block** and **pivot the drill
+   a little** around it, the tip still on the corner. Keep the drill square; turn it about the bit so the camera
+   looks at the sheets beside the block. A ring around the tip fills; after 1.5 s the corner is taken
+   (a short vibration) and the text counts it: 1/4, 2/4… Do the four corners, in any order. After the fourth the
+   text shows the fit's error in mm: green (two vibrations) when the four corners make a 100 mm square, and the
+   **Work** button glows. If it stays amber, **hold Part for 1 s** to start the corners again. Part also needs the
+   1 s hold whenever corners are already taken, because it throws them away.
+3. **Work** (a target). The four screws: the active one is an amber ring that pulses, with rings that close in as
+   the tip comes down to it; the others show their number; a done one is a green disc with a tick. Follow the text
+   (distance, height, tilt, mm left) as for any hole. After each screw a chip shows its numbers: green passes, red
+   stays until tapped.
+4. When all four are done the text shows 4/4 and **More** glows: **⋯ → Job → Finish job and save** saves the job
+   as any other.
+
+**Keep markers in the camera's view** while you touch the block and drive the screws: the phone measures everything
+from them, from any mapped sheet. With the block on the table there are sheets on every side of it. In the
+simulator (`npm run test:pilot`: four sheets 2 × 2, the block where they meet, the drill always square, only turned
+about the bit) every corner and every screw kept 20 markers or more in view. What remains: the camera must look
+**away from the block**, toward the sheets around it (the simulated person turns the drill about the bit for that);
+looking across the block's top sees few markers. With one sheet and the block beside it, the far side of the block
+loses the sheet. If the text shows a magnifier, the markers are lost: turn the drill about the bit until they are back.
+A sheet that moves after it was mapped is left out of the measurement at once and shown amber dashed; sheet 1 moving
+cannot be detected (everything would seem to move), so tape it well.
+
+**What the colours mean:** cyan is the tool and the model of the block (a see-through ghost over the camera image);
+amber is the next thing to do, and it glows; green is done or ready; grey-white is the rest; red is stop only.
+The controls and the drawn guides that matter for the current step glow, the others are dimmed. There is no other
+text on the screen: tap the text at the top to see the current step in words for 3 s.
+
+**Stop** ends the pilot: the next start begins again at Sheet. **Pause** keeps it (the sheets and the block are fixed
+to the bench), so Continue goes back to the same phase. The table map is kept even after Stop.
+
+---
+
 ## 7. Optional: plan with the drill as a pointer
 
 1. **Menu ☰ → Job → New plan with the tool.** Rest the tip on a free spot of the sheet (between markers) and tap
@@ -261,7 +325,7 @@ The defaults stay as they are; each of these is a switch, kept on the phone unti
 | **filter at camera / tip** | Where the engine smooths the pose. In simulation, filtering at the tip halves the motor's shake at the tip (0.16 vs 0.32 mm) | Motor on: the filtered tip jitter in the table |
 | **60 fps** | Asks the camera for 60 frames/s (the line "camera runs at" says what it gives) | Latency, and the shake while moving |
 | **lock focus** | Locks focus and exposure (Chrome on Android; Safari on iPhone does not allow it, and says so) | Steadiness with the motor on: autofocus hunting adds jitter |
-| **Display classic / simple** (menu → Display) | The working screen: the guide in words over the camera, or one number and shapes on black (video optional). Each job records which one was used | Do the same 4-hole job (test 3) once in classic and once in simple, and compare time and angle in /memory |
+| **Display classic / simple** (menu → Display) | The working screen: the guide in words over the camera, or one number and shapes in the 3D simulation's colours (video optional). Each job records which one was used | Do the same 4-hole job (test 3) once in classic and once in simple, and compare time and angle in /memory |
 | **record camera 10 s** | Records 10 s of the frames the tracker sees, with the calibration, as a `.strec` file. When it is ready, a sheet offers **Share** (AirDrop it to the laptop) and **Download** | Send it to me: I replay it on the laptop with both detectors and both filters (`node scripts/replay.mts file.strec`) |
 
 A good order, with the drill fixed as in test 2:

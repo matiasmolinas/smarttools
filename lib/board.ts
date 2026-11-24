@@ -37,3 +37,41 @@ export function markerCorners(id: number): { x: number; y: number }[] | null {
     { x: m.x - h, y: m.y - h },
   ];
 }
+
+// ---------------- the table: up to four sheets ----------------
+// Sheet k (0..SHEETS-1) has the same printed layout with marker ids MARKERS_PER_SHEET * k + (0..27). Sheet 0 is
+// the sheet above and stays the world frame; the others are placed on the same bench by a learned map
+// (lib/tablemap.ts). Ids 28..111 are also used by the demo part's stickers (lib/assembly.ts, ids 40..65): when
+// markers on parts are tracked, their ids win and are never read as a sheet's (lib/markertracker.ts).
+
+export const SHEETS = 4;
+export const MARKERS_PER_SHEET = BOARD_MARKERS.length;
+
+/** The sheet a marker id belongs to (0..SHEETS-1), null if it is on no sheet. */
+export function sheetOf(id: number): number | null {
+  if (!Number.isInteger(id) || id < 0 || id >= SHEETS * MARKERS_PER_SHEET) return null;
+  return Math.floor(id / MARKERS_PER_SHEET);
+}
+
+/** The marker ids of sheet k, in the same order as BOARD_MARKERS. */
+export function sheetMarkerIds(k: number): number[] {
+  return BOARD_MARKERS.map((m) => m.id + MARKERS_PER_SHEET * k);
+}
+
+/** Corners of a marker of any sheet on its own sheet (the sheet's centre is the origin, metres), js-aruco2 order.
+ * For sheet 0 this is markerCorners. */
+export function sheetMarkerCorners(id: number): { x: number; y: number }[] | null {
+  const k = sheetOf(id);
+  return k == null ? null : markerCorners(id - MARKERS_PER_SHEET * k);
+}
+
+/** A sheet's outline on its own plane (metres), counter-clockwise from its bottom-left corner. */
+export function sheetOutline(): { x: number; y: number }[] {
+  const w = SHEET.w / 2, h = SHEET.h / 2;
+  return [
+    { x: -w, y: -h },
+    { x: w, y: -h },
+    { x: w, y: h },
+    { x: -w, y: h },
+  ];
+}

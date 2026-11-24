@@ -8,9 +8,13 @@
 // Stop (held 1 s) turns everything off, and the next start asks what changed and redoes only that.
 // Three loops run independently: camera frames (tracked in a worker), the engine clock (120 Hz), drawing.
 // For development only, /hud?sim=1 replaces the camera with the scene simulator (no button for it); with
-// &recipe=1 it works the sheet's holes from a recipe, so the live Checks can be seen.
+// &recipe=1 it works the sheet's holes from a recipe, so the live Checks can be seen; with &pilot=1 (simple
+// display) the simulated person does the pilot job.
 // A plan that came from a recipe (plan.recipe): each finished hole shows its Check answered by the engine (a card
 // under the banner), and the steps that are not holes are confirmed by the person (the "Step" sheet).
+// The pilot job (lib/pilot.ts; the simple display, the default, when no saved plan is active): three round phase
+// buttons on the left (sheet, part, work), one text at the top, and the recipe guides by lighting the controls and
+// the drawn guides that matter now (focus) and dimming the rest; its words only on a tap on the text.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BenchPanel from "./BenchPanel";
@@ -20,8 +24,9 @@ import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { CHANGES, ago, autoPauseReason, explainStartError, onStart, pausedFor, planFor, readRun, writeRun, type Change, type RunRecord, type StartStage } from "@/lib/runstate";
 import type { Overlay } from "@/lib/hud";
 import { drawGuide } from "@/lib/hudguide";
-import { chipNumbers, displaySetting, drawSimple, readUiPrefs, uiColorHex, wordsFor, type UiColor, type UiKind } from "@/lib/hudsimple";
-import { BrowserNav } from "@/lib/tracker";
+import { COL, captureHint, chipNumbers, controlLook, displaySetting, drawSimple, phaseButtons, pilotRuns, readUiPrefs, readout, textKey, wordsFor, type PhaseButton, type SimpleFocus, type UiKind } from "@/lib/hudsimple";
+import { BrowserNav, isPilotPlan } from "@/lib/tracker";
+import { currentStep, focus, pilotText, pilotWords, type Phase, type PilotState, type PilotText } from "@/lib/pilot";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
 import { DEFAULT_DISTURBANCE, DEFAULT_RIG, RUN_TIME, disturb, dockRigAt, markerCodes, toolWorldFromHold, truthAt } from "@/lib/scene";
@@ -38,6 +43,18 @@ type VideoWithRvfc = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now:
 type Status = "start" | "starting" | "running" | "paused" | "blocked";
 /** A finished hole's Check on screen; words: what the person confirms ("" when the engine answers all of it) */
 type CheckCardData = { hole: HoleRecord; check: StepCheck; words: string };
+/** What the pilot shows in HTML (the top text, the phase buttons, the focus of every control), set from the draw
+ * loop only when it changes. angle: the arrow's direction, deg, rounded */
+type PilotUi = { st: PilotState; text: PilotText; angle: number; focus: SimpleFocus; buttons: PhaseButton[] };
+/** the steps the phases answer themselves (lib/pilot.ts PILOT_STEPS): confirmed once the block's fit is ok */
+const PILOT_MANUAL = ["sheet", "place", "register"];
+
+/** A vibration (Android; nothing where the browser has none). */
+const buzz = (p: number | number[]) => {
+  try {
+    navigator.vibrate?.(p);
+  } catch {}
+};
 
 export default function HudScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,6 +82,10 @@ export default function HudScreen() {
     draftRef.current = !!draft;
   }, [draft]);
   const [plan, setPlanState] = useState<Plan>(SHEET_PLAN);
+  const planIdRef = useRef(SHEET_PLAN.id);
+  useEffect(() => {
+    planIdRef.current = plan.id;
+  }, [plan]);
   const [done, setDone] = useState(0);
   const [tol, setTol] = useState(0.5);
   // sheets: one at a time
@@ -113,18 +134,26 @@ export default function HudScreen() {
   const [camOpts, setCamOpts] = useState({ fps60: false, lock: false });
   const camOptsRef = useRef({ fps60: false, lock: false });
   const [camInfo, setCamInfo] = useState("");
-  // the display: classic (default) or simple, the simple one's video on / off and its colour (kept per device);
-  // the draw loop reads the refs
-  const [ui, setUiState] = useState<UiKind>("classic");
-  const uiRef = useRef<UiKind>("classic");
+  // the display: simple (default) or classic, and the simple one's video on / off (kept per device); the draw
+  // loop reads the refs
+  const [ui, setUiState] = useState<UiKind>("simple");
+  const uiRef = useRef<UiKind>("simple");
   const [uiVideo, setUiVideoState] = useState(false);
   const uiVideoRef = useRef(false);
-  const [uiColor, setUiColorState] = useState<UiColor>("green");
-  const uiColorRef = useRef<UiColor>("green");
   // the simple display's buttons column: the readout is centred in what it leaves free
   const columnRef = useRef<HTMLDivElement>(null);
+  // the pilot: ?pilot=1 in the simulator, the left column (the depth bar goes right of it), what HTML shows, and
+  // the words of the current step on a tap on the text (3 s)
+  const pilotParamRef = useRef(false);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const [pilotUi, setPilotUiState] = useState<PilotUi | null>(null);
+  const pilotKey = useRef("");
+  const [words, setWords] = useState<string | null>(null);
+  const wordsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tracker = useCallback(() => trackerRef.current, []);
   const simple = ui === "simple";
+  /** the pilot's focus for the HTML controls (null outside the pilot: every control as it is) */
+  const pf = simple ? (pilotUi?.focus ?? null) : null;
 
   const say = useCallback((t: string, ms = 2500) => {
     setToast(t);
@@ -143,7 +172,9 @@ export default function HudScreen() {
   }, []);
 
   useEffect(() => {
-    simRef.current = new URLSearchParams(window.location.search).get("sim") === "1";
+    const q = new URLSearchParams(window.location.search);
+    simRef.current = q.get("sim") === "1";
+    pilotParamRef.current = q.get("pilot") === "1";
     try {
       const o = { fps60: localStorage.getItem("st-cam-fps60") === "1", lock: localStorage.getItem("st-cam-lock") === "1" };
       camOptsRef.current = o;
@@ -153,10 +184,8 @@ export default function HudScreen() {
       const p = readUiPrefs((k) => localStorage.getItem(k));
       uiRef.current = p.ui;
       uiVideoRef.current = p.video;
-      uiColorRef.current = p.color;
       setUiState(p.ui);
       setUiVideoState(p.video);
-      setUiColorState(p.color);
     } catch {}
     try {
       const v = Number(localStorage.getItem("st-cam-res"));
@@ -172,6 +201,8 @@ export default function HudScreen() {
     if (!tr) return;
     tr.cameraOpts = { ...camOptsRef.current };
     tr.display = displaySetting(uiRef.current, uiVideoRef.current);
+    // the classic display hides the pilot: it is paused (no corner capture, no table mapping) until simple is back
+    tr.pilotPaused = uiRef.current === "classic";
   };
   const setUi = (v: UiKind) => {
     uiRef.current = v;
@@ -180,7 +211,12 @@ export default function HudScreen() {
     try {
       localStorage.setItem("st-ui", v);
     } catch {}
+    // to simple mid-work: the pilot starts when it should and is not running (classic leaves it as it is, hidden)
+    const tr = trackerRef.current;
+    if (tr && !tr.pilot && setupDecided.current && statusRef.current === "running" && pilotWanted()) tr.startPilot();
   };
+  /** Does the simple display run the pilot job now (lib/hudsimple.ts pilotRuns)? */
+  const pilotWanted = () => pilotRuns({ ui: uiRef.current, sim: simRef.current, pilotParam: pilotParamRef.current, activePlan: simRef.current ? null : activePlanId() });
   const setUiVideo = (v: boolean) => {
     uiVideoRef.current = v;
     setUiVideoState(v);
@@ -189,12 +225,31 @@ export default function HudScreen() {
       localStorage.setItem("st-ui-video", v ? "1" : "0");
     } catch {}
   };
-  const setUiColor = (v: UiColor) => {
-    uiColorRef.current = v;
-    setUiColorState(v);
-    try {
-      localStorage.setItem("st-ui-color", v);
-    } catch {}
+  /** The pilot: the words of the current step (and what a corner capture misses), in place of the top text, 3 s. */
+  const showPilotWords = () => {
+    const tr = trackerRef.current, st = tr?.pilotState();
+    if (!tr || !st) return;
+    const hint = st.phase === "part" && st.capture ? captureHint(st.capture.why) : "";
+    const w = pilotWords(currentStep(st), tr.plan, st);
+    setWords(hint ? `${w} · ${hint}` : w);
+    if (wordsTimer.current) clearTimeout(wordsTimer.current);
+    wordsTimer.current = setTimeout(() => setWords(null), 3000);
+  };
+  /** A phase button: refused (only a vibration) when the phase cannot be entered yet. */
+  const enterPhase = (p: Phase) => {
+    const tr = trackerRef.current;
+    if (!tr?.setPhase(p)) return buzz(30);
+    pilotKey.current = ""; // redraw the HTML now
+  };
+  /** The Sheet phase button held 1 s: forget the table map (every sheet but sheet 1 is mapped again) and go back to
+   * the sheet phase. */
+  const clearTable = () => {
+    const tr = trackerRef.current;
+    if (!tr) return;
+    tr.clearTable();
+    tr.setPhase("sheet");
+    buzz([60, 90, 60]);
+    pilotKey.current = "";
   };
   /** Simple display: the classic banner's words for now, on a tap on the readout. */
   const showWords = () => {
@@ -214,9 +269,12 @@ export default function HudScreen() {
   async function ensureTracker(): Promise<BrowserNav> {
     if (trackerRef.current) return trackerRef.current;
     const tr = await BrowserNav.create();
+    syncTracker(tr);
     tr.onMessage = say;
     tr.onFault = setFault;
     tr.onHoleDone = (h) => showCard(h);
+    tr.onCorner = () => buzz(60);
+    tr.onPilotFit = (f) => buzz(f.ok ? [60, 90, 60] : 400);
     if (simRef.current) {
       tr.onSimImage = (img) => {
         const c = (simCanvasRef.current ??= document.createElement("canvas"));
@@ -227,7 +285,11 @@ export default function HudScreen() {
         c.getContext("2d")!.putImageData(img, 0, 0);
       };
       const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
-      tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, performance.now() / 1000);
+      // simulated time: a frame takes far longer to render and track here than on a phone, so the scene plays in
+      // slow motion on its own clock (lib/scene.ts SimClock) rather than dropping tracking between frames
+      const t0 = performance.now() / 1000;
+      tr.startSimClock(t0);
+      tr.useCalibration(rig.camera, rig.tool, rig.width, rig.height, t0);
       // ?recipe=1: the sheet's holes from a recipe, recorded (never saved) so the Check cards and the steps show
       if (new URLSearchParams(window.location.search).get("recipe") === "1") {
         const p = simulatorRecipePlan();
@@ -235,6 +297,9 @@ export default function HudScreen() {
         recipeRef.current = recipeOfPlan(p);
         setPlanState(p);
       }
+      // ?pilot=1: carry on with the pilot kept here, after the fixed calibration (before it, a pilot in "work"
+      // would set its plan the phone's way and drop that calibration)
+      if (pilotWanted()) tr.restorePilot();
     } else {
       setPhoneName(tr.phone.name);
       setTol(tr.tolDeg);
@@ -243,6 +308,9 @@ export default function HudScreen() {
         const p = (await browserMemory().plan(id).catch(() => undefined)) ?? BUILT_IN_PLANS.find((b) => b.id === id);
         if (p) applyPlan(p, tr, false);
       }
+      // no saved plan active, simple display: carry on with the pilot kept here (in "work" it sets its own plan,
+      // with the same id, so its job's draft can be resumed below)
+      if (pilotWanted()) tr.restorePilot();
       // after the plan: a draft left behind means the page died mid-job (never in the simulator)
       tr.onJobProgress = writeJobDraft;
       const draft = readJobDraft();
@@ -308,6 +376,9 @@ export default function HudScreen() {
       tr?.resumeJob(null);
     }
     tr?.cancelCalibration();
+    tr?.clearPilot();
+    pilotKey.current = "none";
+    setPilotUiState(null);
     stopCamera();
     if (!simRef.current) tr?.forgetCalibrationSilently(); // frees the engine and the worker; stored calibrations stay, but are asked about
     runRef.current = writeRun("stopped");
@@ -438,11 +509,19 @@ export default function HudScreen() {
           .then(() => (clearJobDraft(), say(announce ? `Unfinished job saved · Plan: ${p.name}` : "Unfinished job saved")))
           .catch(() => say("The unfinished job could not be saved"));
     }
+    // a plan chosen by hand ends the pilot (the simple display then works that plan)
+    if (!isPilotPlan(p)) {
+      tr.clearPilot();
+      pilotKey.current = "none";
+      setPilotUiState(null);
+    }
     tr.setPlan(p);
     recipeRef.current = recipeOfPlan(p);
     clearCards();
     setPlanState(p);
     setActivePlanId(p.id === SHEET_PLAN.id ? null : p.id);
+    // back to no saved plan, in simple: the pilot starts again from its first phase
+    if (p.id === SHEET_PLAN.id && setupDecided.current && pilotWanted()) tr.startPilot();
     if (announce) say(`Plan: ${p.name} · ${p.holes.length} holes`);
   }
   async function nextPlan() {
@@ -545,6 +624,8 @@ export default function HudScreen() {
         setPausedMin(Math.round(p.minutes));
         if (p.suggestCheck) setSheet("resume");
       }
+      // simple display, no saved plan: the pilot job, from its first phase unless one was restored
+      if (!tr.pilot && pilotWanted()) tr.startPilot();
       persist("working");
     }, 500);
     return () => clearInterval(iv);
@@ -572,8 +653,26 @@ export default function HudScreen() {
   }, [status]);
 
   useEffect(() => {
-    const iv = setInterval(() => setDone(trackerRef.current?.recorder?.holes.length ?? 0), 500);
+    const iv = setInterval(() => {
+      const tr = trackerRef.current;
+      setDone(tr?.recorder?.holes.length ?? 0);
+      if (!tr) return;
+      // the plan is the tracker's: the pilot sets its own on entering "work"
+      if (tr.plan.id !== planIdRef.current) {
+        planIdRef.current = tr.plan.id;
+        recipeRef.current = recipeOfPlan(tr.plan);
+        clearCards();
+        setPlanState(tr.plan);
+      }
+      // the pilot's steps before the screws are answered by its phases: confirmed once the fit is ok
+      const rec = tr.recorder;
+      if (tr.pilot?.fit?.ok && isPilotPlan(tr.plan) && rec) {
+        const have = rec.confirmations.map((c) => c.id);
+        for (const id of PILOT_MANUAL) if (!have.includes(id)) tr.confirmStep(id, true);
+      }
+    }, 500);
     return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // a recipe step to confirm: decided from the job's data whenever nothing else is open (after the start decision,
@@ -582,6 +681,8 @@ export default function HudScreen() {
     if (status !== "running") return;
     const iv = setInterval(() => {
       const r = recipeRef.current, rec = trackerRef.current?.recorder;
+      // the pilot's steps are its phases: no Step sheet
+      if (isPilotPlan(trackerRef.current?.plan)) return;
       if (!r || !rec || !setupDecided.current || sheetRef.current !== null || draftRef.current || recFileRef.current || recordingRef.current) return;
       const due = dueManual(
         r,
@@ -643,20 +744,31 @@ export default function HudScreen() {
     if (v.requestVideoFrameCallback) rvfc = v.requestVideoFrameCallback(onVideoFrame);
     else fallback = setInterval(() => running() && !simRef.current && trackerRef.current?.frame(v, now()), 33);
 
-    // development only (?sim=1): simulated camera frames of the scripted drilling run
-    let simStart = now();
+    // development only (?sim=1): simulated camera frames of the scripted drilling run, on the simulator's clock: a
+    // frame is captured every 1/15 s of simulated time, once the previous one has been tracked
+    let simStart: number | null = null;
     const codes = markerCodes(new AR.Dictionary(DICTIONARY).codeList);
     const sim = setInterval(() => {
       const tr = trackerRef.current;
-      if (!simRef.current || !running() || !tr) return;
-      const ts = (now() - simStart) % RUN_TIME;
-      if (ts < 0.07) simStart = now() - ts;
+      const tc = tr?.simClock?.due();
+      if (!simRef.current || !running() || !tr || tc == null) return;
+      simStart ??= tc;
+      const ts = (tc - simStart) % RUN_TIME;
       const st = truthAt(ts);
       const rig = dockRigAt(undefined, DEFAULT_RIG, tr.phone);
-      tr.simFrame(rig, codes, toolWorldFromHold(tr.core, rig, disturb(st.hold, ts, st.phase, DEFAULT_DISTURBANCE)), now(), 1 + Math.round(ts * 1000));
-    }, 1000 / 15);
+      const seed = 1 + Math.round(ts * 1000);
+      // &pilot=1: the simulated person does the pilot's current phase; else the scripted drilling run
+      if (!(pilotParamRef.current && tr.pilotSimFrame(rig, codes, tc, seed))) tr.simFrame(rig, codes, toolWorldFromHold(tr.core, rig, disturb(st.hold, ts, st.phase, DEFAULT_DISTURBANCE)), tc, seed);
+    }, 4);
 
-    const clock = setInterval(() => running() && trackerRef.current?.advance(now()), 4);
+    // the engine's clock: the wall clock on the phone; in the simulator its own clock, one tick at a time, as far as
+    // the frames tracked allow
+    const clock = setInterval(() => {
+      const tr = trackerRef.current;
+      if (!running() || !tr) return;
+      if (tr.simClock) tr.simClock.run(now(), (t) => tr.advance(t));
+      else tr.advance(now());
+    }, 4);
 
     let raf = 0;
     const draw = () => {
@@ -671,11 +783,36 @@ export default function HudScreen() {
       // the banner (or the readout) hides under a sheet (setup, menu, job): it would show through it
       const top = sheetRef.current === null || sheetRef.current === "bench";
       if (uiRef.current === "simple") {
-        // the buttons column is HTML over the canvas: its width in canvas px
-        const col = columnRef.current, cw = canvas.clientWidth;
-        const rightInset = col && cw ? Math.max(0, (cw - col.getBoundingClientRect().left) * (w / cw)) : 0;
-        drawSimple(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, showVideo: uiVideoRef.current, color: uiColorHex(uiColorRef.current), readout: top, rightInset });
-      } else drawGuide(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, banner: top });
+        // the buttons columns are HTML over the canvas: their edges in canvas px
+        const col = columnRef.current, left = leftRef.current, cw = canvas.clientWidth, k = cw ? w / cw : 1;
+        const rightInset = col && cw ? Math.max(0, (cw - col.getBoundingClientRect().left) * k) : 0;
+        // the pilot: the text in HTML, the focus and the corner capture on the canvas too
+        const st = tr.pilotState();
+        const f = st ? focus(st) : null;
+        const depthX = left ? left.getBoundingClientRect().right * k + Math.min(w, h) * 0.04 : undefined;
+        drawSimple(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, showVideo: uiVideoRef.current, readout: top, rightInset, drawText: !st, focus: f, capture: st?.capture ?? null, depthX, phase: st?.phase ?? null });
+        publishPilot(st, f, view, tr.calibrated.tool);
+      } else {
+        drawGuide(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, banner: top });
+        publishPilot(null, null, view, false);
+      }
+    };
+    /** Hand the pilot's text, buttons and focus to React, only when something shown changes. */
+    const publishPilot = (st: PilotState | null, f: SimpleFocus | null, view: { state: SimState; overlay: Overlay }, calibrated: boolean) => {
+      if (!st || !f) {
+        if (pilotKey.current !== "none") (pilotKey.current = "none"), setPilotUiState(null);
+        return;
+      }
+      const ov = view.overlay;
+      const active = ov.pilot?.screwsPx.find((x) => x.state === "active");
+      const ro = readout(view.state, ov, { tipPx: ov.tipPx ?? null, markPx: active?.p ?? null, calibrated });
+      const text = pilotText(st, ro);
+      const angle = text.icon === "arrow" ? Math.round(((ro.angle ?? 0) * 180) / Math.PI / 5) * 5 : 0;
+      const buttons = phaseButtons(st);
+      const key = JSON.stringify([text, angle, f, buttons]);
+      if (key === pilotKey.current) return;
+      pilotKey.current = key;
+      setPilotUiState({ st, text, angle, focus: f, buttons });
     };
     const listen = (view: { state: SimState; overlay: Overlay }) => {
       const sg = soundRef.current;
@@ -845,7 +982,7 @@ export default function HudScreen() {
             status === "running" &&
             sheet === null &&
             !draft &&
-            (simple && card.check.outcome.status !== "manual" ? <CheckChip card={card} color={uiColorHex(uiColor)} onOk={() => setCard(null)} /> : <CheckCard card={card} onOk={() => setCard(null)} onAnswer={answerCard} />)}
+            (simple && card.check.outcome.status !== "manual" ? <CheckChip card={card} onOk={() => setCard(null)} /> : <CheckCard card={card} onOk={() => setCard(null)} onAnswer={answerCard} />)}
           {toast && <div className="rounded-2xl bg-black/75 px-5 py-2.5 text-lg font-medium text-white backdrop-blur-md">{toast}</div>}
         </div>
       )}
@@ -1017,7 +1154,6 @@ export default function HudScreen() {
                 <BigButton onClick={() => void recordCamera()}>Record 10 s</BigButton>
                 <BigButton onClick={toggleSound}>Sound: {soundOn ? "on" : "off"}</BigButton>
                 <BigButton onClick={() => setUi(simple ? "classic" : "simple")}>Display: {ui}</BigButton>
-                {simple && <BigButton onClick={() => setUiColor(uiColor === "green" ? "amber" : "green")}>Colour: {uiColor}</BigButton>}
                 <BigButton onClick={fullscreen}>Full screen</BigButton>
                 <BigButton onClick={() => (window.location.href = "/memory")}>Plans & jobs</BigButton>
               </div>
@@ -1049,26 +1185,49 @@ export default function HudScreen() {
               </button>
             </div>
           )}
-          {/* simple: five round buttons at the right edge, icons only: Pause, Stop (held), Video, Sound, More */}
+          {/* simple: five round buttons at the right edge, icons only: Pause, Stop (held), Video, Sound, More. In the
+              pilot each one glows when it is the one to press, or is dimmed when it does not matter now */}
           {simple && sheet === null && !draft && (
-            <div ref={columnRef} className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 z-30 flex -translate-y-1/2 flex-col gap-3" style={{ color: uiColorHex(uiColor) }}>
-              <button onClick={() => pause()} aria-label="Pause" className={ROUND}>
-                <Glyph d="M9 5v14M15 5v14" />
-              </button>
-              <HoldButton onHold={() => setSheet("stop")} onTap={() => navigator.vibrate?.(30)} label={<Glyph d="M6.5 6.5h11v11h-11z" />} aria="Stop (hold)" className={ROUND} />
-              <button onClick={() => setUiVideo(!uiVideo)} aria-label={uiVideo ? "Hide the video" : "Show the video"} aria-pressed={uiVideo} className={ROUND}>
-                <Glyph d={uiVideo ? EYE : `${EYE}M4 20L20 4`} />
-              </button>
-              <button onClick={toggleSound} aria-label={soundOn ? "Sound off" : "Sound on"} aria-pressed={soundOn} className={ROUND}>
-                <Glyph d={soundOn ? `${SPEAKER}M15.5 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11` : `${SPEAKER}M16 9.5l5 5M21 9.5l-5 5`} />
-              </button>
-              <button onClick={() => setSheet("menu")} aria-label="More" className={ROUND}>
-                <Glyph d="M5.5 12h.01M12 12h.01M18.5 12h.01" width={4} />
-              </button>
+            <div ref={columnRef} className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 z-30 flex -translate-y-1/2 flex-col gap-3" style={{ color: COL.rest }}>
+              <Lit look={controlLook(pf, "pause")}>
+                <button onClick={() => pause()} aria-label="Pause" className={ROUND}>
+                  <Glyph d="M9 5v14M15 5v14" />
+                </button>
+              </Lit>
+              <Lit look={controlLook(pf, "stop")}>
+                <HoldButton onHold={() => setSheet("stop")} onTap={() => buzz(30)} label={<Glyph d="M6.5 6.5h11v11h-11z" />} aria="Stop (hold)" className={ROUND} />
+              </Lit>
+              <Lit look={controlLook(pf, "video")}>
+                <button onClick={() => setUiVideo(!uiVideo)} aria-label={uiVideo ? "Hide the video" : "Show the video"} aria-pressed={uiVideo} className={ROUND}>
+                  <Glyph d={uiVideo ? EYE : `${EYE}M4 20L20 4`} />
+                </button>
+              </Lit>
+              <Lit look={controlLook(pf, "sound")}>
+                <button onClick={toggleSound} aria-label={soundOn ? "Sound off" : "Sound on"} aria-pressed={soundOn} className={ROUND}>
+                  <Glyph d={soundOn ? `${SPEAKER}M15.5 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11` : `${SPEAKER}M16 9.5l5 5M21 9.5l-5 5`} />
+                </button>
+              </Lit>
+              <Lit look={controlLook(pf, "more")}>
+                <button onClick={() => setSheet("menu")} aria-label="More" className={ROUND}>
+                  <Glyph d="M5.5 12h.01M12 12h.01M18.5 12h.01" width={4} />
+                </button>
+              </Lit>
             </div>
           )}
-          {/* simple: a tap on the readout says it in words (the classic banner's), for 3 s */}
-          {simple && sheet === null && !draft && (
+          {/* the pilot: the three phase buttons at the left edge (sheet, part, work), vertically centred */}
+          {simple && pilotUi && sheet === null && !draft && (
+            <div ref={leftRef} className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-1/2 z-30 flex -translate-y-1/2 flex-col gap-3" style={{ color: COL.rest }}>
+              {pilotUi.buttons.map((b) => (
+                <PhaseButtonView key={b.phase} b={b} look={controlLook(pf, `phase-${b.phase}`)} onEnter={() => enterPhase(b.phase)} onClear={b.phase === "sheet" ? clearTable : undefined} />
+              ))}
+            </div>
+          )}
+          {/* the pilot: the one text at the top (or the step's words for 3 s after a tap on it) */}
+          {simple && pilotUi && sheet === null && !draft && (
+            <PilotTopText text={pilotUi.text} angle={pilotUi.angle} words={words} look={controlLook(pf, "text")} onTap={showPilotWords} />
+          )}
+          {/* simple without the pilot: a tap on the readout says it in words (the classic banner's), for 3 s */}
+          {simple && !pilotUi && sheet === null && !draft && (
             <button
               onClick={showWords}
               aria-label="Say it in words"
@@ -1260,11 +1419,12 @@ function Glyph({ d, width = 2.5 }: { d: string; width?: number }) {
   );
 }
 
-/** A finished hole's Check in the simple display: the hole, ✓ or ✗, and the numbers. Pass: an outline (goes by
- * itself); fail: filled, until tapped. */
-function CheckChip({ card, color, onOk }: { card: CheckCardData; color: string; onOk: () => void }) {
+/** A finished hole's Check in the simple display: the hole, ✓ or ✗, and the numbers. Pass: a green outline (goes
+ * by itself); fail: filled red, until tapped. */
+function CheckChip({ card, onOk }: { card: CheckCardData; onOk: () => void }) {
   const { status, detail } = card.check.outcome;
   const fail = status === "fail";
+  const color = fail ? COL.stop : COL.ok;
   const name = card.check.hole ?? card.check.id;
   // the numbers only; words (not drilled, the person said no) when there are none
   const nums = chipNumbers(detail);
@@ -1290,6 +1450,155 @@ function CheckChip({ card, color, onOk }: { card: CheckCardData; color: string; 
   ) : (
     <div role="status" aria-label={`${name} passed: ${detail}`} className={`${cls} bg-black/70 backdrop-blur-md`} style={{ borderColor: color, color }}>
       {body}
+    </div>
+  );
+}
+
+// ---------------- the pilot's controls (simple display) ----------------
+
+/** A control under the pilot's focus: a pulsing amber ring when it is the one to press, dimmed when it does not
+ * matter now (still usable). */
+function Lit({ look, children, shape = "rounded-full" }: { look: { glow: boolean; opacity: number }; children: React.ReactNode; shape?: string }) {
+  return (
+    <div className="relative" style={{ opacity: look.opacity, transition: "opacity 200ms" }}>
+      {children}
+      {look.glow && <span aria-hidden className={`st-glow pointer-events-none absolute -inset-1.5 border-[3px] ${shape}`} style={{ borderColor: COL.next, boxShadow: `0 0 16px ${COL.next}` }} />}
+    </div>
+  );
+}
+
+const PHASE_ICON: Record<Phase, React.ReactNode> = {
+  // a grid of squares: the marker sheet
+  sheet: <path d="M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z" />,
+  // a square with its corners: the block registered on its corners
+  part: (
+    <>
+      <path d="M6 6h12v12H6z" strokeWidth={2} />
+      <path d="M6 6h.01M18 6h.01M18 18h.01M6 18h.01" strokeWidth={5.5} />
+    </>
+  ),
+  // a target: the screws
+  work: <path d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM12 2v4M12 18v4M2 12h4M18 12h4M12 11.9v.2" />,
+};
+const PHASE_LABEL: Record<Phase, string> = { sheet: "Sheet: map the sheets on the table", part: "Part: touch the block's four corners", work: "Work: the four screws" };
+
+/** A phase button: filled when it is the current phase, dimmed (a tap only vibrates) when it cannot be entered
+ * yet, a small green tick when it is done; held 1 s when entering it would throw away corners already taken.
+ * With `onClear` (the Sheet button) a tap enters the phase and holding it 1 s calls onClear (the table map). */
+function PhaseButtonView({ b, look, onEnter, onClear }: { b: PhaseButton; look: { glow: boolean; opacity: number }; onEnter: () => void; onClear?: () => void }) {
+  const cls = `${ROUND} ${b.current ? "!bg-[#e8eef5] text-black" : ""}`;
+  const icon = (
+    <svg viewBox="0 0 24 24" width={30} height={30} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {PHASE_ICON[b.phase]}
+    </svg>
+  );
+  const aria = `${PHASE_LABEL[b.phase]}${b.current ? " (now)" : ""}${b.completed ? ", done" : ""}${b.enabled ? "" : ", not yet"}${b.hold ? ", hold to start again" : ""}${onClear ? ", hold to map the table again" : ""}`;
+  return (
+    <Lit look={{ glow: look.glow && b.enabled, opacity: Math.min(look.opacity, b.enabled ? 1 : 0.3) }}>
+      {onClear && b.enabled ? (
+        <HoldButton onHold={onClear} onTap={onEnter} label={icon} aria={aria} className={cls} />
+      ) : b.hold && b.enabled ? (
+        <HoldButton onHold={onEnter} onTap={() => buzz(30)} label={icon} aria={aria} className={cls} />
+      ) : (
+        <button onClick={b.enabled ? onEnter : () => buzz(30)} aria-label={aria} aria-current={b.current ? "step" : undefined} aria-disabled={!b.enabled} className={cls}>
+          {icon}
+        </button>
+      )}
+      {b.completed && (
+        <span aria-hidden className="pointer-events-none absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-black" style={{ background: COL.ok }}>
+          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="#000" strokeWidth={4} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12.5l4.5 4.5L19 7.5" />
+          </svg>
+        </span>
+      )}
+    </Lit>
+  );
+}
+
+const TONE_COLOR: Record<PilotText["tone"], string> = { next: COL.next, ok: COL.ok, stop: COL.stop, plain: "#ffffff" };
+const TEXT_SHADOW = "0 2px 6px rgba(0,0,0,0.95), 0 0 2px #000, 0 0 18px rgba(0,0,0,0.8)";
+
+/** The icons of the top text, stroked like the buttons' (the canvas draws the same shapes: lib/hudguide.ts icon). */
+function TextIcon({ icon, angle, color }: { icon: PilotText["icon"]; angle: number; color: string }) {
+  let body: React.ReactNode;
+  if (icon === "arrow") body = <path d="M4 12h15M13.5 6.5L19.5 12l-6 5.5" transform={`rotate(${angle} 12 12)`} />;
+  else if (icon === "down") body = <path d="M12 4v13M7 12l5 5.5 5-5.5M5 20.5h14" />;
+  else if (icon === "level") body = <path d="M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />;
+  else if (icon === "check") body = <path d="M6 12l4.5 4.5 8-9" />;
+  else if (icon === "stop") body = <path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM8 8l8 8M16 8l-8 8" />;
+  else if (icon === "drill") body = <path d="M12 3.5v17M8.5 16l3.5 4.5 3.5-4.5" />;
+  else if (icon === "search") body = <path d="M10.5 5.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM14.2 14.2l5.3 5.3" />;
+  else if (icon === "corner") body = <path d="M5 19.5V5h14.5M5 5h.01" />;
+  else if (icon === "sheet") body = PHASE_ICON.sheet;
+  else body = <path d="M12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM18 12h3.5M2.5 12H6M12 18v3.5M12 2.5V6" />; // setup: a crosshair
+  return (
+    <svg viewBox="0 0 24 24" className="h-14 w-14 shrink-0" fill="none" stroke={color} strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.9))" }}>
+      {icon === "corner" ? (
+        <>
+          {body}
+          <path d="M5 5h.01" strokeWidth={6} />
+        </>
+      ) : (
+        body
+      )}
+    </svg>
+  );
+}
+
+/** The pilot's one text, top centre, no box: icon, value and unit in the tone's colour. When what it shows changes
+ * kind (textKey) the old one fades out as the new one fades in; a value that changes updates in place. A tap shows
+ * the step's words in the same place for 3 s. Nothing is drawn around it: under the focus glow the text itself
+ * pulses with a soft glow in its own colour; dimmed, it fades. */
+function PilotTopText({ text, angle, words, look, onTap }: { text: PilotText; angle: number; words: string | null; look: { glow: boolean; opacity: number }; onTap: () => void }) {
+  const color = TONE_COLOR[text.tone];
+  const id = words ? `words|${words}` : textKey(text);
+  return (
+    <div className="pointer-events-none absolute inset-x-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] z-20 flex justify-center landscape:inset-x-[calc(max(0.75rem,env(safe-area-inset-left),env(safe-area-inset-right))+5rem)]">
+      <div className={look.glow ? "st-text-glow" : undefined} style={{ opacity: look.opacity, transition: "opacity 200ms", color: words ? "#ffffff" : color }}>
+        <button onClick={onTap} aria-label={words ?? (`${text.value} ${text.unit}`.trim() || "Say it in words")} className="pointer-events-auto block min-h-16 min-w-40 max-w-full px-3 py-1">
+          <CrossFade id={id}>
+            {words ? (
+              <span className="block max-w-[22rem] text-center text-2xl font-semibold leading-snug text-white" style={{ textShadow: TEXT_SHADOW }}>
+                {words}
+              </span>
+            ) : (
+              <span className="flex items-center justify-center gap-2 whitespace-nowrap" style={{ color, textShadow: TEXT_SHADOW }}>
+                <TextIcon icon={text.icon} angle={angle} color={color} />
+                {text.value && <span className="text-6xl font-bold leading-none tabular-nums">{text.value}</span>}
+                {text.unit && text.value && <span className="self-end pb-1 text-3xl font-semibold leading-none">{text.unit}</span>}
+              </span>
+            )}
+          </CrossFade>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Children keyed by `id`: when `id` changes, the old content stays mounted, fading out (200 ms), stacked under
+ * the new one fading in. The same `id` with new children updates in place, without a fade. */
+function CrossFade({ id, children }: { id: string; children: React.ReactNode }) {
+  const [st, setSt] = useState<{ cur: string; out: { id: string; node: React.ReactNode }[] }>({ cur: id, out: [] });
+  const last = useRef<React.ReactNode>(children);
+  if (st.cur !== id) setSt({ cur: id, out: [...st.out.filter((o) => o.id !== id && o.id !== st.cur), { id: st.cur, node: last.current }] });
+  useEffect(() => {
+    last.current = children;
+  });
+  useEffect(() => {
+    if (!st.out.length) return;
+    const t = setTimeout(() => setSt((s) => ({ ...s, out: [] })), 220);
+    return () => clearTimeout(t);
+  }, [st.out]);
+  return (
+    <div className="grid place-items-center">
+      {st.out.map((o) => (
+        <div key={o.id} className="st-fade-out [grid-area:1/1]">
+          {o.node}
+        </div>
+      ))}
+      <div key={id} className="st-fade-in [grid-area:1/1]">
+        {children}
+      </div>
     </div>
   );
 }

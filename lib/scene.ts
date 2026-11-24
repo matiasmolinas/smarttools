@@ -4,10 +4,10 @@
 // noise, occluders). The same frames go through the real pipeline (lib/navpipeline.ts) so every
 // number can be checked against the truth: scripts/scene-test.mts (Node) and /lab (browser).
 
-import { BOARD_MARKERS, BOARD_TARGETS } from "./board.ts";
-import type { Camera, NavCore, RenderOptions, ToolCalib } from "./engine.ts";
+import { BOARD_MARKERS, BOARD_TARGETS, MARKER_SIZE, SHEET, sheetMarkerCorners, sheetMarkerIds } from "./board.ts";
+import type { Camera, NavCore, RenderOptions, SheetSpec, SolidSpec, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
-import { applyDir, compose, fromPose, inverse, relative, toPose, type Xf } from "./xform.ts";
+import { applyDir, compose, fromPose, inverse, qaxis, relative, toPose, type Xf } from "./xform.ts";
 import { toolLocal } from "./scenedef.ts";
 import { dockRig, type PhoneProfile } from "./dockrig.ts";
 
@@ -332,4 +332,368 @@ export function renderTool(core: NavCore, rig: Rig, codes: Uint8Array, toolWs: X
     ...extra,
   });
   return { width: rig.width, height: rig.height, data };
+}
+
+// ---------------- the pilot job: a table of four sheets, a wood block on it ----------------
+
+/** The simulator's table: four sheets in a 2 × 2 arrangement with 6 mm gaps, each laid by hand a little turned
+ * (0°, 1.5°, −2°, 0.8°), sheet 0 (the world frame) bottom-left. Placements in metres and radians, as the renderer
+ * takes them (RenderOptions.sheets). */
+const DEG = Math.PI / 180;
+export const PILOT_TABLE: SheetSpec[] = [
+  { k: 0, x: 0, y: 0, yaw: 0 },
+  { k: 1, x: SHEET.w + 0.006, y: 0, yaw: 1.5 * DEG },
+  { k: 2, x: 0, y: SHEET.h + 0.006, yaw: -2 * DEG },
+  { k: 3, x: SHEET.w + 0.006, y: SHEET.h + 0.006, yaw: 0.8 * DEG },
+];
+/** One sheet alone (the layout before the table: the block beside it). */
+export const SHEET_ONLY: SheetSpec[] = [{ k: 0, x: 0, y: 0, yaw: 0 }];
+
+/** The simulator's wood block: 100 × 100 × 18 mm, its centre at `centreMm` (sheet 0's frame), rotated `angleDeg`
+ * counter-clockwise. By default it sits on the table, its centre where the four sheets meet. */
+export interface PilotBlock {
+  sideMm: number;
+  heightMm: number;
+  angleDeg: number;
+  centreMm: [number, number];
+}
+export const PILOT_BLOCK: PilotBlock = { sideMm: 100, heightMm: 18, angleDeg: 4, centreMm: [((SHEET.w + 0.006) / 2) * 1000, ((SHEET.h + 0.006) / 2) * 1000] };
+
+/** The block beside sheet 0 (the layout before the table): its nearest point `gapMm` from the sheet's right edge,
+ * centred on the sheet's height at `centreYMm`. */
+export function blockBeside(gapMm = 15, centreYMm = 0, b: PilotBlock = PILOT_BLOCK): PilotBlock {
+  const h = b.sideMm / 2, a = (b.angleDeg * Math.PI) / 180;
+  return { ...b, centreMm: [(SHEET.w * 1000) / 2 + gapMm + h * (Math.abs(Math.cos(a)) + Math.abs(Math.sin(a))), centreYMm] };
+}
+
+/** The block's centre on the bench (mm, sheet 0's frame). */
+export function pilotBlockCentre(b: PilotBlock = PILOT_BLOCK): [number, number] {
+  return [b.centreMm[0], b.centreMm[1]];
+}
+
+/** The block's top corners (mm, sheet frame), counter-clockwise from its origin corner (the one fitPart calls
+ * the origin: its -X, -Y corner in the block's own frame). */
+export function pilotBlockCorners(b: PilotBlock = PILOT_BLOCK): V3[] {
+  const [cx, cy] = pilotBlockCentre(b);
+  const h = b.sideMm / 2, a = (b.angleDeg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  return [[-h, -h], [h, -h], [h, h], [-h, h]].map(([u, v]) => [cx + u * c - v * s, cy + u * s + v * c, b.heightMm]);
+}
+
+/** The block as a solid for the renderer (it hides what is behind it, and the video shows it). */
+export function pilotBlockSolid(b: PilotBlock = PILOT_BLOCK): SolidSpec {
+  const [cx, cy] = pilotBlockCentre(b);
+  const h = b.sideMm / 2000, top = b.heightMm / 1000;
+  return {
+    pose: { p: [cx / 1000, cy / 1000, 0], q: qaxis([0, 0, 1], (b.angleDeg * Math.PI) / 180), s: [1, 1, 1] },
+    planes: [[1, 0, 0, h], [-1, 0, 0, h], [0, 1, 0, h], [0, -1, 0, h], [0, 0, 1, top], [0, 0, -1, 0.0005]],
+    shade: 176,
+  };
+}
+
+/** Does the segment from `a` to `b` (world, m) pass through the block? (A marker corner hidden from the camera.) */
+export function blockHides(blk: PilotBlock, a: V3, b: V3): boolean {
+  const [cx, cy] = pilotBlockCentre(blk);
+  const ang = (-blk.angleDeg * Math.PI) / 180, c = Math.cos(ang), s = Math.sin(ang);
+  const loc = (p: V3): V3 => {
+    const x = p[0] - cx / 1000, y = p[1] - cy / 1000;
+    return [c * x - s * y, s * x + c * y, p[2]];
+  };
+  const p = loc(a), q = loc(b), d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+  const h = blk.sideMm / 2000, lo = [-h, -h, 0], hi = [h, h, blk.heightMm / 1000];
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-15) {
+      if (p[i] < lo[i] || p[i] > hi[i]) return false;
+      continue;
+    }
+    let u = (lo[i] - p[i]) / d[i], v = (hi[i] - p[i]) / d[i];
+    if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u);
+    t1 = Math.min(t1, v);
+    if (t0 > t1) return false;
+  }
+  // the end on the bench itself touches the block's bottom face when it is under it: that counts as hidden
+  return t1 > t0 && t0 < 1 - 1e-9;
+}
+
+/** The twist (deg) that turns the docked camera toward `look` (m, on the sheet) while the tip is at `tip` and the
+ * bit is square: the camera sees a strip that starts at the tip and runs toward the side the camera is on. */
+export function twistToward(core: NavCore, rig: Rig, tip: V3, look: [number, number]): number {
+  const bearing = (twist: number) => {
+    const p = core.rigPose(0, 0, twist, tip, rig.tool);
+    // camera centre in the world: -Rᵀ t
+    const R = p.R, t = p.t;
+    const c = [-(R[0] * t[0] + R[3] * t[1] + R[6] * t[2]), -(R[1] * t[0] + R[4] * t[1] + R[7] * t[2])];
+    return Math.atan2(c[1] - tip[1], c[0] - tip[0]);
+  };
+  const a0 = bearing(0), a90 = bearing(90);
+  const wrap = (x: number) => Math.atan2(Math.sin(x), Math.cos(x));
+  const sign = Math.sign(wrap(a90 - a0)) || 1;
+  return (wrap(Math.atan2(look[1] - tip[1], look[0] - tip[0]) - a0) * sign * 180) / Math.PI;
+}
+
+/** What the simulated camera looks at: the sheets on the bench and the block that may hide some of their markers. */
+export interface ViewScene {
+  /** default: sheet 0 alone */
+  table?: readonly SheetSpec[];
+  block?: PilotBlock | null;
+}
+
+/** Sheet markers whose four corners fall inside the image (with a margin), each side at least `minPx` long, and
+ * none hidden by the block: the markers the camera can read for this pose (a projection, no rendering: fast enough
+ * to search with). Every sheet of `scene.table` counts (default: sheet 0 alone). */
+export function markersInView(core: NavCore, rig: Rig, pose: Pose, marginPx = 6, minPx = 14, scene: ViewScene = {}): number {
+  const table = scene.table ?? SHEET_ONLY, blk = scene.block ?? null;
+  const pts: V3[] = [];
+  for (const sh of table) {
+    const c = Math.cos(sh.yaw), s = Math.sin(sh.yaw);
+    for (const id of sheetMarkerIds(sh.k)) for (const p of sheetMarkerCorners(id)!) pts.push([sh.x + c * p.x - s * p.y, sh.y + s * p.x + c * p.y, 0]);
+  }
+  const px = core.projectPoints(rig.camera, pose, pts);
+  // the camera's centre in the world (-Rᵀ t), for the block's shadow
+  const R = pose.R, t = pose.t;
+  const cam: V3 = [0, 1, 2].map((j) => -(R[j] * t[0] + R[3 + j] * t[1] + R[6 + j] * t[2])) as V3;
+  let n = 0;
+  for (let i = 0; i < pts.length / 4; i++) {
+    const q = px.slice(i * 4, i * 4 + 4);
+    if (q.some((p) => !p || p.x < marginPx || p.y < marginPx || p.x > rig.width - marginPx || p.y > rig.height - marginPx)) continue;
+    const side = Math.min(...q.map((p, k) => Math.hypot(p!.x - q[(k + 1) % 4]!.x, p!.y - q[(k + 1) % 4]!.y)));
+    if (side < minPx) continue;
+    if (blk && pts.slice(i * 4, i * 4 + 4).some((w) => blockHides(blk, cam, w))) continue;
+    n++;
+  }
+  return n;
+}
+
+/** How a person holds the drill on a point off the sheet (the tip at `tip`, m) so the camera keeps reading the
+ * sheet while pivoting ±`pivotDeg`: the smallest lean of the bit (deg, 0..maxLeanDeg, any direction) and the twist that
+ * keep at least `want` markers in view over the whole pivot, else the hold with the most. markers: the fewest over
+ * the pivot (markersInView). Searched once per point and rig, then cached. */
+export function pilotView(core: NavCore, rig: Rig, tip: V3, o: { pivotDeg?: number; want?: number; maxLeanDeg?: number } & ViewScene = {}): { yawDeg: number; pitchDeg: number; twistDeg: number; leanDeg: number; markers: number } {
+  const pivotDeg = o.pivotDeg ?? PILOT_PIVOT_DEG, want = o.want ?? 8, maxLean = o.maxLeanDeg ?? 25;
+  const scene: ViewScene = { table: o.table, block: o.block };
+  const key = `${tip.map((v) => v.toFixed(4))}|${rig.tool.tipCam.map((v) => v.toFixed(5))}|${rig.tool.axisCam.map((v) => v.toFixed(5))}|${pivotDeg}|${want}|${maxLean}|${JSON.stringify(scene)}`;
+  const hit = viewCache.get(key);
+  if (hit) return hit;
+  const cone: [number, number][] = [[0, 0], [pivotDeg, 0], [-pivotDeg, 0], [0, pivotDeg], [0, -pivotDeg]];
+  let best = { yawDeg: 0, pitchDeg: 0, twistDeg: 0, leanDeg: 0, markers: -1 };
+  for (const lean of [0, 5, 10, 15, 20, 25].filter((l) => l <= maxLean)) {
+    for (let d = 0; d < (lean ? 16 : 1); d++) {
+      const phi = (d * Math.PI) / 8;
+      const yaw = lean * Math.cos(phi), pitch = lean * Math.sin(phi);
+      for (let tw = -180; tw < 180; tw += 15) {
+        let min = Infinity;
+        for (const [dy, dp] of cone) {
+          min = Math.min(min, markersInView(core, rig, core.rigPose(yaw + dy, pitch + dp, tw, tip, rig.tool), 6, 14, scene));
+          if (min <= best.markers) break;
+        }
+        if (min > best.markers) best = { yawDeg: yaw, pitchDeg: pitch, twistDeg: tw, leanDeg: lean, markers: min };
+      }
+    }
+    if (best.markers >= want) break;
+  }
+  viewCache.set(key, best);
+  return best;
+}
+const viewCache = new Map<string, ReturnType<typeof pilotView>>();
+
+/** Where the simulated person looks while hovering over the block: on a table, toward sheet 0's centre; with one
+ * sheet, the sheet's centre column of markers at the tip's own height (clamped to the sheet). */
+export function pilotLook(tip: V3, table: readonly SheetSpec[] = SHEET_ONLY): [number, number] {
+  if (table.length > 1) return [0, 0];
+  return [0.02, Math.max(-0.1, Math.min(0.1, tip[1]))];
+}
+
+/** What the simulated person does for the app's current pilot phase. */
+export interface PilotHoldInput {
+  phase: "sheet" | "part" | "work";
+  /** corners captured so far (part): the person goes to corner `corners % 4` of the block */
+  corners: number;
+  /** the screw to drive (work), mm in the sheet's frame (z: the top of the block), or null (hover) */
+  screw: { x: number; y: number; z: number; depthMm: number } | null;
+  /** default PILOT_BLOCK (on the table) */
+  block?: PilotBlock;
+  /** the sheets on the bench (default PILOT_TABLE); the person looks at them all in the sheet phase */
+  table?: readonly SheetSpec[];
+  /** on the corners, how far the person may lean the drill to keep markers in view (deg, default 0: the drill
+   * square, only twisted toward the markers) */
+  maxLeanDeg?: number;
+}
+
+/** The sheet phase on a table: the person holds the drill about 8 cm over the bench and looks at each seam between
+ * two sheets in turn (a mapped one and the next), swaying a little, so every sheet is seen together with one already
+ * mapped. Stations: tip (m) and the point the camera turns toward. */
+const TABLE_SWEEP_S = 3.5;
+function tableStations(table: readonly SheetSpec[]): { tip: V3; look: [number, number] }[] {
+  const at = (k: number) => table.find((s) => s.k === k);
+  const out: { tip: V3; look: [number, number] }[] = [];
+  const seam = (a: SheetSpec, b: SheetSpec) => {
+    // from a point on sheet a, 4 cm in from its centre toward b, look across the seam
+    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+    const tip: V3 = [a.x + (dx / l) * 0.04 - (dy / l) * 0.03, a.y + (dy / l) * 0.04 + (dx / l) * 0.03, 0.08];
+    out.push({ tip, look: [a.x + dx * 0.8, a.y + dy * 0.8] });
+  };
+  const s0 = at(0), s1 = at(1), s2 = at(2), s3 = at(3);
+  if (s0 && s1) seam(s0, s1);
+  if (s0 && s2) seam(s0, s2);
+  if (s1 && s3) seam(s1, s3);
+  if (s2 && s3) seam(s2, s3);
+  return out;
+}
+
+// the pilot's timelines, s
+const PT = { travel: 1.5, pivot: 3, approach: 2.4, align: 2.2, drill: 3.0, hold: 0.8, retract: 1.6, rest: 1.5 };
+/** one screw, start to retracted and resting */
+export const PILOT_SCREW_TIME = PT.approach + PT.align + PT.drill + PT.hold + PT.retract + PT.rest;
+/** degrees the drill pivots on a corner */
+export const PILOT_PIVOT_DEG = 8;
+
+/** The tool's hold for the pilot job, `t` seconds after the current step began (a phase entered, a corner
+ * captured, a screw done). sheet: on a table, looking at each seam between two sheets in turn (tableStations), with
+ * one sheet hovering over it, swaying a little; part: travel to the next corner (1.5 s), then pivot ±8° on it until
+ * it is captured, holding the drill with the lean (none by default) and twist that keep the most markers in view
+ * (pilotView, the block hiding what is under and behind it); work: approach, align, drill to the depth, hold, retract and rest above the screw,
+ * again and again until it is recorded, square, twisted for the best view of the markers.
+ * phase: the simulator's phase, for the disturbances (tremor; motor vibration while drilling). */
+export function pilotHold(core: NavCore, rig: Rig, i: PilotHoldInput, t: number): { hold: Hold; phase: Phase } {
+  const b = i.block ?? PILOT_BLOCK;
+  const table = i.table ?? PILOT_TABLE;
+  const scene: ViewScene = { table, block: b };
+  const toward = (tip: V3, yawDeg: number, pitchDeg: number, phase: Phase) => ({ hold: { tipWorld: tip, yawDeg, pitchDeg, twistDeg: twistToward(core, rig, tip, pilotLook(tip, table)) }, phase });
+  if (i.phase === "sheet") {
+    const st = table.length > 1 ? tableStations(table) : [];
+    if (!st.length) {
+      const tip: V3 = [0.012 * Math.sin(t * 0.7), -0.03 + 0.01 * Math.sin(t * 0.45), 0.05 + 0.01 * Math.sin(t * 0.3)];
+      return { hold: { tipWorld: tip, yawDeg: 3 * Math.sin(t * 0.5), pitchDeg: 2 * Math.sin(t * 0.4), twistDeg: 0 }, phase: "approach" };
+    }
+    // station by station, round and round: 1 s to move to the next, then a slow sway over it
+    const n = Math.floor(t / TABLE_SWEEP_S), l = t - n * TABLE_SWEEP_S;
+    const from = st[(n + st.length - 1) % st.length], to = st[n % st.length];
+    const e = ease(l / 1);
+    const sway: V3 = [0.012 * Math.sin(t * 1.3), 0.01 * Math.sin(t * 0.9), 0.012 * Math.sin(t * 0.7)];
+    const tip: V3 = [lerp(from.tip[0], to.tip[0], e) + sway[0], lerp(from.tip[1], to.tip[1], e) + sway[1], lerp(from.tip[2], to.tip[2], e) + sway[2]];
+    const twA = twistToward(core, rig, from.tip, from.look), twB = twistToward(core, rig, to.tip, to.look);
+    const dTw = ((((twB - twA) % 360) + 540) % 360) - 180;
+    return { hold: { tipWorld: tip, yawDeg: 4 * Math.sin(t * 0.8), pitchDeg: 3 * Math.sin(t * 0.6), twistDeg: twA + dTw * e }, phase: "approach" };
+  }
+  if (i.phase === "part") {
+    const cs = pilotBlockCorners(b).map((c) => [c[0] / 1000, c[1] / 1000, c[2] / 1000] as V3);
+    const k = i.corners % 4;
+    const to = cs[k], from = k === 0 ? ([to[0] - 0.03, to[1], to[2] + 0.03] as V3) : cs[k - 1];
+    // the person holds the drill so the camera keeps the sheet in view (a lean and a twist), and pivots around that
+    const lean = { maxLeanDeg: i.maxLeanDeg ?? 0, ...scene };
+    const v = pilotView(core, rig, to, lean), v0 = k === 0 ? { yawDeg: 2, pitchDeg: 2, twistDeg: v.twistDeg } : pilotView(core, rig, from, lean);
+    if (t < PT.travel) {
+      const e = ease(t / PT.travel);
+      const lift = 0.025 * Math.sin(Math.PI * e);
+      const dTw = ((((v.twistDeg - v0.twistDeg) % 360) + 540) % 360) - 180;
+      return {
+        hold: { tipWorld: [lerp(from[0], to[0], e), lerp(from[1], to[1], e), lerp(from[2], to[2], e) + lift], yawDeg: lerp(v0.yawDeg, v.yawDeg, e), pitchDeg: lerp(v0.pitchDeg, v.pitchDeg, e), twistDeg: v0.twistDeg + dTw * e },
+        phase: "approach",
+      };
+    }
+    // pivot on the corner: the bit circles a cone of PILOT_PIVOT_DEG around the held lean
+    const w = (2 * Math.PI * (t - PT.travel)) / PT.pivot;
+    return { hold: { tipWorld: to, yawDeg: v.yawDeg + PILOT_PIVOT_DEG * Math.sin(w), pitchDeg: v.pitchDeg + PILOT_PIVOT_DEG * Math.cos(w), twistDeg: v.twistDeg }, phase: "align" };
+  }
+  const s = i.screw;
+  if (!s) {
+    const c = pilotBlockCentre(b);
+    return toward([c[0] / 1000, c[1] / 1000, (b.heightMm + 60) / 1000], 2, 2, "approach");
+  }
+  const top: V3 = [s.x / 1000, s.y / 1000, s.z / 1000];
+  // drilling is square: only the twist can turn the camera toward the sheet
+  const tw = pilotView(core, rig, top, { pivotDeg: 2, want: 99, maxLeanDeg: 0, ...scene }).twistDeg;
+  const at = (tip: V3, yawDeg: number, pitchDeg: number, phase: Phase) => ({ hold: { tipWorld: tip, yawDeg, pitchDeg, twistDeg: tw }, phase });
+  let l = t % PILOT_SCREW_TIME;
+  // where the person ends up "aligned": inside the tolerance, not perfect
+  const endYaw = 0.12, endPitch = -0.08;
+  if (l < PT.approach) {
+    const k = ease(l / PT.approach);
+    return at([top[0] + lerp(0.012, 0, k), top[1] + lerp(-0.008, 0, k), top[2] + lerp(0.045, 0, k)], lerp(6, 2, k), lerp(-4, -1.6, k), "approach");
+  }
+  l -= PT.approach;
+  if (l < PT.align) {
+    const k = ease(l / (PT.align * 0.8));
+    return at(top, lerp(2, endYaw, k), lerp(-1.6, endPitch, k), "align");
+  }
+  l -= PT.align;
+  // along the bit's actual axis (as truthAt)
+  const along = (d: number): V3 => {
+    const y = (endYaw * Math.PI) / 180, p = (endPitch * Math.PI) / 180;
+    return [top[0] + Math.sin(y) * Math.cos(p) * d, top[1] + Math.sin(p) * d, top[2] - Math.cos(y) * Math.cos(p) * d];
+  };
+  const depth = s.depthMm / 1000;
+  if (l < PT.drill) return at(along(depth * ease(l / PT.drill)), endYaw, endPitch, "drill");
+  l -= PT.drill;
+  if (l < PT.hold) return at(along(depth), endYaw, endPitch, "hold");
+  l -= PT.hold;
+  if (l < PT.retract) return at(along(lerp(depth, -0.05, ease(l / PT.retract))), endYaw, endPitch, "retract");
+  return at(along(-0.05), endYaw, endPitch, "retract");
+}
+
+// ---------------- the browser simulator's clock ----------------
+
+/** The simulated camera's rate (frames per simulated second), as on a phone. */
+export const SIM_FPS = 15;
+/** How long after its capture a simulated frame reaches the engine (simulated s), as scripts/pilot-sim.mts. */
+export const SIM_LATENCY_S = 0.03;
+/** The engine's tick (s). */
+export const SIM_TICK_S = 1 / 120;
+/** At most this much wall time is caught up at once after the clock waited (s). */
+const SIM_CATCHUP_S = 0.1;
+
+/** The browser simulator's clock (/hud?sim=1): simulated time, so the scene plays in slow motion but consistently
+ * however slowly a frame is rendered and tracked. Frames are captured every 1/fps of simulated time; the clock moves
+ * by one engine tick at a time and never past the moment the oldest frame not yet tracked is due at the engine
+ * (its capture + latency): it waits for it. It never runs faster than the wall clock either. The capture times, the
+ * engine's clock and every timer read from the engine's snapshot (the pilot's steady second, a corner's 1.5 s) are on
+ * this clock. Pure: the caller says when a frame was sent and when its result came back.
+ *
+ *   due()        the capture time of the next frame, when it is time to send it (none in flight); null otherwise
+ *   sent(t)      that frame went to the tracker
+ *   delivered()  its result came back (pushed to the engine)
+ *   run(wall, f) advance as far as allowed, calling f(t) at every tick */
+export class SimClock {
+  t: number;
+  readonly fps: number;
+  readonly latency: number;
+  readonly tick: number;
+  private next: number;
+  private inFlight: number | null = null;
+  private wall: number | null = null;
+  private budget = 0;
+  constructor(t0: number, fps = SIM_FPS, latency = SIM_LATENCY_S, tick = SIM_TICK_S) {
+    this.t = t0;
+    this.next = t0;
+    this.fps = fps;
+    this.latency = latency;
+    this.tick = tick;
+  }
+  due(): number | null {
+    return this.inFlight == null && this.t >= this.next - 1e-9 ? this.next : null;
+  }
+  sent(tCapture: number) {
+    this.inFlight = tCapture;
+    this.next = tCapture + 1 / this.fps;
+  }
+  delivered() {
+    this.inFlight = null;
+  }
+  /** The time the clock may not pass now: the oldest frame not yet tracked (in flight, or still to send) is due. */
+  get limit(): number {
+    return (this.inFlight ?? this.next) + Math.max(this.latency, this.tick);
+  }
+  run(wall: number, onTick: (t: number) => void): number {
+    this.budget = Math.min(SIM_CATCHUP_S, this.budget + Math.max(0, wall - (this.wall ?? wall)));
+    this.wall = wall;
+    let n = 0;
+    while (this.budget >= this.tick - 1e-9 && this.t + this.tick <= this.limit + 1e-9) {
+      this.t += this.tick;
+      this.budget -= this.tick;
+      onTick(this.t);
+      n++;
+    }
+    return n;
+  }
 }

@@ -3,7 +3,8 @@
 // or the scene (docs/ENGINE_SPEC.md §6). It also collects the samples for the lens and dock
 // calibrations, which are computed from what it measured.
 
-import { markerCorners } from "./board.ts";
+import { markerCorners, sheetOf } from "./board.ts";
+import { emptyMap, screenDetections, solveTable, type SheetView, type TableMap } from "./tablemap.ts";
 import { bodyIds, solveBodies, type BodyPose, type MarkerBody } from "./anchors.ts";
 import type { Camera, NavCore, ToolCalib } from "./engine.ts";
 import type { Pose, V3 } from "./pose.ts";
@@ -17,9 +18,14 @@ export type CaptureKind = "camera" | "pivot" | "roll";
 
 export interface TrackerFrame {
   tCapture: number;
-  /** T_camera_sheet as the pose solver returns it (x_cam = R X + t), null if not seen */
+  /** T_camera_sheet as the pose solver returns it (x_cam = R X + t), null if not seen. With a table map
+   * (setTableMap) "the sheet" is the whole table: sheet 0's frame, solved from every mapped sheet's markers. */
   pose: Pose | null;
+  /** markers the pose kept (what the gate counts) */
   markers: number;
+  /** the table's sheets in view: markers per sheet, an observation for a sheet not mapped, the reprojection error
+   * of a mapped one (lib/tablemap.ts SheetView) */
+  sheets: SheetView[];
   /** detected marker outlines (refined), image px */
   quads: P[][];
   rmsPx: number;
@@ -57,6 +63,7 @@ export class MarkerTracker {
   private cap: { kind: CaptureKind; poses: Pose[]; views: { world: P[]; img: P[]; pose: Pose }[] } | null = null;
   private bodies: MarkerBody[] = [];
   private bodyIds = new Set<number>();
+  private table: TableMap = emptyMap(new Date(0).toISOString());
   /** markers on parts seen in the last frame, by id: undistorted corners (for learning stickers) */
   lastBodyMarkers = new Map<number, P[]>();
 
@@ -85,6 +92,15 @@ export class MarkerTracker {
   setBodies(bodies: MarkerBody[]) {
     this.bodies = bodies;
     this.bodyIds = bodyIds(bodies);
+  }
+
+  /** The table map: which sheets are mapped and where (lib/tablemap.ts). Markers of sheets not in it never enter
+   * the pose. The default has only sheet 0. */
+  setTableMap(map: TableMap) {
+    this.table = map;
+  }
+  get tableMap(): TableMap {
+    return this.table;
   }
 
   setCamera(camera: Camera, calibrated: boolean) {
@@ -135,35 +151,42 @@ export class MarkerTracker {
     const t0 = performance.now();
     const all = this.det.detect(img);
     const t1 = performance.now();
-    const known = all.filter((m) => markerCorners(m.id));
+    // the table's markers: any sheet's id, unless it is a marker on a part (a body's ids win). With four sheets every
+    // id 0..111 is valid, so false reads are cleaned first: quads too small to be a real marker, and ids detected
+    // twice (lib/tablemap.ts screenDetections). Markers on parts are left as they were (stickers on a side face are
+    // seen at a grazing angle, small by nature).
+    const known = screenDetections(all.filter((m) => sheetOf(m.id) != null && !this.bodyIds.has(m.id))).kept;
     const onParts = all.filter((m) => this.bodyIds.has(m.id));
     const quads = this.core.refineMany(img, known.map((m) => m.corners));
     const t2 = performance.now();
-    const world: P[] = [];
-    const raw: P[] = [];
-    known.forEach((m, i) => {
-      const wc = markerCorners(m.id)!;
-      for (let k = 0; k < 4; k++) {
-        world.push(wc[k]);
-        raw.push(quads[i][k]);
-      }
-    });
     let cam = this.effectiveCamera;
     let pose: Pose | null = null;
     let kept = 0;
-    let keep: boolean[] = [];
-    if (world.length >= 4) {
-      const und = this.core.undistortPoints(cam, raw);
-      if (!this.cameraCalibrated && this.fAuto == null) this.sampleFocal(world, und, cam);
+    let sheets: TrackerFrame["sheets"] = [];
+    if (known.length) {
+      const und = this.core.undistortPoints(cam, quads.flat());
+      // the lens model (focal self-calibration, lens captures) learns from sheet 0 only: never from a learned map
+      const s0 = known.flatMap((m, i) => (sheetOf(m.id) === 0 ? [i] : []));
+      if (!this.cameraCalibrated && this.fAuto == null && s0.length) {
+        this.sampleFocal(s0.flatMap((i) => markerCorners(known[i].id)!), s0.flatMap((i) => und.slice(i * 4, i * 4 + 4)), cam);
+      }
       cam = this.effectiveCamera;
-      const sol = this.core.solvePoseRobust(world, und, { f: cam.f, cx: cam.cx, cy: cam.cy });
-      if (sol && sol.pose.rms < 4) {
-        pose = sol.pose;
-        kept = sol.kept;
-        keep = sol.keep;
+      const K = { f: cam.f, cx: cam.cx, cy: cam.cy };
+      const r = solveTable(this.table, known.map((m, i) => ({ id: m.id, img: und.slice(i * 4, i * 4 + 4) })), (w, p) => this.core.solvePoseRobust(w, p, K), K);
+      pose = r.pose;
+      kept = r.kept;
+      sheets = r.sheets;
+      if (pose && this.cap) {
+        const world: P[] = [];
+        const raw: P[] = [];
+        r.used.forEach((i, j) => {
+          if (!r.keep[j] || (this.cap!.kind === "camera" && sheetOf(known[i].id) !== 0)) return;
+          world.push(...r.world.slice(j * 4, j * 4 + 4));
+          raw.push(...quads[i]);
+        });
+        this.capture(world, raw, pose);
       }
     }
-    if (pose && this.cap) this.capture(world.filter((_, i) => keep[i >> 2]), raw.filter((_, i) => keep[i >> 2]), pose);
     let bodies: BodyPose[] = [];
     this.lastBodyMarkers = new Map();
     if (onParts.length) {
@@ -175,7 +198,7 @@ export class MarkerTracker {
     }
     const t3 = performance.now();
     const timings = { detectMs: t1 - t0, refineMs: t2 - t1, poseMs: t3 - t2 };
-    return { tCapture, pose, markers: kept, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam, bodies, timings };
+    return { tCapture, pose, markers: kept, sheets, quads, rmsPx: pose?.rms ?? Infinity, focalPx: cam.f, focalLocked: this.cameraCalibrated || this.fAuto != null, camera: cam, bodies, timings };
   }
 
   private sampleFocal(world: P[], und: P[], cam: Camera) {

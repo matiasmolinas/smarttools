@@ -20,6 +20,8 @@ export interface PlanHole {
   y: number;
   depthMm: number;
   diameterMm: number;
+  /** mm above the sheet's plane where the hole starts (the top of a part on the bench); absent = on the sheet */
+  z?: number;
 }
 
 export interface Plan {
@@ -53,6 +55,8 @@ export const LIMITS = {
   touchMm: 3,
   /** a recipe kept with its plan (characters of Markdown) */
   recipeChars: 20_000,
+  /** how high above the sheet's plane a hole may start (mm) */
+  zMm: [0, 200] as const,
 };
 
 export const DEFAULT_HOLE = { depthMm: 30, diameterMm: 6 };
@@ -118,6 +122,7 @@ export function validatePlan(x: unknown): Checked {
       else if (Math.hypot(h.x, h.y) > LIMITS.reachMm) e.push(`${at}: more than ${LIMITS.reachMm} mm from the sheet`);
       if (!num(h?.depthMm) || h.depthMm < LIMITS.depthMm[0] || h.depthMm > LIMITS.depthMm[1]) e.push(`${at}: depth must be ${LIMITS.depthMm[0]}-${LIMITS.depthMm[1]} mm`);
       if (!num(h?.diameterMm) || h.diameterMm < LIMITS.diameterMm[0] || h.diameterMm > LIMITS.diameterMm[1]) e.push(`${at}: diameter must be ${LIMITS.diameterMm[0]}-${LIMITS.diameterMm[1]} mm`);
+      if (h?.z !== undefined && (!num(h.z) || h.z < LIMITS.zMm[0] || h.z > LIMITS.zMm[1])) e.push(`${at}: z must be ${LIMITS.zMm[0]}-${LIMITS.zMm[1]} mm above the sheet`);
     });
     for (let i = 0; i < p.holes.length; i++)
       for (let j = i + 1; j < p.holes.length; j++) {
@@ -141,9 +146,10 @@ export function validatePlan(x: unknown): Checked {
   return e.length ? { ok: false, errors: e } : { ok: true, plan: p as Plan };
 }
 
-/** The scene's targets for a plan (metres), for smartToolsScene({ targets }). */
-export function planTargets(plan: Plan) {
-  return plan.holes.map((h) => ({ label: h.label, x: h.x / 1000, y: h.y / 1000, depthMm: h.depthMm, diameterMm: h.diameterMm }));
+/** The scene's targets for a plan (metres), for smartToolsScene({ targets }). z only when the hole has one, so
+ * an old plan's targets are exactly as before. */
+export function planTargets(plan: Plan): { label: string; x: number; y: number; z?: number; depthMm: number; diameterMm: number }[] {
+  return plan.holes.map((h) => ({ label: h.label, x: h.x / 1000, y: h.y / 1000, ...(h.z !== undefined ? { z: h.z / 1000 } : {}), depthMm: h.depthMm, diameterMm: h.diameterMm }));
 }
 /** Depth per target, in the plan's order (engine.setTargetDepths). */
 export const planDepths = (plan: Plan) => plan.holes.map((h) => h.depthMm);

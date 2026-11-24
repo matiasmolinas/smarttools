@@ -11,7 +11,7 @@ import { NavCore, cameraFromHfov, ENGINE_DEFAULTS, type Camera, type ToolCalib }
 import { NavSession } from "./session";
 import type { CaptureKind, CaptureResult } from "./markertracker";
 import { TrackerClient, type WorkerResult } from "./trackerclient";
-import type { Rig } from "./scene";
+import { DEFAULT_DISTURBANCE, PILOT_TABLE, SimClock, disturb, pilotBlockSolid, pilotHold, toolWorldFromHold, type Rig } from "./scene";
 import type { Xf } from "./xform";
 import type { Overlay } from "./hud";
 import type { SimState } from "./sim";
@@ -25,6 +25,18 @@ import { encodeRecording } from "./recording";
 import { compose, fromPose, inverse } from "./xform";
 import { SHEET_PLAN, planDepths, planTargets, tipOnSheet, type Mark, type Plan } from "./plan";
 import { JobRecorder, defaultContext, type HoleRecord, type JobRecord, type TrackingSettings } from "./jobrecord";
+import { PILOT_RECIPE_ID, type PartFit, type Phase, type PilotState } from "./pilot";
+import { PilotNav, nextScrew, pilotScrews, readPilotSaved, type PilotScrew } from "./pilotnav";
+import { readRun } from "./runstate";
+import { SheetMapper, readTableMap, type SheetState, type TableMap } from "./tablemap";
+
+/** where the pilot job is kept per device (lib/pilotnav.ts PilotSaved) */
+const PILOT_KEY = "st-pilot";
+/** where the table map is kept per device (lib/tablemap.ts TableMap): the sheets are taped down, so it outlives
+ * pauses, restarts and Stop; holding the Sheet phase button clears it */
+const TABLE_KEY = "st-table";
+/** a plan made by the pilot job (its holes come from the block's fit) */
+export const isPilotPlan = (p: Plan | null | undefined) => p?.recipe?.id === PILOT_RECIPE_ID;
 
 export const DEFAULT_HFOV_DEG = 66; // typical phone main camera, long side
 /** If a calibrated tip is further than this from what the phone profile predicts, warn (mm). */
@@ -83,6 +95,21 @@ export class BrowserNav {
   private scale = 1;
   private cal: { step: CaptureKind; t0: number; until: number; then: CaptureKind | null } | null = null;
   private ephemeral = false;
+  /** the simulator's fixed calibration (useCalibration), to rebuild its session for another plan */
+  private simCal: { camera: Camera; tool: ToolCalib } | null = null;
+  /** the pilot job (the sheet, the block, the screws), or null when it is not running. It outlives the session:
+   * a new plan, a new phone size or a pause rebuild the session, the sheet and the block stay where they are. */
+  pilot: PilotNav | null = null;
+  /** a corner of the block was captured: how many there are now (1..4) */
+  onCorner: (n: number) => void = () => {};
+  /** the block was fitted (after its 4th corner): ok or not */
+  onPilotFit: (fit: PartFit) => void = () => {};
+  /** the simulator's pilot: the step it is on and when it began (s) */
+  private simStep: { key: string; t0: number } | null = null;
+  /** the table: which sheets are mapped and where, learned from the tracker's frames (st-table; the simulator
+   * starts empty and keeps nothing) */
+  private mapper: SheetMapper = new SheetMapper(readStoredTable());
+  private paused = false;
   onMessage: (m: string) => void = () => {};
   /** The tracker worker failed for good: the page must show it (a phone has no console). */
   onFault: (message: string) => void = () => {};
@@ -126,16 +153,44 @@ export class BrowserNav {
   private perfLog: { t: number; bitmapMs: number; drawMs: number; detectMs: number; refineMs: number; poseMs: number; latencyMs: number; markers: number; altMs: number; altMarkers: number; altCornerPx: number; altKind: string }[] = [];
   private droppedLog: { t: number; n: number }[] = [];
 
+  /** the browser simulator's clock (startSimClock): simulated time for the frames, the engine and the jobs. Null on
+   * the phone and in the engine lab, which run on performance.now(). */
+  simClock: SimClock | null = null;
+
   private constructor(core: NavCore) {
     this.core = core;
+  }
+
+  /** The engine's time base (s): performance.now() on the phone, the simulator's clock when one runs. */
+  now(): number {
+    return this.simClock ? this.simClock.t : performance.now() / 1000;
+  }
+  /** Simulation only: run on simulated time from t0 (s). The screen then sends a frame whenever simClock.due() says
+   * and drives the engine with simClock.run; each frame sent and each result is told to the clock here. */
+  startSimClock(t0: number) {
+    this.simClock = new SimClock(t0);
   }
   static async create(): Promise<BrowserNav> {
     return new BrowserNav(await NavCore.load());
   }
 
+  /** While the display is classic the pilot is paused: no corner capture, no change to the table map. It carries on,
+   * untouched, when the display is simple again (the screen sets it). */
+  get pilotPaused() {
+    return this.paused;
+  }
+  set pilotPaused(on: boolean) {
+    if (on === this.paused) return;
+    this.paused = on;
+    // a corner's window or a steady time measured before the pause must not count after it
+    this.pilot?.interrupt();
+  }
+
   /** Simulation: a known calibration, nothing stored. */
   useCalibration(camera: Camera, tool: ToolCalib, width: number, height: number, t0: number) {
+    if (!this.ephemeral) this.mapper = new SheetMapper(null);
     this.ephemeral = true;
+    this.simCal = { camera, tool };
     this.size = { w: width, h: height };
     this.session?.dispose();
     this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), { camera, cameraCalibrated: true, tool, toolCalibrated: true, t0 });
@@ -145,18 +200,20 @@ export class BrowserNav {
     this.startSimJob(t0);
   }
 
-  /** Simulation only: record the job of `plan` (its holes must be the sheet's A1-A3, the simulator's scene), so the
-   * live Checks can be seen. Its holes reach onHoleDone; nothing reaches onJobProgress and finishJob saves nothing. */
+  /** Simulation only: record the job of `plan` (its holes must be the targets of the simulator's scene: the sheet's
+   * A1-A3, or a pilot plan, whose scene is rebuilt for it), so the live Checks can be seen. Its holes reach
+   * onHoleDone; nothing reaches onJobProgress and finishJob saves nothing. */
   recordInSimulator(plan: Plan) {
+    if (isPilotPlan(plan) && this.ephemeral && this.simCal) return this.applyPilotPlan(plan);
     this.simPlan = plan;
     this.plan = plan;
-    if (this.session && this.ephemeral) this.startSimJob(performance.now() / 1000);
+    if (this.session && this.ephemeral) this.startSimJob(this.now());
   }
   private startSimJob(t0: number) {
     const s = this.session, plan = this.simPlan;
     if (!s || !plan || !this.ephemeral) return;
     this.recorder = new JobRecorder(plan, defaultContext({ source: "simulation" }), (id) => (plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined), {
-      wall: (t) => Date.now() - (performance.now() / 1000 - t) * 1000,
+      wall: (t) => Date.now() - (this.now() - t) * 1000,
       t0,
     });
   }
@@ -169,11 +226,15 @@ export class BrowserNav {
       if (this.client === c) this.onFault(m);
     };
     this.client = c;
+    // a stored map is used at once (the moved check guards against a stale one)
+    c.setTableMap(this.mapper.map());
   }
 
   private onWorkerResult(r: WorkerResult) {
+    this.simClock?.delivered();
     this.scale = r.scale;
     this.session?.pushTrackerFrame(r.frame);
+    if (!this.paused && this.mapper.feed(r.frame.tCapture, r.frame.sheets ?? [])) this.tableChanged();
     this.frames++;
     this.benchSample(r);
     const now = performance.now() / 1000;
@@ -185,7 +246,7 @@ export class BrowserNav {
       detectMs: tm?.detectMs ?? 0,
       refineMs: tm?.refineMs ?? 0,
       poseMs: tm?.poseMs ?? 0,
-      latencyMs: Math.max(0, (now - r.frame.tCapture) * 1000),
+      latencyMs: Math.max(0, (this.now() - r.frame.tCapture) * 1000),
       markers: r.frame.markers,
       altMs: tm?.alt?.detectMs ?? NaN,
       altMarkers: tm?.alt?.markers ?? NaN,
@@ -222,6 +283,7 @@ export class BrowserNav {
       targetDepths: planDepths(this.plan),
       t0,
     });
+    this.session.tracker.setTableMap(this.mapper.map());
     this.attachWorker(camera, !!cam);
     this.applyFilter();
     this.startJob(t0);
@@ -246,7 +308,7 @@ export class BrowserNav {
   }
   /** Simulation: the worker renders what the docked camera sees for this tool pose, then tracks it. */
   simFrame(rig: Rig, codes: Uint8Array, toolW: Xf, tCapture: number, seed: number) {
-    this.client?.sim(rig, codes, toolW, tCapture, seed);
+    if (this.client?.sim(rig, codes, toolW, tCapture, seed)) this.simClock?.sent(tCapture);
   }
 
   // ---------------- loop 2: the engine clock ----------------
@@ -264,6 +326,7 @@ export class BrowserNav {
         for (const h of r.holes.slice(before)) this.onHoleDone(h, job);
       }
     }
+    if (this.pilot && n > 0 && !this.paused) this.stepPilot(s);
     this.stepCalibration(tWall);
     return n;
   }
@@ -466,7 +529,7 @@ export class BrowserNav {
    * for that): it may guide to one again, and the recorder ignores a hole it already has. */
   resumeJob(draft: JobRecord | null) {
     this.pendingResume = draft;
-    if (draft && this.session && !this.ephemeral) this.startJob(performance.now() / 1000);
+    if (draft && this.session && !this.ephemeral) this.startJob(this.now());
   }
   private startJob(t0: number) {
     const s = this.session;
@@ -474,8 +537,8 @@ export class BrowserNav {
     const resume = this.pendingResume?.plan.id === this.plan.id ? this.pendingResume : undefined;
     this.pendingResume = null;
     const c = this.calibrated;
-    // engine time is performance.now() in seconds; map it to the wall clock when asked
-    const wall = (t: number) => Date.now() - (performance.now() / 1000 - t) * 1000;
+    // engine time is performance.now() in seconds (the simulator's clock in the simulator); map it to the wall clock
+    const wall = (t: number) => Date.now() - (this.now() - t) * 1000;
     this.recorder = new JobRecorder(
       this.plan,
       defaultContext({ phone: { id: this.phone.id, name: this.phone.name, provisional: this.phone.provisional }, calibration: { lens: c.camera, dock: c.tool }, source: "camera" }),
@@ -489,11 +552,11 @@ export class BrowserNav {
     const r = this.recorder;
     if (!r) return;
     r.confirm(id, ok);
-    if (!this.ephemeral) this.onJobProgress(r.finish(performance.now() / 1000, this.trackingSettings()));
+    if (!this.ephemeral) this.onJobProgress(r.finish(this.now(), this.trackingSettings()));
   }
   /** The job so far (null without one in progress): for the Checks on screen. */
   jobSoFar(): JobRecord | null {
-    return this.recorder?.finish(performance.now() / 1000, this.trackingSettings()) ?? null;
+    return this.recorder?.finish(this.now(), this.trackingSettings()) ?? null;
   }
   /** How the phone is tracking now: recorded with each job, so jobs can be compared by setting. */
   trackingSettings(): TrackingSettings {
@@ -504,10 +567,10 @@ export class BrowserNav {
     const r = this.recorder, s = this.session;
     if (!r || !s) return null;
     // the simulator's job is never saved: it starts again, and there is no record to keep
-    const rec = r.holes.length && !this.ephemeral ? r.finish(performance.now() / 1000, this.trackingSettings()) : null;
+    const rec = r.holes.length && !this.ephemeral ? r.finish(this.now(), this.trackingSettings()) : null;
     s.engine.resetJob();
-    if (this.ephemeral) this.startSimJob(performance.now() / 1000);
-    else this.startJob(performance.now() / 1000);
+    if (this.ephemeral) this.startSimJob(this.now());
+    else this.startJob(this.now());
     return rec;
   }
 
@@ -520,7 +583,7 @@ export class BrowserNav {
     const c = this.calibrated;
     const lf = s.lastFrame;
     const cal = this.cal;
-    return hudView({
+    const out = hudView({
       def: s.scene.def,
       ids: s.scene.ids,
       snapshot: snap,
@@ -533,6 +596,160 @@ export class BrowserNav {
       limits: { ...ENGINE_DEFAULTS.limits, maxAngleDeg: this.tolDeg * 0.8 },
       tolDeg: this.tolDeg,
     });
+    if (this.pilot) {
+      this.pilot.setTable(this.mapper.map(), this.mapper.states());
+      out.overlay.pilot = this.pilot.overlay(this.core, s, this.pilotScrewList(), this.scale);
+    }
+    return out;
+  }
+
+  // ---------------- the table (lib/tablemap.ts) ----------------
+  /** Each sheet's state: mapped, seen and being mapped (with its progress), moved, not flat, or missing. */
+  tableState(): SheetState[] {
+    return this.mapper.states();
+  }
+  /** The table map in use. */
+  tableMap(): TableMap {
+    return this.mapper.map();
+  }
+  /** Forget every sheet but 0 (held Sheet phase button): they are mapped again by looking at them. */
+  clearTable() {
+    this.mapper.clear();
+    this.tableChanged();
+  }
+  /** The map changed: the tracker solves with it from the next frame, and it is kept (not in the simulator). */
+  private tableChanged() {
+    const map = this.mapper.map();
+    this.client?.setTableMap(map);
+    this.session?.tracker.setTableMap(map);
+    if (this.ephemeral) return;
+    try {
+      localStorage.setItem(TABLE_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  // ---------------- the pilot job (lib/pilot.ts, lib/pilotnav.ts) ----------------
+  /** Start the pilot job from its first phase (the sheet). A pilot in progress is dropped. */
+  startPilot() {
+    this.pilot = new PilotNav();
+    this.simStep = null;
+    this.savePilot();
+  }
+  /** Carry on with the pilot kept on this device, unless the app was stopped (then it is dropped). In "work" its
+   * plan is set again (the same plan id, so a draft of its job can be resumed). True when one was restored. */
+  restorePilot(): boolean {
+    if (readRun()?.state === "stopped") {
+      this.clearPilot();
+      return false;
+    }
+    let saved = null;
+    try {
+      saved = readPilotSaved(JSON.parse(localStorage.getItem(PILOT_KEY) ?? "null"));
+    } catch {}
+    if (!saved) return false;
+    this.pilot = new PilotNav(saved);
+    this.simStep = null;
+    const plan = this.pilot.phase === "work" ? this.pilot.plan() : null;
+    if (plan && plan.id !== this.plan.id) this.applyPilotPlan(plan);
+    return true;
+  }
+  /** Go to a phase of the pilot. Refused (false) when the model's canEnter says no, or without a pilot. Entering
+   * "part" (again) clears the corners and the fit; entering "work" sets the pilot plan from the fit (the session is
+   * rebuilt with the four screws on the block's top face) unless it is already the plan being worked. */
+  setPhase(p: Phase): boolean {
+    const pl = this.pilot, st = this.pilotState();
+    if (!pl || !st) return false;
+    const plan = p === "work" ? pl.plan() : null;
+    if (p === "work" && !plan) return false;
+    if (!pl.setPhase(p, st)) return false;
+    if (plan && plan.id !== this.plan.id) this.applyPilotPlan(plan);
+    this.savePilot();
+    return true;
+  }
+  /** Where the pilot is, for the model's focus, text and words (null without a pilot). */
+  pilotState(): PilotState | null {
+    const pl = this.pilot;
+    if (!pl) return null;
+    const plan = pl.plan();
+    const mine = !!plan && plan.id === this.plan.id;
+    const labels = new Set(this.plan.holes.map((h) => h.label));
+    const done = mine ? (this.recorder?.holes.filter((h) => labels.has(h.name)).length ?? 0) : 0;
+    pl.setTable(this.mapper.map(), this.mapper.states());
+    return pl.state(this.session?.snapshot ?? null, { toolCalibrated: this.calibrated.tool, done, total: plan?.holes.length ?? 4 });
+  }
+  /** End the pilot (Stop): nothing of it is kept. The plan being worked stays as it is. */
+  clearPilot() {
+    this.pilot = null;
+    this.simStep = null;
+    try {
+      localStorage.removeItem(PILOT_KEY);
+    } catch {}
+  }
+  /** Simulation only (/hud?sim=1&pilot=1): render and track the frame of the simulated person doing the pilot's
+   * current phase (lib/scene.ts pilotHold), on the simulated table of four sheets (PILOT_TABLE, mapped by looking at
+   * them as on the phone) with the virtual block on it. False (nothing sent) without a
+   * pilot or outside the simulator: the caller then sends its own frame (simFrame). */
+  pilotSimFrame(rig: Rig, codes: Uint8Array, tCapture: number, seed: number): boolean {
+    const pl = this.pilot, c = this.client;
+    if (!pl || !c || !this.ephemeral) return false;
+    const screw = pl.phase === "work" ? nextScrew(this.pilotScrewList()) : null;
+    const key = `${pl.phase}|${pl.corners.length}|${screw?.label ?? ""}`;
+    if (this.simStep?.key !== key) this.simStep = { key, t0: tCapture };
+    const { hold, phase } = pilotHold(this.core, rig, { phase: pl.phase, corners: pl.corners.length, screw }, tCapture - this.simStep.t0);
+    if (c.sim(rig, codes, toolWorldFromHold(this.core, rig, disturb(hold, tCapture, phase, DEFAULT_DISTURBANCE)), tCapture, seed, [pilotBlockSolid()], PILOT_TABLE)) this.simClock?.sent(tCapture);
+    return true;
+  }
+  /** The pilot's screws with their state: from the plan being worked when it is the pilot's, else the fit's (all
+   * to do); none before an ok fit. */
+  pilotScrewList(): PilotScrew[] {
+    const pl = this.pilot, s = this.session;
+    const plan = pl?.plan();
+    if (!pl || !plan) return [];
+    if (pl.phase === "work" && plan.id === this.plan.id && s) return pilotScrews(this.plan, s.snapshot, (id) => s.name(id), this.recorder?.holes.map((h) => h.name) ?? []);
+    return pilotScrews(plan, null, () => "", []);
+  }
+  private stepPilot(s: NavSession) {
+    const pl = this.pilot;
+    if (!pl) return;
+    pl.setTable(this.mapper.map(), this.mapper.states());
+    const r = pl.step(s, this.calibrated.tool, (m, d) => this.core.registerPoints(m, d));
+    if (r.corner == null) return;
+    this.savePilot();
+    this.onCorner(r.corner);
+    if (r.fit) this.onPilotFit(r.fit);
+  }
+  private savePilot() {
+    if (!this.pilot) return;
+    try {
+      localStorage.setItem(PILOT_KEY, JSON.stringify(this.pilot.saved()));
+    } catch {}
+  }
+  /** Work the pilot plan. On the phone: setPlan (the session is rebuilt with its targets on the next frame). In the
+   * simulator, setPlan would drop the fixed calibration for good: the session is rebuilt now with the plan's
+   * scene, the same calibration and the same worker, and the simulator records its job (recordInSimulator). */
+  private applyPilotPlan(plan: Plan) {
+    const s = this.session, sc = this.simCal;
+    if (!this.ephemeral || !sc) {
+      this.setPlan(plan);
+      return;
+    }
+    const t0 = this.now();
+    const tool = s?.tool ?? sc.tool;
+    s?.dispose();
+    this.plan = plan;
+    this.simPlan = plan;
+    this.session = new NavSession(this.core, new AR.Detector({ dictionaryName: DICTIONARY }), {
+      camera: sc.camera,
+      cameraCalibrated: true,
+      tool,
+      toolCalibrated: true,
+      scene: smartToolsScene({ tool, targets: planTargets(plan) }),
+      targetDepths: planDepths(plan),
+      t0,
+    });
+    this.applyFilter();
+    this.recorder = null;
+    this.startSimJob(t0);
   }
 
   // ---------------- calibration flows ----------------
@@ -637,7 +854,7 @@ export class BrowserNav {
       .then((r) => {
         // cancelled, replaced or the engine restarted while it was computed: the result belongs to nobody
         if (this.cal !== c || this.session !== s) return;
-        this.finishStep(c, s, r, performance.now() / 1000);
+        this.finishStep(c, s, r, this.now());
       })
       .finally(() => {
         if (this.endingSeq === seq) this.ending = false;
@@ -737,6 +954,13 @@ function readSide(): number {
     return (DETECT_SIDES as readonly number[]).includes(v) ? v : DEFAULT_SIDE;
   } catch {
     return DEFAULT_SIDE;
+  }
+}
+function readStoredTable(): TableMap | null {
+  try {
+    return readTableMap(JSON.parse(localStorage.getItem(TABLE_KEY) ?? "null"));
+  } catch {
+    return null;
   }
 }
 function readPhoneId(): string {

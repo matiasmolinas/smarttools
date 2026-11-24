@@ -5,7 +5,7 @@
 //! It is the test bench for the whole pipeline: render -> detect -> refine -> pose -> navigation,
 //! compared against the ground truth that generated the frame.
 
-use crate::board::{marker_at, marker_center, BOARD_TARGETS, MARKER_SIZE, SHEET_H, SHEET_W};
+use crate::board::{marker_at, marker_center, BOARD_TARGETS, MARKER_COUNT, MARKER_SIZE, SHEET_H, SHEET_W};
 use crate::camera::Camera;
 use crate::geom::{cross, dot, len, mul, mul_v, normalize, rodrigues, scale, sub3, M3, V3};
 use crate::pose::Pose;
@@ -172,20 +172,36 @@ pub fn hit_solid(s: &Solid, c: V3, dw: V3) -> Option<(f64, V3)> {
 }
 
 pub fn sheet_value(x: f64, y: f64, codes: &[u8], look: &SceneLook) -> f64 {
-    if let Some(id) = marker_at(x, y) {
-        let m = marker_center(id).unwrap_or(crate::geom::P2::new(0.0, 0.0));
+    sheet_value_k(x, y, codes, look, 0)
+}
+
+/// A sheet of a table of sheets laid on the same bench: its centre (x, y, m) and rotation (rad) in the world plane,
+/// and its number `k` (its marker ids are `k * MARKER_COUNT + 0..MARKER_COUNT`; the crosshairs are only on sheet 0).
+#[derive(Clone, Copy, Debug)]
+pub struct SheetPlace {
+    pub x: f64,
+    pub y: f64,
+    pub yaw: f64,
+    pub k: u32,
+}
+
+/// [`sheet_value`] for sheet `k`, at (x, y) on its own plane (origin at its centre).
+pub fn sheet_value_k(x: f64, y: f64, codes: &[u8], look: &SceneLook, k: u32) -> f64 {
+    if let Some(local) = marker_at(x, y) {
+        let m = marker_center(local).unwrap_or(crate::geom::P2::new(0.0, 0.0));
+        let id = local as usize + k as usize * MARKER_COUNT;
         let h = MARKER_SIZE / 2.0;
         let cell = MARKER_SIZE / 8.0;
         let col = ((x - (m.x - h)) / cell).floor() as i64;
         let row = ((m.y + h - y) / cell).floor() as i64;
         if (1..=6).contains(&col) && (1..=6).contains(&row) {
-            let bit = codes.get(id as usize * 36 + ((row - 1) * 6 + (col - 1)) as usize).copied().unwrap_or(0);
+            let bit = codes.get(id * 36 + ((row - 1) * 6 + (col - 1)) as usize).copied().unwrap_or(0);
             return if bit == 1 { look.paper } else { look.ink };
         }
         return look.ink;
     }
     if x.abs() < SHEET_W / 2.0 && y.abs() < SHEET_H / 2.0 {
-        if look.crosses {
+        if look.crosses && k == 0 {
             for t in &BOARD_TARGETS {
                 let (dx, dy) = ((x - t.x).abs(), (y - t.y).abs());
                 let arm = 0.0055;
@@ -200,9 +216,30 @@ pub fn sheet_value(x: f64, y: f64, codes: &[u8], look: &SceneLook) -> f64 {
         }
         return look.paper;
     }
-    // painted wall: gentle large-scale shading + fine texture
+    wall_value(x, y, look)
+}
+
+/// The surface around the sheets (a painted wall, or the bench): gentle large-scale shading + fine texture.
+fn wall_value(x: f64, y: f64, look: &SceneLook) -> f64 {
     let fine = (((x * 4000.0).floor() * 12.9898 + (y * 4000.0).floor() * 78.233).sin() * 43758.5453).fract();
     look.wall + 10.0 * (x * 23.0 + 1.3).sin() * (y * 17.0 + 0.4).sin() + 8.0 * (fine - 0.5)
+}
+
+/// The plane z = 0 at world (x, y): sheet 0 alone at the origin when `sheets` is empty, else the first sheet of the
+/// list that covers the point, else the wall.
+pub fn table_value(x: f64, y: f64, sheets: &[SheetPlace], codes: &[u8], look: &SceneLook) -> f64 {
+    if sheets.is_empty() {
+        return sheet_value(x, y, codes, look);
+    }
+    for s in sheets {
+        let (c, sn) = (s.yaw.cos(), s.yaw.sin());
+        let (dx, dy) = (x - s.x, y - s.y);
+        let (lx, ly) = (c * dx + sn * dy, -sn * dx + c * dy);
+        if lx.abs() < SHEET_W / 2.0 && ly.abs() < SHEET_H / 2.0 {
+            return sheet_value_k(lx, ly, codes, look, s.k);
+        }
+    }
+    wall_value(x, y, look)
 }
 
 struct Rng(u32);
@@ -279,15 +316,18 @@ pub struct RenderSpec<'a> {
     pub occluders: &'a [Occluder],
     pub solids: &'a [Solid],
     pub stickers: &'a [Sticker],
+    /// The table: several sheets on the bench (empty = sheet 0 alone at the origin). `codes` must then hold every
+    /// id of every sheet listed.
+    pub sheets: &'a [SheetPlace],
 }
 
-/// The nearest surface along a world ray: (k, grey level). Sheet and bench at z = 0, then solids and
+/// The nearest surface along a world ray: (k, grey level). Sheets and bench at z = 0, then solids and
 /// stickers in front of it.
 fn surface(spec: &RenderSpec, c: V3, dw: V3) -> (f64, f64) {
     let mut best = (f64::INFINITY, spec.look.wall);
     let k = -c[2] / dw[2];
     if k > 0.0 && dw[2].is_finite() {
-        best = (k, sheet_value(c[0] + k * dw[0], c[1] + k * dw[1], spec.codes, &spec.look));
+        best = (k, table_value(c[0] + k * dw[0], c[1] + k * dw[1], spec.sheets, spec.codes, &spec.look));
     }
     for s in spec.solids {
         if let Some((k, n)) = hit_solid(s, c, dw) {
@@ -425,6 +465,7 @@ mod tests {
             occluders: &[],
             solids: std::slice::from_ref(&solid),
             stickers: std::slice::from_ref(&st),
+            sheets: &[],
         };
         let mut img = vec![0u8; 320 * 240 * 4];
         render(&spec, &mut img);
@@ -463,6 +504,7 @@ mod tests {
             occluders: &[],
             solids: &[],
             stickers: &[],
+            sheets: &[],
         };
         let mut img = vec![0u8; 320 * 240 * 4];
         render(&spec, &mut img);
@@ -474,5 +516,66 @@ mod tests {
         // marker 14 (x 0.02, y 0) border (black) at its left edge, inside
         assert!(at([0.02 - 0.0105, 0.0, 0.0]) < 30.0, "marker border");
         assert!((at([0.16, 0.02, 0.0]) - 150.0).abs() < 20.0, "wall");
+    }
+
+    #[test]
+    fn a_table_of_sheets_draws_each_sheet_with_its_own_ids() {
+        let cam = Camera::from_hfov(320.0, 240.0, 66.0);
+        // camera 45 cm above the point between sheet 0 and sheet 1 (sheet 1 to the right, 6 mm gap, turned 2°)
+        let pose = Pose { r: BASE, t: [-0.108, 0.0, 0.45], rms: 0.0 };
+        let c: Vec<u8> = (0..2 * MARKER_COUNT * 36).map(|i| ((i * 7 + i / 6) % 3 == 0) as u8).collect();
+        let s1 = SheetPlace { x: 0.216, y: 0.0, yaw: 2f64.to_radians(), k: 1 };
+        let spec = |sheets: &'static [SheetPlace], img: &mut Vec<u8>| {
+            let sp = RenderSpec {
+                camera: cam,
+                poses: &[pose],
+                width: 320,
+                height: 240,
+                ss: 1,
+                codes: &c,
+                look: SceneLook::default(),
+                light: Lighting { noise: 0.0, vignette: 0.0, gradient: 0.0, ..Default::default() },
+                bit: None,
+                occluders: &[],
+                solids: &[],
+                stickers: &[],
+                sheets,
+            };
+            render(&sp, img);
+        };
+        let (mut alone, mut origin) = (vec![0u8; 320 * 240 * 4], vec![0u8; 320 * 240 * 4]);
+        spec(&[], &mut alone);
+        // sheet 0 listed at the origin draws exactly what sheet 0 alone draws
+        spec(&[SheetPlace { x: 0.0, y: 0.0, yaw: 0.0, k: 0 }], &mut origin);
+        assert!(alone == origin, "sheet 0 at the origin");
+        let table: &'static [SheetPlace] = Box::leak(Box::new([SheetPlace { x: 0.0, y: 0.0, yaw: 0.0, k: 0 }, s1]));
+        let mut img = vec![0u8; 320 * 240 * 4];
+        spec(table, &mut img);
+        let at = |w: [f64; 3]| {
+            let p = cam.project(w, &pose).unwrap();
+            img[(p.y as usize * 320 + p.x as usize) * 4] as f64
+        };
+        // every cell of a marker of sheet 1 follows the code of its own id (28 + local id), in its rotated frame
+        let (cs, sn) = (s1.yaw.cos(), s1.yaw.sin());
+        let w = |lx: f64, ly: f64| [s1.x + cs * lx - sn * ly, s1.y + sn * lx + cs * ly, 0.0];
+        for local in [12u32, 13, 16] {
+            let m = marker_center(local).unwrap();
+            let id = local as usize + MARKER_COUNT;
+            for row in 1..=6 {
+                for col in 1..=6 {
+                    let cell = MARKER_SIZE / 8.0;
+                    let (lx, ly) = (m.x - MARKER_SIZE / 2.0 + (col as f64 + 0.5) * cell, m.y + MARKER_SIZE / 2.0 - (row as f64 + 0.5) * cell);
+                    let bit = c[id * 36 + (row - 1) * 6 + (col - 1)];
+                    let v = at(w(lx, ly));
+                    assert!(if bit == 1 { v > 200.0 } else { v < 60.0 }, "sheet 1 marker {local} cell {row},{col}: {v}");
+                }
+            }
+        }
+        // the gap between the sheets is the wall, the paper of sheet 1 is paper, and it has no crosshairs
+        assert!((at([0.110, -0.13, 0.0]) - 150.0).abs() < 20.0, "gap");
+        assert!((at(w(0.0, 0.06)) - 232.0).abs() < 1.0, "sheet 1 paper");
+        let look = SceneLook::default();
+        assert_eq!(sheet_value_k(0.0, 0.06, &c, &look, 1), look.paper, "sheet 1 has no A1 cross");
+        assert_eq!(sheet_value_k(0.0, 0.06, &c, &look, 0), look.ink + 30.0, "sheet 0 keeps its A1 cross");
     }
 }

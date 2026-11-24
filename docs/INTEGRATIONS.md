@@ -9,6 +9,32 @@ The three "Platform" demos in the gallery are still illustrations: they run the 
 card, the gatekeeper verdict and the agentvcs record are drawn by the demo (`lib/gallery/scenarios.ts`,
 `lib/sim.ts`). The modules below are real and tested.
 
+## Update (2026-11-24): a table of up to four sheets
+
+The marker tracker no longer sees only one sheet. Up to four sheets (`lib/board.ts` `SHEETS`; sheet k has ids
+28 k + 0..27) lie flat on the bench; sheet 0 stays the world frame and the others are placed by `{ x, y, yaw }`,
+learned by looking at them (`lib/tablemap.ts` `SheetMapper`, kept per device as `st-table`). The tracker solves one
+pose from the markers of every mapped sheet. A sheet whose markers stop fitting that pose is left out of the same
+frame's pose at once (a second solve, `solveTable`) and dropped from the map after a second. The simulator's
+renderer draws the table too (`RenderOptions.sheets`, engine ABI 7; one sheet renders exactly as before), and
+`npm run test:pilot` runs the pilot job on four sheets with the block on them.
+
+`lib/tablemap.ts`, `lib/markertracker.ts`, `lib/tracker.ts`, `engine/src/sim.rs`, `lib/scene.ts` (`PILOT_TABLE`).
+Tests: `tests/tablemap.test.mts`, `engine/src/sim.rs` (Rust), `scripts/pilot-sim.mts`.
+
+## Update (2026-11-24): a recipe now guides by lighting controls, not by text
+
+The pilot job (a 100 × 100 mm wood block, four screws) is an athos recipe (`lib/pilot.ts` `pilotRecipe`): three
+steps before the screws (`#sheet`, `#place`, `#register`), then one Drill step per screw. On the phone's simple
+display the recipe no longer shows step cards or step text. For the current step, the controls and the drawn guides
+that matter glow (an amber ring that pulses) and the rest is dimmed (`focus`). The step's words show only on a tap
+on the top text, for 3 s. The steps before the screws are answered by the phases themselves (the sheet seen well,
+the block's four corners fitting a 100 mm square), so no Step sheet asks for them: they are confirmed with the job
+once the fit is ok. The screws' Checks are answered by the engine as before.
+
+`lib/pilot.ts` (`focus`, `currentStep`, `pilotText`, `pilotWords`), `lib/hudsimple.ts` (`controlLook`,
+`phaseButtons`), `components/HudScreen.tsx`. Tests: `tests/pilot.test.mts`, `tests/hudsimple.test.mts`.
+
 ## Update (2026-11-23): who wrote a recipe, and its Checks answered live
 
 A recipe now says who wrote it, and the plan it makes keeps it. Then the phone works it step by step.

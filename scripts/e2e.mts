@@ -542,10 +542,12 @@ await scenario("assembly", "3D assembly: register a part by touching it with the
 // ---------------- markers on the part: learned stickers and factory markers ----------------
 
 /** Drive one screw on a part whose true pose is `partW(t)`; returns the accuracy and the events seen. */
-function driveScrew(s: NavSession, name: string, start: number, partW: (t: number) => Xf, world: (t: number) => Partial<RenderOptions>, d: Disturbance, opts: { slipAt?: number } = {}) {
+/** `towardDeg`: the direction (deg, in the bench plane) the person turns the camera to about the bit; by default
+ * toward the sheet's centre. */
+function driveScrew(s: NavSession, name: string, start: number, partW: (t: number) => Xf, world: (t: number) => Partial<RenderOptions>, d: Disturbance, opts: { slipAt?: number; towardDeg?: number } = {}) {
   const spec = SCREWS.find((x) => x.name === name)!;
   const depth = spec.depthMm / 1000;
-  const toward = (p: V3): V3 => [-p[0], -p[1], 0];
+  const toward = (p: V3): V3 => (opts.towardDeg == null ? [-p[0], -p[1], 0] : [Math.cos((opts.towardDeg * Math.PI) / 180), Math.sin((opts.towardDeg * Math.PI) / 180), 0]);
   const tips: number[] = [], angles: number[] = [];
   let ready = 0, falseReady = 0, seated = false, alarmAt = NaN, alarmBefore = 0;
   drive({
@@ -652,8 +654,11 @@ await scenario("anchors", "Stickers on the part: register by touch, learn the st
   partAt = () => moved;
   check("the part moved 4 cm and 25°: the engine follows it (holes < 0.8 mm)", holeErrMm(s, moved) < 0.8, `worst hole ${f2(holeErrMm(s, moved))} mm after the move`);
 
-  // 4. drive a top screw on the moved part
-  const r1 = driveScrew(s, "S3", t0, partAt, world, d);
+  // 4. drive a top screw on the moved part. The part now hides most of the sheet from S3: turned toward the sheet's
+  // centre the camera reads only 3 of its markers, the camera's pose has fewer than the gate's 4 and the screw is never
+  // ready. So the person turns the drill about the bit (as the screen asks: "Show more markers") until the camera
+  // looks past the part's corner at the sheet: 6 of its markers, and 6 of the stickers' still in view.
+  const r1 = driveScrew(s, "S3", t0, partAt, world, d, { towardDeg: -110 });
   t0 += 6.2;
   check(`S3 on the moved part: seated, tip p95 < 1 mm`, r1.ready > 0 && r1.seated && pct(r1.tips, 95) < 1 && r1.falseReady === 0 && r1.alarmBefore === 0, `ready ${r1.ready}, seated ${r1.seated}, tip p95 ${f2(pct(r1.tips, 95))} mm, angle p95 ${f3(pct(r1.angles, 95))}°, false ready ${r1.falseReady}, false slip alarms ${r1.alarmBefore}`);
 

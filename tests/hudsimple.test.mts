@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readout, depthBar, wordsFor, drawSimple, readUiPrefs, uiColorHex, displaySetting, chipNumbers, SIMPLE_GREEN, SIMPLE_AMBER, ABOVE_FULL_MM, type Readout, type ReadoutContext } from "../lib/hudsimple.ts";
+import { readout, depthBar, wordsFor, drawSimple, readUiPrefs, displaySetting, chipNumbers, focusLook, screwNumber, controlLook, phaseButtons, textKey, captureHint, pilotRuns, STAY_FINDABLE, COL, DIM_ALPHA, ABOVE_FULL_MM, type Readout, type ReadoutContext, type SimpleOptions } from "../lib/hudsimple.ts";
+import { focus, type PartFit, type PilotState, type PilotText } from "../lib/pilot.ts";
+import type { PilotOverlay } from "../lib/pilotnav.ts";
+import { SHEET0_ONLY } from "../lib/tablemap.ts";
 import { drawGuide } from "../lib/hudguide.ts";
 import type { SimState } from "../lib/sim.ts";
 import type { Overlay } from "../lib/hud.ts";
@@ -123,15 +126,15 @@ test("drawSimple draws in every level, with and without the video", () => {
     assert.equal(r(s, ov).level, level, name);
     for (const showVideo of [false, true]) {
       const { ctx, calls } = fakeCtx();
-      drawSimple(ctx, { ...S, ...s }, 400, 850, { video, overlay: { ...OV, ...ov }, toolCalibrated: true, showVideo, color: "#3ee59b", rightInset: 88 });
+      drawSimple(ctx, { ...S, ...s }, 400, 850, { video, overlay: { ...OV, ...ov }, toolCalibrated: true, showVideo, rightInset: 88 });
       assert.equal(calls.includes("drawImage"), showVideo, `${name}: the video only when asked`);
       assert.ok(calls.includes("stroke"), `${name}: something is drawn`);
     }
   }
   // the readout hidden under a sheet; no video size yet
   const { ctx } = fakeCtx();
-  drawSimple(ctx, S, 400, 850, { video, overlay: OV, toolCalibrated: true, showVideo: false, color: "#ffb547", readout: false });
-  drawSimple(ctx, S, 400, 850, { video: { width: 0, height: 0 } as unknown as HTMLCanvasElement, overlay: OV, toolCalibrated: false, showVideo: true, color: "#ffb547" });
+  drawSimple(ctx, S, 400, 850, { video, overlay: OV, toolCalibrated: true, showVideo: false, readout: false });
+  drawSimple(ctx, S, 400, 850, { video: { width: 0, height: 0 } as unknown as HTMLCanvasElement, overlay: OV, toolCalibrated: false, showVideo: true });
 });
 
 test("the mark and the tip sit on the same pixels in classic and simple, video or not", () => {
@@ -145,8 +148,8 @@ test("the mark and the tip sit on the same pixels in classic and simple, video o
   const s = { ...S, offsetMm: 0.5, gapMm: 12 };
   const opts = { video, overlay: OV, toolCalibrated: true };
   const classic = at((ctx) => drawGuide(ctx, s, 400, 850, { ...opts, banner: false }));
-  const simple = at((ctx) => drawSimple(ctx, s, 400, 850, { ...opts, showVideo: false, color: "#3ee59b", readout: false }));
-  const simpleVideo = at((ctx) => drawSimple(ctx, s, 400, 850, { ...opts, showVideo: true, color: "#3ee59b", readout: false }));
+  const simple = at((ctx) => drawSimple(ctx, s, 400, 850, { ...opts, showVideo: false, readout: false }));
+  const simpleVideo = at((ctx) => drawSimple(ctx, s, 400, 850, { ...opts, showVideo: true, readout: false }));
   // the first arc is the mark's circle in each; the level's outer ring is centred on the tip
   assert.deepEqual(simple[0], classic[0]);
   assert.deepEqual(simpleVideo[0], classic[0]);
@@ -155,13 +158,253 @@ test("the mark and the tip sit on the same pixels in classic and simple, video o
   assert.deepEqual(ring(simple), ring(classic));
 });
 
-test("readUiPrefs: classic, no video and green by default; anything unknown is the default", () => {
+/** a canvas context with a real save / restore stack that records each stroke, fill and text with the state it
+ *  was drawn in */
+function recCtx() {
+  type St = { globalAlpha: number; shadowBlur: number; shadowColor: string; strokeStyle: string; fillStyle: string };
+  const draws: { op: string; alpha: number; blur: number; color: string; text?: string }[] = [];
+  let st: St = { globalAlpha: 1, shadowBlur: 0, shadowColor: "rgba(0,0,0,0)", strokeStyle: "#000", fillStyle: "#000" };
+  const stack: St[] = [];
+  const rec = (op: string, color: string, text?: string) => draws.push({ op, alpha: st.globalAlpha, blur: st.shadowBlur, color, text });
+  const fns: Record<string, (...a: unknown[]) => unknown> = {
+    save: () => void stack.push({ ...st }),
+    restore: () => void (st = stack.pop() ?? st),
+    stroke: () => rec("stroke", st.strokeStyle),
+    fill: () => rec("fill", st.fillStyle),
+    fillRect: () => rec("fillRect", st.fillStyle),
+    fillText: (t) => rec("fillText", st.fillStyle, String(t)),
+    measureText: (t) => ({ width: String(t).length * 10 }),
+  };
+  const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+    get(_t, k) {
+      if (typeof k === "string" && k in fns) return fns[k];
+      if (typeof k === "string" && k in st) return st[k as keyof St];
+      return () => {};
+    },
+    set(_t, k, v) {
+      if (typeof k === "string" && k in st) (st as Record<string, unknown>)[k] = v;
+      else if (typeof k === "string" && typeof v === "function") fns[k] = v; // a test's own probe
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+  return { ctx, draws, state: () => st, depth: () => stack.length };
+}
+
+const PS: PilotState = {
+  phase: "sheet", sheetOk: false, sheets: SHEET0_ONLY.map((x) => ({ ...x })), markers: 6, corners: 0, capture: null, fit: null, done: 0, total: 4,
+  nearScrew: false, drilling: false, ready: false, stop: false, toolCalibrated: true,
+};
+const sq = (x: number, y: number, d: number) => [{ x, y }, { x: x + d, y }, { x: x + d, y: y + d }, { x, y: y + d }];
+const SHEET_PX = sq(100, 100, 500);
+const PART_PX = sq(700, 300, 200);
+const BOTTOM_PX = sq(690, 320, 200);
+const pilotOv = (p: Partial<PilotOverlay>): PilotOverlay => ({ sheetsPx: [{ k: 0, px: SHEET_PX, state: "mapped", progress: 1 }], partPx: null, bottomPx: null, cornersPx: [], screwsPx: [], ...p });
+const drawP = (pilot: PilotOverlay, o: Partial<SimpleOptions> = {}, s: Partial<SimState> = {}, ov: Partial<Overlay> = {}) => {
+  const r = recCtx();
+  drawSimple(r.ctx, { ...S, ...s }, 400, 850, { video, overlay: { ...OV, ...ov, pilot }, toolCalibrated: true, showVideo: false, rightInset: 88, ...o });
+  assert.equal(r.depth(), 0, "every save is restored");
+  assert.equal(r.state().shadowBlur, 0, "no glow left on");
+  assert.equal(r.state().globalAlpha, 1, "alpha back to 1");
+  return r.draws;
+};
+const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+
+test("focusLook: dim at 30 %, glow pulses between 0.75 and 1, dim wins", () => {
+  const f = { glow: ["part", "tip"], dim: ["depth", "tip"] };
+  assert.deepEqual(focusLook(null, "part", 0), { alpha: 1, glow: false });
+  assert.deepEqual(focusLook(f, "level", 0), { alpha: 1, glow: false });
+  assert.deepEqual(focusLook(f, "depth", 0), { alpha: DIM_ALPHA, glow: false });
+  assert.deepEqual(focusLook(f, "tip", 0), { alpha: DIM_ALPHA, glow: false });
+  for (let t = 0; t < 2; t += 0.05) {
+    const k = focusLook(f, "part", t);
+    assert.equal(k.glow, true);
+    assert.ok(k.alpha >= 0.75 - 1e-9 && k.alpha <= 1 + 1e-9, `t ${t}: ${k.alpha}`);
+  }
+  assert.ok(near(focusLook(f, "part", 1 / 3.2).alpha, 1), "the top of the pulse");
+});
+
+test("screwNumber: the digits of the label", () => {
+  assert.equal(screwNumber("S2"), "2");
+  assert.equal(screwNumber("S12"), "12");
+  assert.equal(screwNumber("X"), "X");
+});
+
+test("drawSimple, sheet phase: the sheet's outline in grey-white at 50 %, glowing while the sheet is not seen well", () => {
+  const plain = drawP(pilotOv({}), { drawText: false });
+  const outline = plain.filter((d) => d.op === "stroke" && d.color === COL.rest && near(d.alpha, 0.5));
+  assert.equal(outline.length, 1, "one outline");
+  assert.equal(outline[0].blur, 0);
+  const markers = plain.filter((d) => d.op === "stroke" && d.color === COL.rest && near(d.alpha, 0.25));
+  assert.equal(markers.length, OV.quads.length, "the markers at 25 %");
+  const lit = drawP(pilotOv({}), { focus: focus(PS) });
+  assert.ok(lit.some((d) => d.op === "stroke" && d.color === COL.rest && d.blur > 0 && d.alpha >= 0.5 * 0.75 - 1e-9), "the outline glows");
+  assert.ok(!lit.some((d) => d.op === "stroke" && d.color === COL.rest && near(d.alpha, 0.25) && d.blur > 0), "the markers never glow");
+  // no screw yet: no target, so no arrow, no level, no depth bar and no mark
+  assert.ok(!plain.some((d) => d.color === COL.next), "nothing amber without a screw");
+  // lost: nothing of the pilot
+  const lost = drawP(pilotOv({}), {}, {}, { lost: true });
+  assert.ok(!lost.some((d) => d.op === "stroke" && d.color === COL.rest && near(d.alpha, 0.5)));
+});
+
+test("drawSimple, the table: in the sheet phase mapped sheets green, one being mapped amber with its ring, moved amber", () => {
+  const sheets: PilotOverlay["sheetsPx"] = [
+    { k: 0, px: SHEET_PX, state: "mapped", progress: 1 },
+    { k: 1, px: sq(620, 100, 500), state: "seen", progress: 0.5 },
+    { k: 2, px: sq(100, 620, 500), state: "moved", progress: 0 },
+  ];
+  const d = drawP(pilotOv({ sheetsPx: sheets }), { drawText: false, phase: "sheet" });
+  assert.equal(d.filter((x) => x.op === "stroke" && x.color === COL.ok).length, 1, "sheet 0 green");
+  // sheet 1: its amber edge and the ring's progress arc, over the ring's grey track; sheet 2: its amber (dashed) edge
+  assert.equal(d.filter((x) => x.op === "stroke" && x.color === COL.next).length, 3);
+  assert.equal(d.filter((x) => x.op === "stroke" && x.color === COL.rest && near(x.alpha, 0.25)).length, OV.quads.length + 1, "the markers and the ring's track");
+  // the ring with no progress yet: its arc is not drawn
+  const empty = drawP(pilotOv({ sheetsPx: [{ ...sheets[1], progress: 0 }] }), { drawText: false, phase: "sheet" });
+  assert.equal(empty.filter((x) => x.op === "stroke" && x.color === COL.next).length, 1);
+  // after the sheet phase a mapped sheet is grey-white again; a moved one stays amber
+  const work = drawP(pilotOv({ sheetsPx: [sheets[0], sheets[2]] }), { drawText: false, phase: "work" });
+  assert.equal(work.filter((x) => x.op === "stroke" && x.color === COL.ok).length, 0);
+  assert.equal(work.filter((x) => x.op === "stroke" && x.color === COL.rest && near(x.alpha, 0.5)).length, 1);
+  assert.equal(work.filter((x) => x.op === "stroke" && x.color === COL.next).length, 1);
+  // the outlines glow under the focus
+  const lit = drawP(pilotOv({ sheetsPx: sheets }), { drawText: false, phase: "sheet", focus: focus(PS) });
+  assert.ok(lit.some((x) => x.op === "stroke" && x.color === COL.ok && x.blur > 0));
+});
+
+test("drawSimple, part phase: green corner squares and the capture ring; then the block as a cyan ghost", () => {
+  const corners = [{ p: PART_PX[0], state: "done" as const }, { p: PART_PX[1], state: "done" as const }];
+  const st = { ...PS, phase: "part" as const, sheetOk: true, corners: 2, capture: { progress: 0.5, why: null } };
+  const d = drawP(pilotOv({ cornersPx: corners }), { focus: focus(st), capture: { progress: 0.5 } });
+  const squares = d.filter((x) => x.op === "fillRect" && x.color === COL.ok);
+  assert.equal(squares.length, 2, "one square per corner");
+  assert.ok(squares.every((x) => x.blur > 0), "the corners glow while capturing");
+  assert.ok(d.some((x) => x.op === "stroke" && x.color === COL.next && x.blur > 0), "the capture ring, amber and glowing");
+  assert.ok(d.some((x) => x.op === "stroke" && x.color === COL.tool && x.blur > 0), "the tip glows");
+  const none = drawP(pilotOv({ cornersPx: corners }), { capture: null, drawText: false });
+  assert.ok(!none.some((x) => x.color === COL.next), "no capture: no ring");
+
+  // fitted: the top face filled at 16 %, its edges bright, the bottom and the verticals at 40 %
+  const fitted = drawP(pilotOv({ partPx: PART_PX, bottomPx: BOTTOM_PX, cornersPx: PART_PX.map((p) => ({ p, state: "done" as const })) }));
+  assert.ok(fitted.some((x) => x.op === "fill" && x.color === COL.tool && near(x.alpha, 0.16)), "the ghost's fill");
+  assert.ok(fitted.some((x) => x.op === "stroke" && x.color === COL.tool && near(x.alpha, 1)), "its edges");
+  assert.equal(fitted.filter((x) => x.op === "stroke" && x.color === COL.tool && near(x.alpha, 0.4)).length, 2, "bottom and verticals");
+  // dimmed: the whole ghost at 30 %
+  const dim = drawP(pilotOv({ partPx: PART_PX, bottomPx: BOTTOM_PX }), { focus: { glow: [], dim: ["part"] } });
+  assert.ok(dim.some((x) => x.op === "fill" && x.color === COL.tool && near(x.alpha, 0.16 * DIM_ALPHA)));
+  assert.ok(!dim.some((x) => x.color === COL.tool && near(x.alpha, 0.16)));
+});
+
+test("drawSimple: clipped polygons (3 to 6 points, faces of different sizes) draw, the verticals from edgesPx", () => {
+  // a sheet with a corner behind the camera comes as a pentagon; the block's faces clipped differently
+  const pent = [{ x: 100, y: 100 }, { x: 600, y: 100 }, { x: 600, y: 400 }, { x: 400, y: 600 }, { x: 100, y: 600 }];
+  const top6 = [{ x: 700, y: 300 }, { x: 900, y: 300 }, { x: 900, y: 420 }, { x: 860, y: 500 }, { x: 760, y: 500 }, { x: 700, y: 450 }];
+  const bot3 = [{ x: 690, y: 320 }, { x: 890, y: 320 }, { x: 690, y: 520 }];
+  const edges: NonNullable<PilotOverlay["edgesPx"]> = [[bot3[0], top6[0]], [bot3[1], top6[1]]];
+  const r = recCtx();
+  const segs: number[] = [];
+  let n = 0;
+  (r.ctx as unknown as Record<string, unknown>).moveTo = () => void segs.push((n = 1));
+  (r.ctx as unknown as Record<string, unknown>).lineTo = () => void (segs[segs.length - 1] = ++n);
+  drawSimple(r.ctx, S, 400, 850, { video, overlay: { ...OV, pilot: pilotOv({ sheetsPx: [{ k: 0, px: pent, state: "mapped", progress: 1 }], partPx: top6, bottomPx: bot3, edgesPx: edges }) }, toolCalibrated: true, showVideo: false, rightInset: 88, phase: "sheet", drawText: false });
+  assert.equal(r.depth(), 0);
+  assert.ok(segs.includes(5) && segs.includes(6) && segs.includes(3), `every point of each polygon is drawn: ${segs.join(",")}`);
+  assert.equal(r.draws.filter((x) => x.op === "stroke" && x.color === COL.ok).length, 1, "the pentagon sheet, green");
+  assert.ok(r.draws.some((x) => x.op === "fill" && x.color === COL.tool && near(x.alpha, 0.16)), "the clipped top face's fill");
+  assert.equal(r.draws.filter((x) => x.op === "stroke" && x.color === COL.tool && near(x.alpha, 0.4)).length, 2, "the bottom and the verticals");
+  // faces of different sizes without edgesPx: the bottom is drawn, no verticals (its points do not pair up)
+  const d = drawP(pilotOv({ partPx: top6, bottomPx: bot3 }));
+  assert.equal(d.filter((x) => x.op === "stroke" && x.color === COL.tool && near(x.alpha, 0.4)).length, 1);
+});
+
+test("drawSimple, work phase: done screws green, the others numbered, the active one amber with its tunnel", () => {
+  const screws: PilotOverlay["screwsPx"] = [
+    { p: { x: 720, y: 320 }, label: "S1", state: "done" },
+    { p: PART_PX[1], label: "S2", state: "active" },
+    { p: { x: 880, y: 480 }, label: "S3", state: "todo" },
+    { p: { x: 720, y: 480 }, label: "S4", state: "todo" },
+  ];
+  const pilot = pilotOv({ partPx: PART_PX, bottomPx: BOTTOM_PX, screwsPx: screws });
+  const st = { ...PS, phase: "work" as const, sheetOk: true, corners: 4, done: 1 };
+  const d = drawP(pilot, { focus: focus(st), drawText: false });
+  const texts = d.filter((x) => x.op === "fillText").map((x) => x.text);
+  assert.deepEqual(texts, ["3", "4"], "only the todo screws' numbers: no top text");
+  assert.ok(d.filter((x) => x.op === "fillText").every((x) => x.color === COL.rest));
+  assert.ok(d.some((x) => x.op === "fill" && x.color === COL.ok), "the done disc");
+  const amber = d.filter((x) => x.op === "stroke" && x.color === COL.next);
+  assert.ok(amber.length >= 5, "three tunnel rings, the ring, the arrow");
+  assert.ok(amber.some((x) => x.blur > 0), "the active ring glows");
+  // the tunnel closes in: its outer ring is smaller near the surface
+  const outer = (gapMm: number) => {
+    const arcs: number[] = [];
+    const r = recCtx();
+    (r.ctx as unknown as Record<string, unknown>).arc = (x: number, y: number, rad: number) => { if (x !== 0 || y !== 0) arcs.push(rad); };
+    drawSimple(r.ctx, { ...S, gapMm, offsetMm: 30 }, 400, 850, { video, overlay: { ...OV, pilot }, toolCalibrated: true, showVideo: false, drawText: false });
+    return Math.max(...arcs.filter((a) => a < 4 * 11));
+  };
+  assert.ok(outer(5) < outer(50), "rings close in as the tip comes down");
+  // near the screw: the level and the depth glow, the screws are as they are
+  const lit = drawP(pilot, { focus: focus({ ...st, nearScrew: true }) }, { offsetMm: 0.5, gapMm: 3 });
+  assert.ok(lit.some((x) => x.op === "stroke" && (x.color === COL.next || x.color === COL.ok) && x.blur > 0 && x.alpha < 1), "level / depth glow");
+});
+
+test("drawSimple: level and depth by state: amber guiding, green when square, red only for the stop alarm", () => {
+  const lvl = (s: Partial<SimState>, ov: Partial<Overlay> = {}) => {
+    const r = recCtx();
+    drawSimple(r.ctx, { ...S, ...s }, 400, 850, { video, overlay: { ...OV, ...ov }, toolCalibrated: true, showVideo: false, readout: false });
+    return r.draws;
+  };
+  const guiding = lvl({ offsetMm: 0.5, gapMm: 0, angleErrDeg: 2 });
+  assert.ok(guiding.some((x) => x.color === COL.next) && !guiding.some((x) => x.color === COL.stop));
+  const square = lvl({ offsetMm: 0.5, gapMm: 0, angleErrDeg: 0.2 });
+  assert.ok(square.some((x) => x.op === "fill" && x.color === COL.ok), "the level's dot, green");
+  const atDepth = lvl({ phase: "drill", depthMm: 14, angleErrDeg: 0.2 });
+  assert.ok(atDepth.some((x) => x.op === "fillRect" && x.color === COL.ok), "the depth bar, green at depth");
+  const drilling = lvl({ phase: "drill", depthMm: 5, angleErrDeg: 2 });
+  assert.ok(!drilling.some((x) => x.color === COL.stop), "tilted while drilling is amber, not red");
+  assert.ok(drilling.some((x) => x.op === "fillRect" && x.color === COL.next));
+});
+
+test("drawSimple: depthX moves the depth bar", () => {
+  const xs = (depthX?: number) => {
+    const out: number[] = [];
+    const r = recCtx();
+    (r.ctx as unknown as Record<string, unknown>).fillRect = (x: number) => out.push(x);
+    drawSimple(r.ctx, { ...S, phase: "drill", depthMm: 5, angleErrDeg: 0.2 }, 400, 850, { video, overlay: OV, toolCalibrated: true, showVideo: false, readout: false, depthX });
+    return out;
+  };
+  const u = 4, bw = u * 2.4;
+  assert.ok(xs().some((x) => near(x, u * 6 - bw / 2)), "default: 6 % of the short side");
+  assert.ok(xs(100).some((x) => near(x, 100 - bw / 2)));
+  assert.ok(!xs(100).some((x) => near(x, u * 6 - bw / 2)));
+});
+
+test("drawSimple: STOP blinks the frame with or without the text; the big icon only with the text", () => {
+  const perf = globalThis.performance;
+  const orig = perf.now;
+  Object.defineProperty(perf, "now", { value: () => 0, configurable: true, writable: true });
+  try {
+    for (const drawText of [true, false]) {
+      const arcs: number[] = [];
+      const r = recCtx();
+      (r.ctx as unknown as Record<string, unknown>).arc = (_x: number, _y: number, rad: number) => arcs.push(rad);
+      drawSimple(r.ctx, S, 400, 850, { video, overlay: { ...OV, alarms: 16 }, toolCalibrated: true, showVideo: false, drawText, rightInset: 88 });
+      assert.ok(r.draws.some((x) => x.op === "stroke" && x.color === COL.stop), `drawText ${drawText}: the red frame`);
+      // the stop icon: a circle of 0.8 × 11u
+      assert.equal(arcs.some((a) => near(a, 0.8 * 11 * 4)), drawText, `drawText ${drawText}: the icon`);
+    }
+    const r = recCtx();
+    drawSimple(r.ctx, S, 400, 850, { video, overlay: OV, toolCalibrated: true, showVideo: false, drawText: false });
+    assert.ok(!r.draws.some((x) => x.op === "fillText"), "no text at all without drawText");
+  } finally {
+    Object.defineProperty(perf, "now", { value: orig, configurable: true, writable: true });
+  }
+});
+
+test("readUiPrefs: simple and no video by default; anything unknown is the default; the old colour is ignored", () => {
   const from = (o: Record<string, string>) => readUiPrefs((k) => o[k] ?? null);
-  assert.deepEqual(from({}), { ui: "classic", video: false, color: "green" });
-  assert.deepEqual(from({ "st-ui": "simple", "st-ui-video": "1", "st-ui-color": "amber" }), { ui: "simple", video: true, color: "amber" });
-  assert.deepEqual(from({ "st-ui": "fancy", "st-ui-video": "yes", "st-ui-color": "red" }), { ui: "classic", video: false, color: "green" });
-  assert.equal(uiColorHex("green"), SIMPLE_GREEN);
-  assert.equal(uiColorHex("amber"), SIMPLE_AMBER);
+  assert.deepEqual(from({}), { ui: "simple", video: false });
+  assert.deepEqual(from({ "st-ui": "classic" }), { ui: "classic", video: false });
+  assert.deepEqual(from({ "st-ui": "simple", "st-ui-video": "1", "st-ui-color": "amber" }), { ui: "simple", video: true });
+  assert.deepEqual(from({ "st-ui": "fancy", "st-ui-video": "yes" }), { ui: "simple", video: false });
 });
 
 test("displaySetting: what a job records", () => {
@@ -180,4 +423,89 @@ test("chipNumbers: only the measured numbers, the detail as it is otherwise", ()
   assert.equal(chipNumbers("not drilled"), "not drilled");
   assert.equal(chipNumbers("confirmed: deburred"), "confirmed: deburred");
   assert.equal(chipNumbers(""), "");
+});
+
+// ---------- the pilot's controls on the screen ----------
+
+const pstate = (o: Partial<PilotState> = {}): PilotState => ({
+  phase: "sheet",
+  sheetOk: false,
+  sheets: SHEET0_ONLY.map((x) => ({ ...x })),
+  markers: 0,
+  corners: 0,
+  capture: null,
+  fit: null,
+  done: 0,
+  total: 4,
+  nearScrew: false,
+  drilling: false,
+  ready: false,
+  stop: false,
+  toolCalibrated: true,
+  ...o,
+});
+const FIT_OK = { corners: [], origin: [0, 0], angleDeg: 0, topMm: 18, sideMm: 100, freMm: 0.4, ok: true, why: null } as unknown as PartFit;
+const FIT_BAD = { ...FIT_OK, ok: false, why: "size" } as PartFit;
+
+test("controlLook: glow, dim at 30 %, Stop and Pause never under 0.5, nothing without a focus", () => {
+  assert.deepEqual(controlLook(null, "more"), { glow: false, opacity: 1 });
+  const f = { glow: ["more"], dim: ["video", "stop", "pause"] };
+  assert.deepEqual(controlLook(f, "more"), { glow: true, opacity: 1 });
+  assert.deepEqual(controlLook(f, "video"), { glow: false, opacity: DIM_ALPHA });
+  assert.equal(controlLook(f, "stop").opacity, STAY_FINDABLE);
+  assert.equal(controlLook(f, "pause").opacity, STAY_FINDABLE);
+  assert.deepEqual(controlLook(f, "sound"), { glow: false, opacity: 1 });
+  // dim wins over glow, as on the canvas
+  assert.deepEqual(controlLook({ glow: ["video"], dim: ["video"] }, "video"), { glow: false, opacity: DIM_ALPHA });
+  // the stop alarm: Stop glows at full strength, every other control is dimmed but Pause stays findable
+  const alarm = focus(pstate({ phase: "work", fit: FIT_OK, stop: true }));
+  assert.deepEqual(controlLook(alarm, "stop"), { glow: true, opacity: 1 });
+  assert.equal(controlLook(alarm, "pause").opacity, STAY_FINDABLE);
+  assert.equal(controlLook(alarm, "phase-sheet").opacity, DIM_ALPHA);
+});
+
+test("phaseButtons: current, enabled from canEnter, ticks, and a hold when corners would be thrown away", () => {
+  const at = (s: PilotState) => Object.fromEntries(phaseButtons(s).map((b) => [b.phase, b]));
+  let b = at(pstate());
+  assert.deepEqual(phaseButtons(pstate()).map((x) => x.phase), ["sheet", "part", "work"]);
+  assert.ok(b.sheet.current && b.sheet.enabled && !b.sheet.completed);
+  assert.ok(!b.part.enabled && !b.work.enabled);
+  b = at(pstate({ sheetOk: true }));
+  assert.ok(b.part.enabled && !b.sheet.completed, "seen well, but still in the sheet phase: no tick yet");
+  b = at(pstate({ phase: "part", sheetOk: true }));
+  assert.ok(b.sheet.completed && b.part.current && !b.part.hold, "no corner yet: a tap is enough");
+  b = at(pstate({ phase: "part", sheetOk: true, corners: 2 }));
+  assert.ok(b.part.hold && !b.part.completed && !b.work.enabled);
+  b = at(pstate({ phase: "part", sheetOk: true, corners: 4, fit: FIT_BAD }));
+  assert.ok(b.part.hold && !b.part.completed && !b.work.enabled);
+  b = at(pstate({ phase: "part", sheetOk: true, corners: 4, fit: FIT_OK }));
+  assert.ok(b.part.completed && b.work.enabled && b.part.hold);
+  b = at(pstate({ phase: "work", sheetOk: true, corners: 4, fit: FIT_OK, done: 3 }));
+  assert.ok(b.work.current && !b.work.completed && b.part.hold, "going back to the part from work also needs the hold");
+  b = at(pstate({ phase: "work", sheetOk: true, corners: 4, fit: FIT_OK, done: 4 }));
+  assert.ok(b.work.completed && b.part.completed && b.sheet.completed);
+});
+
+test("textKey: a new kind fades, a new value does not", () => {
+  assert.equal(textKey({ icon: "arrow", unit: "mm" }), textKey({ icon: "arrow", unit: "mm" }));
+  assert.notEqual(textKey({ icon: "arrow", unit: "mm" }), textKey({ icon: "down", unit: "mm" }));
+  assert.notEqual(textKey({ icon: "corner", unit: "" }), textKey({ icon: "corner", unit: "mm" }));
+  const a: PilotText = { icon: "sheet", value: "5", unit: "", tone: "next" };
+  const b: PilotText = { ...a, value: "9", tone: "ok" };
+  assert.equal(textKey(a), textKey(b));
+});
+
+test("captureHint: words for what a corner capture misses", () => {
+  for (const w of ["low", "moving", "near-taken", "pivot"] as const) assert.ok(captureHint(w).length > 10, w);
+  assert.equal(captureHint(null), "");
+  assert.equal(captureHint(undefined), "");
+});
+
+test("pilotRuns: simple only; on the phone without an active plan; in the simulator with &pilot=1", () => {
+  assert.equal(pilotRuns({ ui: "simple", sim: false, pilotParam: false, activePlan: null }), true);
+  assert.equal(pilotRuns({ ui: "simple", sim: false, pilotParam: false, activePlan: "plan-1" }), false);
+  assert.equal(pilotRuns({ ui: "classic", sim: false, pilotParam: false, activePlan: null }), false);
+  assert.equal(pilotRuns({ ui: "simple", sim: true, pilotParam: false, activePlan: null }), false);
+  assert.equal(pilotRuns({ ui: "simple", sim: true, pilotParam: true, activePlan: null }), true);
+  assert.equal(pilotRuns({ ui: "classic", sim: true, pilotParam: true, activePlan: null }), false);
 });

@@ -3,12 +3,13 @@
 // or simulated tool poses. Out: tracker results with their capture time (docs/ENGINE_SPEC.md §11).
 
 import { AR } from "../aruco";
-import { DICTIONARY } from "../board";
-import { NavCore, type Camera, type ToolCalib } from "../engine";
+import { DICTIONARY, sheetOf } from "../board";
+import { NavCore, type Camera, type SheetSpec, type SolidSpec, type ToolCalib } from "../engine";
 import { MarkerTracker, type CaptureKind } from "../markertracker";
 import { renderTool, DEFAULT_DISTURBANCE, markerCodes, type Rig } from "../scene";
 import { compareDetections, makeDetector, type DetectorKind } from "../detectors";
 import type { Xf } from "../xform";
+import type { TableMap } from "../tablemap";
 
 export type ToWorker =
   | { type: "init"; camera: Camera; cameraCalibrated: boolean; maxSide: number; detector?: DetectorKind; compare?: boolean }
@@ -17,8 +18,9 @@ export type ToWorker =
   | { type: "cancelRecord" }
   | { type: "frame"; bitmap: ImageBitmap; tCapture: number; srcWidth: number; bitmapMs: number }
   | { type: "setMaxSide"; maxSide: number }
-  | { type: "sim"; rig: Rig; codes: Uint8Array; toolW: Xf; tCapture: number; seed: number }
+  | { type: "sim"; rig: Rig; codes: Uint8Array; toolW: Xf; tCapture: number; seed: number; solids?: SolidSpec[]; sheets?: SheetSpec[] }
   | { type: "setCamera"; camera: Camera; calibrated: boolean }
+  | { type: "setTableMap"; map: TableMap }
   | { type: "beginCapture"; kind: CaptureKind }
   | { type: "cancelCapture" }
   | { type: "endCapture"; tool: ToolCalib; id: number };
@@ -57,7 +59,7 @@ function recordFrame(img: ImageData, t: number) {
   }
 }
 let codes: Uint8Array | null = null;
-const sheetIds = (l: { id: number; corners: { x: number; y: number }[] }[]) => l.filter((m) => m.id < 28);
+const sheetIds = (l: { id: number; corners: { x: number; y: number }[] }[]) => l.filter((m) => sheetOf(m.id) != null);
 function useDetector(kind: DetectorKind) {
   detectorKind = kind;
   codes ??= markerCodes(new AR.Dictionary(DICTIONARY).codeList);
@@ -124,7 +126,7 @@ async function handle(e: MessageEvent<ToWorker>) {
       compare = m.compare;
       break;
     case "sim": {
-      const img = renderTool(core, m.rig, m.codes, [m.toolW], { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, m.seed, { ss: 1 });
+      const img = renderTool(core, m.rig, m.codes, [m.toolW], { ...DEFAULT_DISTURBANCE, blurSamples: 1 }, m.seed, { ss: 1, solids: m.solids, sheets: m.sheets });
       const f = tracker.frame(img, m.tCapture);
       compareOn(img, f);
       if (rec) recordFrame(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), m.tCapture);
@@ -134,6 +136,9 @@ async function handle(e: MessageEvent<ToWorker>) {
     }
     case "setCamera":
       tracker.setCamera(m.camera, m.calibrated);
+      break;
+    case "setTableMap":
+      tracker.setTableMap(m.map);
       break;
     case "beginCapture":
       tracker.beginCapture(m.kind);

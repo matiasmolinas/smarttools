@@ -6,15 +6,15 @@ import { APP_VERSION, versionLine } from "../lib/jobrecord.ts";
 import { ENGINE_ABI } from "../lib/engine.ts";
 
 test("the version line names the app, the build and the engine ABI", () => {
-  assert.equal(versionLine("abc1234", 6, "0.0.13"), "SmartTools 0.0.13 · build abc1234 · engine ABI 6");
+  assert.equal(versionLine("abc1234", 7, "0.0.13"), "SmartTools 0.0.13 · build abc1234 · engine ABI 7");
 });
 
 test("no build reads dev", () => {
-  assert.equal(versionLine(undefined, 6, "0.0.13"), "SmartTools 0.0.13 · build dev · engine ABI 6");
-  assert.equal(versionLine("  ", 6, "0.0.13"), "SmartTools 0.0.13 · build dev · engine ABI 6");
+  assert.equal(versionLine(undefined, 7, "0.0.13"), "SmartTools 0.0.13 · build dev · engine ABI 7");
+  assert.equal(versionLine("  ", 7, "0.0.13"), "SmartTools 0.0.13 · build dev · engine ABI 7");
 });
 
 test("the defaults are the current app version and engine ABI", () => {
-  assert.equal(APP_VERSION, "0.0.15");
+  assert.equal(APP_VERSION, "0.0.16");
   assert.equal(versionLine("x"), `SmartTools ${APP_VERSION} · build x · engine ABI ${ENGINE_ABI}`);
 });

@@ -15,7 +15,7 @@ use crate::subpix::{self, Rgba};
 use std::alloc::{alloc, dealloc, Layout};
 use std::slice;
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 #[no_mangle]
 pub extern "C" fn st_abi_version() -> u32 {
@@ -572,9 +572,11 @@ pub unsafe extern "C" fn st_render(
     st_render_scene(cam, poses, n, width, height, ss, codes, cfg, std::ptr::null(), 0, out)
 }
 
-/// Parse solids and stickers: `[n_solids, (o 3, q 4, shade, n_planes, (n 3, d) * n_planes) * n_solids,
-/// n_stickers, (o 3, q 4, half 2, n_markers, (x, y, size, code) * n_markers) * n_stickers]`.
-fn parse_scene(v: &[f64]) -> Option<(Vec<sim::Solid>, Vec<sim::Sticker>)> {
+/// Parse solids, stickers and the table: `[n_solids, (o 3, q 4, shade, n_planes, (n 3, d) * n_planes) * n_solids,
+/// n_stickers, (o 3, q 4, half 2, n_markers, (x, y, size, code) * n_markers) * n_stickers,
+/// n_sheets, (x, y, yaw, k) * n_sheets]`. The sheets (ABI 7) are optional: without them sheet 0 alone is drawn.
+type ParsedScene = (Vec<sim::Solid>, Vec<sim::Sticker>, Vec<sim::SheetPlace>);
+fn parse_scene(v: &[f64]) -> Option<ParsedScene> {
     let mut i = 0usize;
     let mut next = |k: usize| -> Option<&[f64]> {
         let r = v.get(i..i + k)?;
@@ -600,13 +602,24 @@ fn parse_scene(v: &[f64]) -> Option<(Vec<sim::Solid>, Vec<sim::Sticker>)> {
         let markers = (0..nm.min(64)).map(|_| next(4).map(|m| ([m[0], m[1]], m[2], m[3] as u64))).collect::<Option<Vec<_>>>()?;
         stickers.push(sim::Sticker { r, o, half, markers });
     }
-    Some((solids, stickers))
+    let nk = next(1).map_or(0, |x| x[0] as usize);
+    let mut sheets = Vec::with_capacity(nk.min(16));
+    for _ in 0..nk.min(16) {
+        let h = next(4)?;
+        if !(0.0..16.0).contains(&h[3]) {
+            return None;
+        }
+        sheets.push(sim::SheetPlace { x: h[0], y: h[1], yaw: h[2], k: h[3] as u32 });
+    }
+    Some((solids, stickers, sheets))
 }
 
-/// [`st_render`] with parts in the scene: convex solids and marker stickers (see `parse_scene`).
+/// [`st_render`] with parts in the scene: convex solids and marker stickers, and optionally a table of several
+/// sheets (see `parse_scene`).
 ///
 /// # Safety
-/// As [`st_render`]; `scene`: `scene_len` `f64` (may be null when 0).
+/// As [`st_render`]; `scene`: `scene_len` `f64` (may be null when 0). With sheets, `codes` holds
+/// `36 * board::MARKER_COUNT * (largest k + 1)` bytes.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn st_render_scene(
@@ -625,8 +638,8 @@ pub unsafe extern "C" fn st_render_scene(
     if cam.is_null() || poses.is_null() || codes.is_null() || cfg.is_null() || out.is_null() || n == 0 || width == 0 || height == 0 {
         return -1;
     }
-    let (solids, stickers) = if scene.is_null() || scene_len == 0 {
-        (Vec::new(), Vec::new())
+    let (solids, stickers, sheets) = if scene.is_null() || scene_len == 0 {
+        (Vec::new(), Vec::new(), Vec::new())
     } else {
         match parse_scene(slice::from_raw_parts(scene, scene_len)) {
             Some(x) => x,
@@ -642,13 +655,14 @@ pub unsafe extern "C" fn st_render_scene(
         width,
         height,
         ss,
-        codes: slice::from_raw_parts(codes, 36 * crate::board::MARKER_COUNT),
+        codes: slice::from_raw_parts(codes, 36 * crate::board::MARKER_COUNT * sheets.iter().map(|s| s.k as usize + 1).max().unwrap_or(1)),
         look: SceneLook { wall: c[0], paper: c[1], ink: c[2], crosses: c[3] != 0.0 },
         light: Lighting { gain: c[4], vignette: c[5], gradient: c[6], noise: c[7], seed: c[8] as u32 },
         bit: (c[9] != 0.0).then(|| Bit { tip_cam: [c[10], c[11], c[12]], axis_cam: [c[13], c[14], c[15]], length: c[16], radius: c[17] }),
         occluders: &occ,
         solids: &solids,
         stickers: &stickers,
+        sheets: &sheets,
     };
     sim::render(&spec, slice::from_raw_parts_mut(out, width * height * 4));
     1

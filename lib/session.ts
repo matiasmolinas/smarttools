@@ -54,7 +54,9 @@ export class NavSession {
     this.tracker = new MarkerTracker(core, detector, o.camera, o.cameraCalibrated);
     if (o.bodies) this.tracker.setBodies(o.bodies);
     const engine = core.createEngine();
-    if (o.engine) engine.configure(o.engine);
+    // always configured: the TypeScript defaults (ENGINE_DEFAULTS) are the ones every session runs with, headless
+    // too (the phone configures its own on top), not the engine's built-in ones
+    engine.configure(o.engine ?? {});
     this.scene = buildEngine(engine, o.scene ?? smartToolsScene({ tool: o.tool }));
     if (o.targetDepths) engine.setTargetDepths(o.targetDepths);
     engine.setCalibrated(this.id(this.scene.def.navigation.tool), o.toolCalibrated);
