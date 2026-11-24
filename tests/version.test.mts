@@ -15,6 +15,6 @@ test("no build reads dev", () => {
 });
 
 test("the defaults are the current app version and engine ABI", () => {
-  assert.equal(APP_VERSION, "0.0.14");
+  assert.equal(APP_VERSION, "0.0.15");
   assert.equal(versionLine("x"), `SmartTools ${APP_VERSION} · build x · engine ABI ${ENGINE_ABI}`);
 });

@@ -10,7 +10,7 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.14";
+export const APP_VERSION = "0.0.15";
 
 /** What runs, for the screen: "SmartTools 0.0.13 · build abc1234 · engine ABI 6". An empty build reads "dev". */
 export function versionLine(build: string | undefined, abi: number = ENGINE_ABI, app: string = APP_VERSION): string {
@@ -62,6 +62,8 @@ export interface TrackingSettings {
   /** detection resolution, longest side, px */
   detectPx: number;
   camera: { fps60: boolean; lock: boolean };
+  /** the /hud display in use when the job was saved (missing on jobs made before it could be chosen) */
+  display?: "classic" | "simple" | "simple+video";
 }
 
 type Ctx = JobRecord["context"];

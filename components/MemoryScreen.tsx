@@ -378,7 +378,7 @@ function Compare({ jobs }: { jobs: Row<JobRecord>[] }) {
     <section>
       <h2 className="text-xl font-semibold">Compare jobs by setting</h2>
       <p className="mt-1 text-sm text-white/55">
-        Each job records how the phone tracked (detector, filter, detection size, camera). Lower is better. Two or more jobs per value before it means much.
+        Each job records how the phone tracked (detector, filter, detection size, camera) and the display (classic or simple). Lower is better. Two or more jobs per value before it means much.
       </p>
       {rows.length < 2 ? (
         <p className="mt-3 text-sm text-white/50">Needs at least two jobs with the camera, with a setting changed between them (menu ☰ → Tests).</p>

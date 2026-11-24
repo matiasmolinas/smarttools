@@ -1,8 +1,9 @@
 "use client";
 
 // The phone app (/hud): only what is needed to work. A start screen (the browser needs a tap to turn on the
-// camera), then the live camera with the GPS-style guide (lib/hudguide.ts). The guided setup opens by itself
-// when the drill is not calibrated. One menu: Setup, Job, Tests, Record, Sound, Full screen.
+// camera), then the live camera with the GPS-style guide (lib/hudguide.ts), or the simple display (lib/hudsimple.ts:
+// one number, shapes, five round buttons; chosen in the menu, kept per device). The guided setup opens by itself
+// when the drill is not calibrated. One menu: Setup, Job, Tests, Record, Sound, Display, Full screen.
 // Like the drill's trigger (lib/runstate.ts): Pause turns the camera and tracking off and keeps the calibration;
 // Stop (held 1 s) turns everything off, and the next start asks what changed and redoes only that.
 // Three loops run independently: camera frames (tracked in a worker), the engine clock (120 Hz), drawing.
@@ -19,6 +20,7 @@ import { SoundGuide, toneFromHud } from "@/lib/audio";
 import { CHANGES, ago, autoPauseReason, explainStartError, onStart, pausedFor, planFor, readRun, writeRun, type Change, type RunRecord, type StartStage } from "@/lib/runstate";
 import type { Overlay } from "@/lib/hud";
 import { drawGuide } from "@/lib/hudguide";
+import { chipNumbers, displaySetting, drawSimple, readUiPrefs, uiColorHex, wordsFor, type UiColor, type UiKind } from "@/lib/hudsimple";
 import { BrowserNav } from "@/lib/tracker";
 import { AR } from "@/lib/aruco";
 import { DICTIONARY } from "@/lib/board";
@@ -111,12 +113,23 @@ export default function HudScreen() {
   const [camOpts, setCamOpts] = useState({ fps60: false, lock: false });
   const camOptsRef = useRef({ fps60: false, lock: false });
   const [camInfo, setCamInfo] = useState("");
+  // the display: classic (default) or simple, the simple one's video on / off and its colour (kept per device);
+  // the draw loop reads the refs
+  const [ui, setUiState] = useState<UiKind>("classic");
+  const uiRef = useRef<UiKind>("classic");
+  const [uiVideo, setUiVideoState] = useState(false);
+  const uiVideoRef = useRef(false);
+  const [uiColor, setUiColorState] = useState<UiColor>("green");
+  const uiColorRef = useRef<UiColor>("green");
+  // the simple display's buttons column: the readout is centred in what it leaves free
+  const columnRef = useRef<HTMLDivElement>(null);
   const tracker = useCallback(() => trackerRef.current, []);
+  const simple = ui === "simple";
 
-  const say = useCallback((t: string) => {
+  const say = useCallback((t: string, ms = 2500) => {
     setToast(t);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2500);
+    toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
   const setStatusBoth = (s: Status) => {
     statusRef.current = s;
@@ -137,6 +150,15 @@ export default function HudScreen() {
       setCamOpts(o);
     } catch {}
     try {
+      const p = readUiPrefs((k) => localStorage.getItem(k));
+      uiRef.current = p.ui;
+      uiVideoRef.current = p.video;
+      uiColorRef.current = p.color;
+      setUiState(p.ui);
+      setUiVideoState(p.video);
+      setUiColorState(p.color);
+    } catch {}
+    try {
       const v = Number(localStorage.getItem("st-cam-res"));
       if (v === 720 || v === 1080) {
         camResRef.current = v;
@@ -144,6 +166,43 @@ export default function HudScreen() {
       }
     } catch {}
   }, []);
+
+  /** What a job records about how it was made on this screen: the camera options and the display. */
+  const syncTracker = (tr: BrowserNav | null) => {
+    if (!tr) return;
+    tr.cameraOpts = { ...camOptsRef.current };
+    tr.display = displaySetting(uiRef.current, uiVideoRef.current);
+  };
+  const setUi = (v: UiKind) => {
+    uiRef.current = v;
+    setUiState(v);
+    syncTracker(trackerRef.current);
+    try {
+      localStorage.setItem("st-ui", v);
+    } catch {}
+  };
+  const setUiVideo = (v: boolean) => {
+    uiVideoRef.current = v;
+    setUiVideoState(v);
+    syncTracker(trackerRef.current);
+    try {
+      localStorage.setItem("st-ui-video", v ? "1" : "0");
+    } catch {}
+  };
+  const setUiColor = (v: UiColor) => {
+    uiColorRef.current = v;
+    setUiColorState(v);
+    try {
+      localStorage.setItem("st-ui-color", v);
+    } catch {}
+  };
+  /** Simple display: the classic banner's words for now, on a tap on the readout. */
+  const showWords = () => {
+    const tr = trackerRef.current, view = tr?.view();
+    if (!tr || !view) return;
+    const w = wordsFor(view.state, view.overlay, { tipPx: view.overlay.tipPx ?? null, markPx: view.overlay.mark ?? null, calibrated: tr.calibrated.tool });
+    say(w.sub ? `${w.title} · ${w.sub}` : w.title, 3000);
+  };
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -354,7 +413,7 @@ export default function HudScreen() {
         setCamInfo(await applyCameraLock(stream, camOptsRef.current.lock));
       }
       stage = "engine";
-      (await ensureTracker()).cameraOpts = { ...camOptsRef.current }; // a job's draft carries the camera options in use
+      syncTracker(await ensureTracker()); // a job's draft carries the camera options and the display in use
       setStartError(null);
       setStatusBoth("running");
     } catch (e) {
@@ -371,7 +430,7 @@ export default function HudScreen() {
     if (!tr) return;
     // a plan change mid-job: the holes drilled so far are kept as an unfinished job
     if (!simRef.current && tr.recorder?.holes.length) {
-      tr.cameraOpts = { ...camOptsRef.current };
+      syncTracker(tr);
       const rec = tr.finishJob();
       if (rec)
         void browserMemory()
@@ -413,7 +472,7 @@ export default function HudScreen() {
   }
   async function finishJob() {
     const tr = trackerRef.current;
-    if (tr) tr.cameraOpts = { ...camOptsRef.current };
+    syncTracker(tr ?? null);
     const rec = tr?.finishJob();
     if (!rec) return say("No hole drilled yet");
     await browserMemory().saveJob(rec);
@@ -609,8 +668,14 @@ export default function HudScreen() {
       const view = tr?.view();
       if (!tr || !source || !view) return;
       listen(view);
-      // the banner hides under a sheet (setup, menu, job): it would show through it
-      drawGuide(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, banner: sheetRef.current === null || sheetRef.current === "bench" });
+      // the banner (or the readout) hides under a sheet (setup, menu, job): it would show through it
+      const top = sheetRef.current === null || sheetRef.current === "bench";
+      if (uiRef.current === "simple") {
+        // the buttons column is HTML over the canvas: its width in canvas px
+        const col = columnRef.current, cw = canvas.clientWidth;
+        const rightInset = col && cw ? Math.max(0, (cw - col.getBoundingClientRect().left) * (w / cw)) : 0;
+        drawSimple(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, showVideo: uiVideoRef.current, color: uiColorHex(uiColorRef.current), readout: top, rightInset });
+      } else drawGuide(ctx, view.state, w, h, { video: source, overlay: view.overlay, toolCalibrated: tr.calibrated.tool, banner: top });
     };
     const listen = (view: { state: SimState; overlay: Overlay }) => {
       const sg = soundRef.current;
@@ -766,10 +831,21 @@ export default function HudScreen() {
         </TopSheet>
       )}
 
-      {/* under the banner: the Check card (while working, nothing else open), and the toast below it */}
+      {/* under the banner: the Check card (while working, nothing else open), and the toast below it. In simple: under
+          the shorter readout, between the depth bar (left) and the buttons column (right), and a chip for pass / fail */}
       {(toast || card) && (
-        <div className="pointer-events-none absolute inset-x-0 top-[max(8rem,calc(27vmin+0.5rem),calc(env(safe-area-inset-top)+7rem))] z-40 flex flex-col items-center gap-2 px-4">
-          {card && status === "running" && sheet === null && !draft && <CheckCard card={card} onOk={() => setCard(null)} onAnswer={answerCard} />}
+        <div
+          className={
+            simple
+              ? "pointer-events-none absolute left-[max(13vmin,env(safe-area-inset-left))] right-[calc(max(0.75rem,env(safe-area-inset-right))+4.75rem)] top-[max(5.5rem,calc(22vmin+0.5rem),calc(env(safe-area-inset-top)+5rem))] z-40 flex flex-col items-center gap-2"
+              : "pointer-events-none absolute inset-x-0 top-[max(8rem,calc(27vmin+0.5rem),calc(env(safe-area-inset-top)+7rem))] z-40 flex flex-col items-center gap-2 px-4"
+          }
+        >
+          {card &&
+            status === "running" &&
+            sheet === null &&
+            !draft &&
+            (simple && card.check.outcome.status !== "manual" ? <CheckChip card={card} color={uiColorHex(uiColor)} onOk={() => setCard(null)} /> : <CheckCard card={card} onOk={() => setCard(null)} onAnswer={answerCard} />)}
           {toast && <div className="rounded-2xl bg-black/75 px-5 py-2.5 text-lg font-medium text-white backdrop-blur-md">{toast}</div>}
         </div>
       )}
@@ -940,6 +1016,8 @@ export default function HudScreen() {
                 <BigButton onClick={() => void openBench()}>Tests</BigButton>
                 <BigButton onClick={() => void recordCamera()}>Record 10 s</BigButton>
                 <BigButton onClick={toggleSound}>Sound: {soundOn ? "on" : "off"}</BigButton>
+                <BigButton onClick={() => setUi(simple ? "classic" : "simple")}>Display: {ui}</BigButton>
+                {simple && <BigButton onClick={() => setUiColor(uiColor === "green" ? "amber" : "green")}>Colour: {uiColor}</BigButton>}
                 <BigButton onClick={fullscreen}>Full screen</BigButton>
                 <BigButton onClick={() => (window.location.href = "/memory")}>Plans & jobs</BigButton>
               </div>
@@ -947,8 +1025,8 @@ export default function HudScreen() {
             </TopSheet>
           )}
 
-          {/* the menu button, top right, when nothing else is open */}
-          {sheet === null && (
+          {/* the menu button, top right, when nothing else is open (classic) */}
+          {!simple && sheet === null && (
             <button
               onClick={() => setSheet("menu")}
               aria-label="Menu"
@@ -959,7 +1037,7 @@ export default function HudScreen() {
           )}
 
           {/* the trigger: Pause (big, in the thumb's reach, right side: the tip shows bottom left) and Stop (held) */}
-          {sheet === null && !draft && (
+          {!simple && sheet === null && !draft && (
             <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] z-30 flex items-end gap-2">
               <HoldButton onHold={() => setSheet("stop")} onTap={() => say("Hold to stop")} label="■" aria="Stop (hold)" />
               <button
@@ -971,8 +1049,34 @@ export default function HudScreen() {
               </button>
             </div>
           )}
+          {/* simple: five round buttons at the right edge, icons only: Pause, Stop (held), Video, Sound, More */}
+          {simple && sheet === null && !draft && (
+            <div ref={columnRef} className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-1/2 z-30 flex -translate-y-1/2 flex-col gap-3" style={{ color: uiColorHex(uiColor) }}>
+              <button onClick={() => pause()} aria-label="Pause" className={ROUND}>
+                <Glyph d="M9 5v14M15 5v14" />
+              </button>
+              <HoldButton onHold={() => setSheet("stop")} onTap={() => navigator.vibrate?.(30)} label={<Glyph d="M6.5 6.5h11v11h-11z" />} aria="Stop (hold)" className={ROUND} />
+              <button onClick={() => setUiVideo(!uiVideo)} aria-label={uiVideo ? "Hide the video" : "Show the video"} aria-pressed={uiVideo} className={ROUND}>
+                <Glyph d={uiVideo ? EYE : `${EYE}M4 20L20 4`} />
+              </button>
+              <button onClick={toggleSound} aria-label={soundOn ? "Sound off" : "Sound on"} aria-pressed={soundOn} className={ROUND}>
+                <Glyph d={soundOn ? `${SPEAKER}M15.5 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11` : `${SPEAKER}M16 9.5l5 5M21 9.5l-5 5`} />
+              </button>
+              <button onClick={() => setSheet("menu")} aria-label="More" className={ROUND}>
+                <Glyph d="M5.5 12h.01M12 12h.01M18.5 12h.01" width={4} />
+              </button>
+            </div>
+          )}
+          {/* simple: a tap on the readout says it in words (the classic banner's), for 3 s */}
+          {simple && sheet === null && !draft && (
+            <button
+              onClick={showWords}
+              aria-label="Say it in words"
+              className="absolute left-0 top-0 z-20 h-[max(22vmin,calc(env(safe-area-inset-top)+4rem))] right-[calc(max(0.75rem,env(safe-area-inset-right))+4.75rem)] bg-transparent"
+            />
+          )}
           {recNote && (
-            <div className="pointer-events-none absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+6rem)] right-3 z-30 rounded-full bg-[#ff6b6b] px-4 py-1.5 text-lg font-semibold text-black">{recNote}</div>
+            <div className={`pointer-events-none absolute z-30 rounded-full bg-[#ff6b6b] px-4 py-1.5 text-lg font-semibold text-black ${simple ? "bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2" : "bottom-[calc(max(1rem,env(safe-area-inset-bottom))+6rem)] right-3"}`}>{recNote}</div>
           )}
         </>
       )}
@@ -1105,8 +1209,9 @@ function BigButton({ children, onClick, strong }: { children: React.ReactNode; o
   );
 }
 
-/** Acts only when held (1 s), like a guarded switch: a tap just says so. The ring fills while held. */
-function HoldButton({ onHold, onTap, label, aria }: { onHold: () => void; onTap: () => void; label: string; aria: string }) {
+/** Acts only when held (1 s), like a guarded switch: a tap just says so. The ring fills while held, in red (it is the
+ * stop) whatever the look. */
+function HoldButton({ onHold, onTap, label, aria, className = HOLD_CLASSIC }: { onHold: () => void; onTap: () => void; label: React.ReactNode; aria: string; className?: string }) {
   const [held, setHeld] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fired = useRef(false);
@@ -1132,10 +1237,59 @@ function HoldButton({ onHold, onTap, label, aria }: { onHold: () => void; onTap:
       onPointerLeave={() => (timer.current && clearTimeout(timer.current), setHeld(false))}
       onPointerCancel={() => (timer.current && clearTimeout(timer.current), setHeld(false))}
       onContextMenu={(e) => e.preventDefault()}
-      className="relative flex h-16 w-16 select-none items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-black/60 text-2xl text-white/85 backdrop-blur-md"
+      className={`relative select-none overflow-hidden ${className}`}
     >
       <span className="absolute inset-x-0 bottom-0 bg-[#ff6b6b]/70" style={{ height: held ? "100%" : "0%", transition: held ? "height 1s linear" : "none" }} />
       <span className="relative">{label}</span>
     </button>
+  );
+}
+const HOLD_CLASSIC = "flex h-16 w-16 items-center justify-center rounded-2xl border border-white/30 bg-black/60 text-2xl text-white/85 backdrop-blur-md";
+
+/** The simple display's round button: the colour comes from the column (currentColor). */
+const ROUND = "flex h-16 w-16 items-center justify-center rounded-full border-2 border-current bg-black/60 backdrop-blur-md active:scale-95";
+const EYE = "M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12zM12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z";
+const SPEAKER = "M4 9.5h3.5L12 5.5v13l-4.5-4H4z";
+
+/** An icon of the simple display: one stroked path in the current colour. */
+function Glyph({ d, width = 2.5 }: { d: string; width?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={30} height={30} fill="none" stroke="currentColor" strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={d} />
+    </svg>
+  );
+}
+
+/** A finished hole's Check in the simple display: the hole, ✓ or ✗, and the numbers. Pass: an outline (goes by
+ * itself); fail: filled, until tapped. */
+function CheckChip({ card, color, onOk }: { card: CheckCardData; color: string; onOk: () => void }) {
+  const { status, detail } = card.check.outcome;
+  const fail = status === "fail";
+  const name = card.check.hole ?? card.check.id;
+  // the numbers only; words (not drilled, the person said no) when there are none
+  const nums = chipNumbers(detail);
+  const body = (
+    <>
+      <span className="text-2xl font-semibold">{name}</span>
+      <span className="text-4xl font-bold leading-none">{fail ? "✗" : "✓"}</span>
+      {/* one number per line: the chip sits in a narrow slot between the depth bar and the buttons */}
+      <span className="flex min-w-0 flex-col font-mono text-lg leading-tight tabular-nums">
+        {nums.split(" · ").map((n, i) => (
+          <span key={i} className={nums !== detail ? "whitespace-nowrap" : "break-words"}>
+            {n}
+          </span>
+        ))}
+      </span>
+    </>
+  );
+  const cls = "pointer-events-auto flex max-w-full items-center gap-3 rounded-full border-2 px-5 py-2 text-left";
+  return fail ? (
+    <button onClick={onOk} aria-label={`${name} failed: ${detail}. Tap to close`} className={cls} style={{ background: color, borderColor: color, color: "#000" }}>
+      {body}
+    </button>
+  ) : (
+    <div role="status" aria-label={`${name} passed: ${detail}`} className={`${cls} bg-black/70 backdrop-blur-md`} style={{ borderColor: color, color }}>
+      {body}
+    </div>
   );
 }

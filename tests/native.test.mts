@@ -137,6 +137,16 @@ test("the tracking settings are in the manifest, and blame finds the setting tha
   assert.ok(!b.some((x) => /plan\.(hash|id)/.test(x.setting)));
 });
 
+test("the display is a tracking setting: it reaches the manifest and blame compares classic with simple", () => {
+  const classic = { ...TRACK, display: "classic" as const }, simple = { ...TRACK, display: "simple" as const };
+  const rows = [job(20, bad, classic, 1), job(20, bad, classic, 2), job(21, good, simple, 1), job(21, good, simple, 2)].map((j) => summarize(jobLedger(j) as unknown as Bundle));
+  assert.equal(rows[0].settings["tracking.display"], '"classic"');
+  assert.equal(rows[2].settings["tracking.display"], '"simple"');
+  const b = blame(rows, "depth.error_mm");
+  assert.equal(b[0].setting, "tracking.display");
+  assert.deepEqual(b[0].groups.map((g) => [g.value, g.jobs]), [['"simple"', 2], ['"classic"', 2]]);
+});
+
 test("bisect finds the first bad job in time order and what changed from the last good one", () => {
   const tip = { ...TRACK, filter: "tip" as const };
   const big = { ...tip, detectPx: 960 };
