@@ -25,15 +25,16 @@ your hands.
 | [`/benchmarks`](https://smarttools-nav.vercel.app/benchmarks) | Motor off vs motor on: raw and filtered poses from the bench lab (`/hud` → Bench), the tip checked on A2, and the build log. Simulated runs are labelled; the field-test protocol is [docs/FIELD-TEST.md](docs/FIELD-TEST.md) |
 | [`/memory`](https://smarttools-nav.vercel.app/memory) | What this phone keeps: plans (made with the tool as a pointer, or imported) and jobs, with the report, the agentvcs ledger and an athos recipe to download; recipes imported through the gate (who wrote it, reviewed); each job's recipe Checks, step by step; jobs compared by tracking setting. Works offline |
 | [`/engine`](https://smarttools-nav.vercel.app/engine) | The engine lab: one engine drawn in 3D, as a 2D plan and as the HUD |
-| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone app, only what is needed to work: **Start** (the rear camera), then a GPS-style guide over the camera, or the **simple** display (one number, a depth bar and five round buttons, one colour on black, video optional; menu → Display). The guided **Setup** (lens, tip, check) opens by itself; one menu for Setup, Job, Tests, Record and Sound. **Pause** turns the camera off and keeps the calibration; **Stop** (held) turns everything off, and the next start asks what changed and redoes only that. A plan from a recipe shows each hole's Check live (pass, fail, or Yes / No) and asks for the steps that are not holes. (`/hud?sim=1` replaces the camera with the scene simulator, for development; `&recipe=1` adds a recipe) |
-| [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheet v2: 28 ArUco markers of 24 mm and 3 targets (A1–A3) |
+| [`/hud`](https://smarttools-nav.vercel.app/hud) | The phone app, only what is needed to work: **Start** (the rear camera), then a GPS-style guide over the camera, or the **simple** display, the default (one text at the top, a depth bar and five round buttons, in the 3D simulation's colours, video optional; menu → Display). With no saved plan active, simple runs **the pilot job**: three phase buttons on the left (the table of up to four sheets, mapped by looking at each until its outline turns green, and held 1 s to map again; the block on the sheets, registered on its four corners; the four screws), and the recipe guides by lighting the control or the drawn guide to use next, not by text. The guided **Setup** (lens, tip, check) opens by itself; one menu for Setup, Job, Tests, Record and Sound. **Pause** turns the camera off and keeps the calibration; **Stop** (held) turns everything off, and the next start asks what changed and redoes only that. A plan from a recipe shows each hole's Check live (pass, fail, or Yes / No) and asks for the steps that are not holes. (`/hud?sim=1` replaces the camera with the scene simulator, for development; `&recipe=1` adds a recipe; `&pilot=1` runs the pilot job in the simple display) |
+| [`/markers`](https://smarttools-nav.vercel.app/markers) | Printable A4 sheets v2: sheet 1 has 28 ArUco markers of 24 mm and 3 targets (A1–A3); sheets 2–4 (`?sheet=2`, or all four at once) have their own 28 markers each and their number in the margin, to cover a larger work area. Sheet 1 is the reference; the phone maps the others by looking at them |
 
 ## How the demo works
 
 The website includes a browser prototype of the optical tracking, built to illustrate the idea in the demo. It is
 not the SmartTools application, which will be published separately.
 
-1. **Markers.** Print `/markers` at 100 % and tape it where you'll drill. A grid of 28 ArUco markers (ARUCO_MIP_36h12,
+1. **Markers.** Print `/markers` at 100 % and tape it where you'll drill (for a larger area, sheets 2–4 too, taped flat
+   beside it: the phone maps where they lie). A grid of 28 ArUco markers (ARUCO_MIP_36h12,
    24 mm) with three targets in the gaps: the docked camera only sees a ~22 × 12 cm strip above the bit tip, so the grid
    keeps 5–12 markers in view on every target.
 2. **Pose.** The rear camera detects the markers ([js-aruco2](https://github.com/damianofalcioni/js-aruco2)). Corners
@@ -242,8 +243,8 @@ the engine keeps 120 Hz.
 ### Tests
 
 ```bash
-npm run engine:test   # Rust: 68 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 146 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped, job drafts, the service worker, recipe authorship, live Checks, the simple display); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run engine:test   # Rust: 69 tests + TypeScript/Rust parity
+npm run test:unit     # TypeScript: 225 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped, job drafts, the service worker, recipe authorship, live Checks, the simple display, the pilot job, the table of sheets, the simulator clock); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
 npm run gate          # the verdict for this branch against main: FAST_TRACK, ESCALATE (run the engine tests and e2e too) or REJECTED
 npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```

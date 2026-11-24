@@ -11,6 +11,7 @@
     "engine:test": "cd engine && cargo test && cd .. && node --no-warnings scripts/engine-parity.mts",
     "test:unit": "node --no-warnings --test tests/*.test.mts",
     "test:e2e": "node --no-warnings scripts/e2e.mts",
+    "test:pilot": "node --no-warnings scripts/pilot-sim.mts",
     "test": "npm run engine:test && npm run test:unit && npm run test:e2e -- --quick",
     "gate": "node --no-warnings scripts/gate.mts"
   },

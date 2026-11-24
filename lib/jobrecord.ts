@@ -10,7 +10,7 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.15";
+export const APP_VERSION = "0.0.16";
 
 /** What runs, for the screen: "SmartTools 0.0.13 · build abc1234 · engine ABI 6". An empty build reads "dev". */
 export function versionLine(build: string | undefined, abi: number = ENGINE_ABI, app: string = APP_VERSION): string {

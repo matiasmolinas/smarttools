@@ -21,3 +21,30 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+
+/* /hud, the simple display: the top text's cross-fade and the pulsing ring on the control to press next */
+@keyframes st-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes st-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes st-glow {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.07); }
+}
+.st-fade-in { animation: st-fade-in 200ms ease-out both; }
+.st-fade-out { animation: st-fade-out 200ms ease-in both; pointer-events: none; }
+.st-glow { animation: st-glow 1.25s ease-in-out infinite; }
+/* the pilot's top text under the focus glow: nothing drawn around it, the text itself glows in its own colour */
+@keyframes st-text-glow {
+  0%, 100% { filter: drop-shadow(0 0 0 transparent); opacity: 0.85; }
+  50% { filter: drop-shadow(0 0 10px currentColor); opacity: 1; }
+}
+.st-text-glow > * { animation: st-text-glow 1.25s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .st-glow { animation: none; opacity: 1; }
+  .st-text-glow > * { animation: none; opacity: 1; }
+}

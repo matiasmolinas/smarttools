@@ -1,12 +1,13 @@
 // Main-thread side of the tracker worker: sends frames (one in flight at a time; newer frames are
 // dropped while the worker is busy) and receives tracker results with their capture times.
 
-import type { Camera, ToolCalib } from "./engine";
+import type { Camera, SheetSpec, SolidSpec, ToolCalib } from "./engine";
 import type { CaptureKind, CaptureResult, TrackerFrame } from "./markertracker";
 import type { Rig } from "./scene";
 import type { Xf } from "./xform";
 import type { ToWorker } from "./workers/tracker.worker";
 import type { DetectorKind } from "./detectors";
+import type { TableMap } from "./tablemap";
 
 export interface WorkerResult {
   frame: TrackerFrame;
@@ -225,20 +226,25 @@ export class TrackerClient {
     this.send({ type: "setMaxSide", maxSide });
   }
 
-  /** A simulated frame: the worker renders the camera view for the tool pose and tracks it. */
-  sim(rig: Rig, codes: Uint8Array, toolW: Xf, tCapture: number, seed: number): boolean {
+  /** A simulated frame: the worker renders the camera view for the tool pose and tracks it (with parts in the scene,
+   * and a table of several sheets instead of sheet 0 alone). */
+  sim(rig: Rig, codes: Uint8Array, toolW: Xf, tCapture: number, seed: number, solids?: SolidSpec[], sheets?: SheetSpec[]): boolean {
     if (this.busy) {
       this.dropped++;
       return false;
     }
     this.busy = true;
-    this.send({ type: "sim", rig, codes, toolW, tCapture, seed });
+    this.send({ type: "sim", rig, codes, toolW, tCapture, seed, solids, sheets });
     this.sent++;
     return true;
   }
 
   setCamera(camera: Camera, calibrated: boolean) {
     this.send({ type: "setCamera", camera, calibrated });
+  }
+  /** The table map the worker's tracker solves with (lib/tablemap.ts); results carry each frame's sheets. */
+  setTableMap(map: TableMap) {
+    this.send({ type: "setTableMap", map });
   }
   beginCapture(kind: CaptureKind) {
     this.capturing = kind;

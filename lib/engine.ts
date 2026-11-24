@@ -63,7 +63,8 @@ export const GATE_DEFAULTS: GateLimits = {
   maxAngleDeg: 0.5,
   maxOffsetMm: 1.0,
   maxRmsPx: 1.5,
-  minMarkers: 2,
+  // 2 let the gate say "ready" with 1-3 markers in view (the headless pilot run): 4 is the floor
+  minMarkers: 4,
   maxPoseAgeS: 0.15,
   maxJitterMm: 0.4,
   maxJitterDeg: 0.25,
@@ -107,6 +108,17 @@ export interface RenderOptions {
   solids?: SolidSpec[];
   /** marker stickers (or printed markers) on parts, in the plane z = 0 of their frame */
   stickers?: StickerSpec[];
+  /** a table of marker sheets on the bench (lib/board.ts SHEETS): each sheet's placement in the world plane (m, rad)
+   * and its number k (marker ids 28 k + 0..27; `codes` must hold them). Absent or empty: sheet 0 alone at the
+   * origin (ABI 7) */
+  sheets?: SheetSpec[];
+}
+
+export interface SheetSpec {
+  x: number;
+  y: number;
+  yaw: number;
+  k: number;
 }
 
 export interface SolidSpec {
@@ -123,13 +135,18 @@ export interface StickerSpec {
   markers: { x: number; y: number; size: number; code: number }[];
 }
 
-function encodeScene(solids: SolidSpec[] = [], stickers: StickerSpec[] = []): number[] {
+function encodeScene(solids: SolidSpec[] = [], stickers: StickerSpec[] = [], sheets: SheetSpec[] = []): number[] {
   const v: number[] = [solids.length];
   for (const s of solids) v.push(...s.pose.p, ...s.pose.q, s.shade, s.planes.length, ...s.planes.flat());
   v.push(stickers.length);
   for (const t of stickers) {
     v.push(...t.pose.p, ...t.pose.q, t.half[0], t.half[1], t.markers.length);
     for (const m of t.markers) v.push(m.x, m.y, m.size, m.code);
+  }
+  // the table, only when asked for: the buffer without it is the one a single sheet always had
+  if (sheets.length) {
+    v.push(sheets.length);
+    for (const s of sheets) v.push(s.x, s.y, s.yaw, s.k);
   }
   return v;
 }
@@ -202,7 +219,7 @@ interface Exports {
   st_solve_pose_robust(world: number, img: number, n: number, f: number, cx: number, cy: number, minPx: number, out: number, keep: number): number;
 }
 
-export const ENGINE_ABI = 6;
+export const ENGINE_ABI = 7;
 
 // ---------------- engine (scene graph + clock) ----------------
 
@@ -253,7 +270,7 @@ export const ENGINE_DEFAULTS: EngineConfig = {
   engageGapMm: 3,
   engageOffsetMm: 6,
   requirementAngleDeg: 0.5,
-  limits: { maxAngleDeg: 0.4, maxOffsetMm: 0.75, maxRmsPx: 1.5, minMarkers: 2, maxPoseAgeS: 0.25, maxJitterMm: 0.4, maxJitterDeg: 0.25 },
+  limits: { maxAngleDeg: 0.4, maxOffsetMm: 0.75, maxRmsPx: 1.5, minMarkers: 4, maxPoseAgeS: 0.25, maxJitterMm: 0.4, maxJitterDeg: 0.25 },
   posMinCutoff: 2,
   posBeta: 3000,
   rotMinCutoff: 2,
@@ -671,7 +688,10 @@ export class NavCore {
   /** Render a simulated camera frame (RGBA). Several poses = motion blur over the exposure. */
   render(cam: Camera, poses: Pose[], o: RenderOptions): Uint8ClampedArray {
     const bytes = o.width * o.height * 4;
-    const scene = encodeScene(o.solids, o.stickers);
+    const scene = encodeScene(o.solids, o.stickers, o.sheets);
+    // 36 bits per id, 28 ids per sheet (lib/board.ts MARKERS_PER_SHEET)
+    const needCodes = 36 * 28 * Math.max(1, ...(o.sheets ?? []).map((s) => s.k + 1));
+    if (o.sheets?.length && o.codes.length < needCodes) throw new Error(`render: ${o.codes.length / 36} marker codes, the sheets need ${needCodes / 36}`);
     return this.with([56, poses.length * 104, o.codes.length, 512, scene.length * 8, bytes], ([c, ps, cd, cfg, sc, out]) => {
       this.f64(sc, scene.length).set(scene);
       this.putCam(c, cam);
