@@ -5,7 +5,7 @@
 // Run: node --no-warnings scripts/e2e.mts [--quick] [--only name,name] [--tilt 12]
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { NavCore, cameraFromHfov, type Camera, type EngineSnapshot, type RenderOptions, type ToolCalib } from "../lib/engine.ts";
+import { NavCore, cameraFromHfov, gateReasonNames, type Camera, type EngineSnapshot, type RenderOptions, type ToolCalib } from "../lib/engine.ts";
 import type { TrackerFrame } from "../lib/markertracker.ts";
 import { StickerLearner, stickerSpecs, type MarkerBody } from "../lib/anchors.ts";
 import { CALM, DEFAULT_DISTURBANCE, DEFAULT_RIG, IDEAL_RIG, RUN_TIME, V02_RIG, disturb, dockRigAt, markerCodes, navInTarget, renderTool, tiltedRig, toolWorldFromHold, truthAt, type Disturbance, type Hold, type Rig } from "../lib/scene.ts";
@@ -746,6 +746,46 @@ await scenario("nogo", "No-go zones on real camera frames: a pipe behind A2 bloc
   drive({ session: s, from: 3, to: 6, latency: 0.04, toolAt: on(2), onTick: (x) => (readyA3 += x.ready ? 1 : 0) });
   check("A2 (pipe 8 mm behind it) never ready: no-go zone", readyA2 === 0 && (gateA2 & 256) === 256, `${readyA2} ready ticks, gate ${gateA2}`);
   check("A3 (clear of the pipe) is ready", readyA3 > 0, `${readyA3} ready ticks`);
+  s.dispose();
+});
+
+await scenario("motor", "A running motor on the mark: the drill held square on A2 with the motor's shake (scripts/bench-sim.mts), 30 fps, 5 s", () => {
+  const s = newSession({ camera, cameraCalibrated: calibrated.camera, tool, toolCalibrated: calibrated.tool });
+  // the bench reference's free-spinning motor: 0.15 mm / 0.12° at 35 Hz, with the blur of a 1/60 s exposure
+  const MOTOR: Disturbance = { ...CALM, vibrationMm: 0.15, vibrationDeg: 0.12, blurSamples: 3, exposureS: 1 / 60, noise: 3 };
+  const onA2: Hold = { tipWorld: [BOARD_TARGETS[1].x, BOARD_TARGETS[1].y, 0], yawDeg: 0, pitchDeg: 0, twistDeg: 0 };
+  const FPS = 30;
+  let frames = 0, tracked = 0, ticks = 0, open = 0, angleAlarm = 0;
+  const shut = new Map<string, number>();
+  drive({
+    session: s,
+    from: 0,
+    to: 5,
+    cameraFps: FPS,
+    latency: 0.04,
+    disturbance: MOTOR,
+    toolAt: (t) => {
+      const blur: Xf[] = [];
+      for (let i = 0; i < MOTOR.blurSamples; i++) blur.push(toolWorldFromHold(core, rig, disturb(onA2, t + (i / (MOTOR.blurSamples - 1) - 0.5) * MOTOR.exposureS, "drill", MOTOR)));
+      return { toolW: toolWorldFromHold(core, rig, disturb(onA2, t, "drill", MOTOR)), blur };
+    },
+    onFrame: (f) => {
+      frames++;
+      if (f.pose) tracked++;
+    },
+    onTick: (x) => {
+      if (x.alarms & 2 || x.events.some((e) => e.kind === "angle-alarm")) angleAlarm++;
+      if (x.t <= 1) return;
+      ticks++;
+      if (x.gate === 0) open++;
+      else for (const r of gateReasonNames(x.gate)) shut.set(r, (shut.get(r) ?? 0) + 1);
+    },
+  });
+  const share = ticks ? open / ticks : 0;
+  const why = [...shut].map(([r, n]) => `${r} ${n}`).join(", ");
+  check("tracked every frame", frames > 0 && tracked === frames, `${tracked}/${frames} frames`);
+  check("after 1 s the gate stays open at least 95% of the ticks", share >= 0.95, `open ${open}/${ticks} ticks (${(share * 100).toFixed(1)}%)${why ? `; closed by ${why}` : ""}`);
+  check("the angle alarm never fires", angleAlarm === 0, `${angleAlarm} ticks with the angle alarm`);
   s.dispose();
 });
 

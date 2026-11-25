@@ -141,6 +141,41 @@ test("a job on the engine: every hole recorded with the depth and angle it measu
   assert.match(job.report.verdict, /all 3 within spec/);
 });
 
+test("a job on the engine: every hole keeps how far the tip was from its mark when drilling started", () => {
+  const job = recordDrillThree();
+  for (const h of job.holes) {
+    assert.equal(typeof h.offsetMm, "number", `${h.name} has no position error`);
+    assert.ok(h.offsetMm! >= 0 && h.offsetMm! < 0.75, `${h.name} ${h.offsetMm} mm`);
+    assert.equal(h.offsetMm, Math.round(h.offsetMm! * 100) / 100, "rounded to 0.01 mm");
+  }
+  const steps = jobLedger(job).ledger.filter((e) => e.kind === "step") as { body: { metrics: Record<string, number> } }[];
+  assert.deepEqual(steps.map((e) => e.body.metrics["position.error_mm"]), job.holes.map((h) => h.offsetMm));
+});
+
+test("the recorder: the position error is scoreScrew's start offset, else the first drill sample, else left out", () => {
+  const plan: Plan = { ...SHEET_PLAN, holes: SHEET_PLAN.holes.slice(0, 2) };
+  const [a, b] = plan.holes;
+  const ids: Record<number, string> = { 1: a.label, 2: b.label };
+  const rec = new JobRecorder(plan, defaultContext(), (id) => ids[id], { wall: (t) => T0 + t * 1000, t0: 0 });
+  const snapOf = (t: number, id: number, phase: string, offsetMm: number, depthMm: number, events: { kind: string; node: number; value: number }[] = []) =>
+    ({ t, phase, active: 0, alarms: 0, targets: [{ id, angleErrDeg: 0.1, offsetMm, depthMm }], events }) as unknown as EngineSnapshot;
+  // A: aligned at 0.6 mm, the bit enters at 0.42 mm; scoreScrew starts counting past 0.5 mm deep: its 0.3 mm is kept
+  rec.feed(snapOf(0, 1, "align", 0.6, 0));
+  rec.feed(snapOf(0.1, 1, "drill", 0.423, 0.2));
+  rec.feed(snapOf(0.2, 1, "drill", 0.3, 1));
+  rec.feed(snapOf(0.3, 1, "hold", 0.3, a.depthMm, [{ kind: "drilled", node: 1, value: 0 }]));
+  // B: drilled with no drill sample at all (the engine said so between two snapshots)
+  rec.feed(snapOf(0.4, 2, "align", 0.2, 0, [{ kind: "drilled", node: 2, value: 0 }]));
+  const [ha, hb] = rec.holes;
+  assert.equal(ha.offsetMm, 0.3, "scoreScrew's start offset (first sample past 0.5 mm deep)");
+  assert.equal("offsetMm" in hb, false);
+  // without a sample past 0.5 mm, scoreScrew has nothing: the first drill sample, rounded
+  const rec2 = new JobRecorder(plan, defaultContext(), (id) => ids[id], { wall: (t) => T0 + t * 1000, t0: 0 });
+  rec2.feed(snapOf(0, 1, "drill", 0.423, 0.2));
+  rec2.feed(snapOf(0.1, 1, "drill", 0.5, 0.4, [{ kind: "drilled", node: 1, value: 0 }]));
+  assert.equal(rec2.holes[0].offsetMm, 0.42);
+});
+
 test("a job stopped early is recorded as aborted, with the holes it has", () => {
   const sc = SCENARIOS.find((s) => s.id === "drill-three")!;
   const r = new ScenarioRun(core, sc);

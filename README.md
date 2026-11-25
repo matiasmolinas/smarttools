@@ -207,6 +207,7 @@ npm run dev                                   # website at http://localhost:3000
 node --no-warnings scripts/pose-selftest.mts  # synthetic test of the tracking prototype
 npm run engine:test                           # Rust core: cargo test + parity with TypeScript
 node --no-warnings scripts/replay.mts f.strec # replay a camera recording from the phone with both detectors
+npm run bench:add -- run.json                 # publish a bench run from the phone on /benchmarks (then deploy)
 npm test                                      # Rust + parity + TypeScript unit + quick E2E
 ```
 
@@ -244,9 +245,10 @@ the engine keeps 120 Hz.
 
 ```bash
 npm run engine:test   # Rust: 69 tests + TypeScript/Rust parity
-npm run test:unit     # TypeScript: 225 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped, job drafts, the service worker, recipe authorship, live Checks, the simple display, the pilot job, the table of sheets, the simulator clock); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run test:unit     # TypeScript: 242 tests (transforms, engine wrapper, scene definitions, dock geometry, phones, assembly, anchors, guidance, sound, coach and report, session, renderers, gallery, plans, jobs, memory, agentvcs ledger, bench lab, Rust marker detector, recordings, athos recipes, agentvcs verify / blame / bisect, gates, working / paused / stopped, job drafts, the service worker, recipe authorship, live Checks, the simple display, the pilot job, the table of sheets, the simulator clock, the whole chain from recipe to verified ledger, the mount's tilt, published bench runs); set AGENTVCS_BIN to the agentvcs CLI to also run `agentvcs verify`
+npm run bench:add     # publish a measured bench run (checked, listed first on /benchmarks)
 npm run gate          # the verdict for this branch against main: FAST_TRACK, ESCALATE (run the engine tests and e2e too) or REJECTED
-npm run test:e2e      # 15 end-to-end scenarios, 53 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
+npm run test:e2e      # 16 end-to-end scenarios, 56 checks on the dock v0.4 (add -- --tilt 10, -- --rig ideal|v02, -- --quick, -- --only drill)
 ```
 
 The end-to-end scenarios render camera frames with the simulator (lens distortion, the bit in view, hand tremor,

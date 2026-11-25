@@ -9,6 +9,25 @@ The three "Platform" demos in the gallery are still illustrations: they run the 
 card, the gatekeeper verdict and the agentvcs record are drawn by the demo (`lib/gallery/scenarios.ts`,
 `lib/sim.ts`). The modules below are real and tested.
 
+## Update (2026-11-25): each hole's position, and what produced the numbers
+
+A job from a real drill now says where each hole started and what made its numbers.
+
+- **Position error per hole.** Each hole keeps how far the tip was from its mark, sideways, when drilling started
+  (`offsetMm`, from the coach's score, else the first drill sample). The ledger's step carries it as
+  `position.error_mm`; a hole without it writes the step it always wrote, so old ledgers hash the same. A recipe's
+  Check can name it (`position within 0.5 mm`). The Job sheet, `/memory` and the report show it.
+- **The harness fingerprint.** The manifest's `app` dimension gains the commit the app was built from (`build`)
+  and the `engine` dimension the BLAKE3 of the WebAssembly bytes that ran (`hash`). A job without them keeps its
+  manifest id. `blame` names the engine binary when only its hash differs. The Job sheet and `/memory` show
+  `harness` and the first 12 characters of the manifest id.
+- **One test through the chain.** The pilot recipe, through the gate, worked by the recorder, its Checks answered,
+  the ledger written and verified; a badly driven screw fails its Check and is still recorded.
+
+`lib/report.ts`, `lib/jobrecord.ts`, `lib/ledger.ts` (`harnessId`, `harnessLabel`), `lib/engine.ts` (`wasmHash`),
+`lib/recipe.ts`, `lib/tracker.ts`. Tests: `tests/chain.test.mts`, `tests/native.test.mts`, `tests/engine.test.mts`,
+`tests/coach-report.test.mts`.
+
 ## Update (2026-11-24): a table of up to four sheets
 
 The marker tracker no longer sees only one sheet. Up to four sheets (`lib/board.ts` `SHEETS`; sheet k has ids

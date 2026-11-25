@@ -12,7 +12,7 @@ import { DEFAULT_RIG, disturb, markerCodes, renderTool, toolWorldFromHold, CALM,
 import { NavSession } from "../lib/session.ts";
 import { toolLocal } from "../lib/scenedef.ts";
 import { compose, fromPose, inverse, type Xf } from "../lib/xform.ts";
-import { BenchRecorder, filteredPose, toolPose, type PhaseId, A2_MM } from "../lib/bench.ts";
+import { BenchRecorder, filteredPose, phaseLine, toolPose, type PhaseId, A2_MM } from "../lib/bench.ts";
 
 const require = createRequire(import.meta.url);
 const { AR } = require("js-aruco2");
@@ -87,11 +87,5 @@ session.dispose();
 
 mkdirSync("public/benchmarks", { recursive: true });
 writeFileSync(`public/benchmarks/${run.id}.json`, JSON.stringify(run));
-for (const s of run.summary) {
-  const r = s.raw, f = s.filtered;
-  console.log(
-    `${s.phase.padEnd(10)} tracked ${(s.tracked * 100).toFixed(0)}% · angle jitter raw ${r?.angleJitterDeg.toFixed(3)}° filtered ${f?.angleJitterDeg.toFixed(3)}° · tip raw ${r?.tipJitterMm.toFixed(3)} filtered ${f?.tipJitterMm.toFixed(3)} mm` +
-      (s.a2 ? ` · tip to A2 ${s.a2.distanceMm} mm` : ""),
-  );
-}
+for (const s of run.summary) console.log(phaseLine(s));
 console.log(`wrote public/benchmarks/${run.id}.json`);

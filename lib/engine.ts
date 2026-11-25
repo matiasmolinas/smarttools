@@ -5,6 +5,7 @@
 
 import type { Intrinsics, M3, Pose, V3 } from "./pose.ts";
 import { fromArray, toArray, type Xf } from "./xform.ts";
+import { hashBytes } from "./ledger.ts";
 
 type P = { x: number; y: number };
 
@@ -354,20 +355,29 @@ export const ENGINE_URL = "/engine/nav_core.wasm";
 
 export class NavCore {
   private x: Exports;
-  private constructor(x: Exports) {
+  /** BLAKE3 of the WebAssembly bytes this core runs ("b3:<hex>", as lib/ledger.ts hashBytes): a job's manifest
+   * names the exact engine binary with it */
+  readonly wasmHash: string | null;
+  private constructor(x: Exports, wasmHash: string | null) {
     this.x = x;
+    this.wasmHash = wasmHash;
   }
 
-  /** Load from a URL (browser) or from the .wasm bytes (Node, tests). */
+  /** Load from a URL (browser) or from the .wasm bytes (Node, tests). From a URL the bytes are fetched first (the
+   * service worker may serve them from its cache) and instantiated from there, so the hash is of what runs. */
   static async load(source: string | BufferSource = ENGINE_URL): Promise<NavCore> {
-    const { instance } =
-      typeof source === "string"
-        ? await WebAssembly.instantiateStreaming(fetch(source), {})
-        : await WebAssembly.instantiate(source, {});
+    let bytes: BufferSource;
+    if (typeof source === "string") {
+      const res = await fetch(source);
+      if (!res.ok) throw new Error(`nav_core: ${res.status} for ${source}`);
+      bytes = await res.arrayBuffer();
+    } else bytes = source;
+    const { instance } = await WebAssembly.instantiate(bytes, {});
     const x = instance.exports as unknown as Exports;
     const abi = x.st_abi_version();
     if (abi !== ENGINE_ABI) throw new Error(`nav_core ABI ${abi}, expected ${ENGINE_ABI}`);
-    return new NavCore(x);
+    const view = ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
+    return new NavCore(x, hashBytes(view));
   }
 
   // ---- linear-memory helpers: allocate, run, always free ----

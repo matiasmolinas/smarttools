@@ -13,7 +13,8 @@
     "test:e2e": "node --no-warnings scripts/e2e.mts",
     "test:pilot": "node --no-warnings scripts/pilot-sim.mts",
     "test": "npm run engine:test && npm run test:unit && npm run test:e2e -- --quick",
-    "gate": "node --no-warnings scripts/gate.mts"
+    "gate": "node --no-warnings scripts/gate.mts",
+    "bench:add": "node --no-warnings scripts/bench-add.mts"
   },
   "dependencies": {
     "@noble/hashes": "2.0.1",

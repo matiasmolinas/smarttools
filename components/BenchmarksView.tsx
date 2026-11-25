@@ -30,8 +30,8 @@ export default function BenchmarksView() {
       try {
         for (const r of await browserMemory().benchRuns()) out.push({ id: r.id, title: r.value.title, source: r.value.source, where: "device", load: async () => r.value });
       } catch {}
-      // measured runs first
-      out.sort((a, b) => (a.source === b.source ? 0 : a.source === "camera" ? -1 : 1));
+      // the published runs in the index's order (camera runs first, newest first, then simulations), then this
+      // device's: not re-sorted, so the run shown first is the first in the list
       setList(out);
       if (out[0]) setRun(await out[0].load());
     })();
@@ -57,8 +57,11 @@ export default function BenchmarksView() {
     }
   };
 
+  // none published (and none from this device or a file either, or "the runs below are simulations" would be false)
+  const measured = list.some((l) => l.source === "camera");
   return (
     <div>
+      {list.length > 0 && !measured && <p className="mb-3 text-sm text-[var(--amber)]">No measured run is published yet: the runs below are simulations.</p>}
       <div className="flex flex-wrap items-center gap-2">
         {list.map((l) => (
           <button

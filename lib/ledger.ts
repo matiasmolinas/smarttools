@@ -2,8 +2,9 @@
 // the agentvcs repository). Written on the phone, read by the agentvcs CLI or service: `agentvcs verify` checks
 // it, `blame` and `bisect` find which engine change moved the precision.
 //
-//   manifest: what produced the job (app, engine ABI, phone, calibration, plan), as "config" dimensions
-//   ledger:   run_start, one step per hole (metrics: depth error, max angle, score), run_end
+//   manifest: what produced the job (app and its build, engine ABI and binary hash, phone, calibration, plan), as
+//             "config" dimensions
+//   ledger:   run_start, one step per hole (metrics: depth error, max angle, position error, score), run_end
 //
 // Canonical JSON is RFC 8785 (JCS); hashes are BLAKE3-256 written "b3:<hex>".
 
@@ -47,8 +48,9 @@ export function jobManifest(job: JobRecord) {
   const dim = (content: Json): Dimension => ({ kind: "config", content, content_hash: hash(content) });
   const c = job.context;
   const dimensions: Record<string, Dimension> = {
-    app: dim({ name: "smarttools", version: c.app, source: c.source }),
-    engine: dim({ abi: c.engineAbi }),
+    // build and hash only when known: a job without them keeps the manifest id it always had
+    app: dim({ name: "smarttools", version: c.app, source: c.source, ...(c.build ? { build: c.build } : {}) }),
+    engine: dim({ abi: c.engineAbi, ...(c.engineHash ? { hash: c.engineHash } : {}) }),
     phone: dim({ id: c.phone.id, name: c.phone.name, provisional: c.phone.provisional }),
     calibration: dim({ lens: c.calibration.lens, dock: c.calibration.dock }),
     plan: dim({ id: job.plan.id, hash: hash(job.plan), holes: job.plan.holes.length }),
@@ -56,6 +58,16 @@ export function jobManifest(job: JobRecord) {
   if (c.tracking) dimensions.tracking = dim(c.tracking as unknown as Json);
   const manifest_id = hash({ protocol: PROTOCOL, dimensions });
   return { protocol: PROTOCOL, type: "harness_manifest", name: `smarttools ${c.app} · ${job.plan.name}`, parent_ids: [] as string[], dimensions, manifest_id };
+}
+
+/** What produced a job's numbers, as one id (the manifest's): the screens show its first 12 characters. */
+export function harnessId(job: JobRecord): string {
+  return jobManifest(job).manifest_id;
+}
+
+/** The harness id as the screens show it: "harness " and the first 12 hex characters after "b3:". */
+export function harnessLabel(job: JobRecord): string {
+  return `harness ${harnessId(job).replace(/^b3:/, "").slice(0, 12)}`;
 }
 
 /** The job as an agentvcs audit bundle (what `agentvcs verify` reads). */
@@ -72,6 +84,7 @@ export function jobLedger(job: JobRecord) {
   job.holes.forEach((h, i) => {
     const planned = job.plan.holes.find((p) => p.label === h.name);
     const metrics: Record<string, number> = { "depth.error_mm": round3(h.seatedMm - h.plannedMm), "angle.max_deg": h.maxAngleDeg, "hole.flagged": h.flagged ? 1 : 0 };
+    if (h.offsetMm != null) metrics["position.error_mm"] = h.offsetMm;
     if (h.score != null) metrics["hole.score"] = h.score;
     add("step", {
       step_index: i,

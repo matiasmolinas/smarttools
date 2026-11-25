@@ -9,8 +9,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BUILT_IN_PLANS, SHEET_PLAN, type Plan } from "@/lib/plan";
 import type { JobRecord } from "@/lib/jobrecord";
 import { activePlanId, browserMemory, setActivePlanId, type Row } from "@/lib/memory";
-import { reportHtml } from "@/lib/report";
-import { jobLedger } from "@/lib/ledger";
+import { holeLine, reportHtml } from "@/lib/report";
+import { harnessLabel, harnessId, jobLedger } from "@/lib/ledger";
 import { blame, summarize, verifyBundle, type Bundle } from "@/lib/vcs";
 import { checkJob, recipeFromJob, recipeFromPlan, recipeOfPlan, tallyChecks, tallyText, type Recipe } from "@/lib/recipe";
 import { gateRecipe, type RecipeGate } from "@/lib/gate";
@@ -302,7 +302,7 @@ export default function MemoryScreen() {
                 </div>
                 <p className={`mt-2 text-sm ${s.redo ? "text-[#ff8a8a]" : "text-[var(--green)]"}`}>{j.report.verdict}</p>
                 <p className="mt-1 font-mono text-[11px] text-white/50">
-                  {j.holes.map((h) => `${h.name} ${h.seatedMm.toFixed(1)}/${h.plannedMm} mm ${h.maxAngleDeg.toFixed(2)}°`).join(" · ")}
+                  {j.holes.map(holeLine).join(" · ")}
                 </p>
                 <JobChecks job={j} recipe={recipeOfPlan(j.plan)} />
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -315,6 +315,9 @@ export default function MemoryScreen() {
                   <button className={btn} onClick={() => download(`${slug(j.plan.name)}-ledger.json`, JSON.stringify(jobLedger(j), null, 2), "application/json")}>
                     agentvcs ledger
                   </button>
+                  <span className="self-center font-mono text-[11px] text-white/40" title={harnessId(j)}>
+                    {harnessLabel(j)}
+                  </span>
                   <button className={btn} onClick={() => download(`${slug(j.plan.name)}-${j.ended.slice(0, 10)}.recipe.md`, recipeFromJob(j), "text/markdown")}>
                     As a recipe (athos)
                   </button>

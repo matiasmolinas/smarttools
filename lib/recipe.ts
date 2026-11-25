@@ -10,7 +10,7 @@
 //   **Links:** [[#d2]]
 //
 // Here a Check is answered by the engine's measurements, not by a person or a model: bindCheck turns its words
-// into measurements (depth, angle, score, no alarm); words it does not know are left for the person to confirm.
+// into measurements (depth, angle, position, score, no alarm); words it does not know are left for the person to confirm.
 // A "Drill ..." step is a hole: planFromRecipe makes the plan the engine works, recipeFromPlan and recipeFromJob
 // write one back (an expert's job becomes a recipe someone else can follow).
 //
@@ -117,6 +117,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 export type Measure =
   | { kind: "depth"; tolMm: number }
   | { kind: "angle"; maxDeg: number }
+  | { kind: "position"; maxMm: number }
   | { kind: "score"; min: number }
   | { kind: "clean" };
 
@@ -130,6 +131,7 @@ const NUM = "(\\d+(?:[.,]\\d+)?)";
 const VOCAB: { re: RegExp; make: (n: number) => Measure }[] = [
   { re: new RegExp(`depth(?:\\s+error)?\\s+(?:within|under|below|less than|at most|<=?|±)\\s*±?\\s*${NUM}\\s*mm`, "gi"), make: (n) => ({ kind: "depth", tolMm: n }) },
   { re: new RegExp(`angle(?:\\s+error)?\\s+(?:within|under|below|less than|at most|<=?)\\s*${NUM}\\s*(?:°|deg(?:rees?)?)`, "gi"), make: (n) => ({ kind: "angle", maxDeg: n }) },
+  { re: new RegExp(`(?:position|offset)(?:\\s+error)?\\s+(?:within|under|below|less than|at most|<=?)\\s*${NUM}\\s*mm`, "gi"), make: (n) => ({ kind: "position", maxMm: n }) },
   { re: new RegExp(`score\\s+(?:at least|over|above|>=?)\\s*${NUM}`, "gi"), make: (n) => ({ kind: "score", min: n }) },
   { re: /\b(?:no alarms?|not flagged|no flags?)\b/gi, make: () => ({ kind: "clean" }) },
 ];
@@ -159,6 +161,8 @@ export function evaluate(b: Binding, h: HoleRecord): Outcome {
       const err = h.seatedMm - h.plannedMm;
       (Math.abs(err) <= m.tolMm ? seen : fails).push(`depth ${err >= 0 ? "+" : ""}${err.toFixed(2)} mm (±${m.tolMm})`);
     } else if (m.kind === "angle") (h.maxAngleDeg <= m.maxDeg ? seen : fails).push(`angle ${h.maxAngleDeg.toFixed(2)}° (≤ ${m.maxDeg}°)`);
+    // a hole recorded before the position was kept cannot pass a position Check
+    else if (m.kind === "position") (h.offsetMm != null && h.offsetMm <= m.maxMm ? seen : fails).push(`position ${h.offsetMm != null ? `${h.offsetMm.toFixed(2)} mm` : "–"} (≤ ${m.maxMm} mm)`);
     else if (m.kind === "score") (h.score != null && h.score >= m.min ? seen : fails).push(`score ${h.score ?? "–"} (≥ ${m.min})`);
     else (h.flagged ? fails : seen).push(h.flagged ? `flagged: ${h.flagged}` : "no alarm");
   }

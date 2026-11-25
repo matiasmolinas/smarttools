@@ -34,6 +34,8 @@ import { DEFAULT_PHONE_ID, phoneById } from "@/lib/phones";
 import { BUILT_IN_PLANS, SHEET_PLAN, addHole, newPlan, removeLastHole, type Plan } from "@/lib/plan";
 import { activePlanId, browserMemory, clearJobDraft, readJobDraft, setActivePlanId, writeJobDraft } from "@/lib/memory";
 import { draftAction, resumableHoles, versionLine, type HoleRecord } from "@/lib/jobrecord";
+import { harnessId, harnessLabel } from "@/lib/ledger";
+import { holeLine } from "@/lib/report";
 import { bindCheck, checkHole, dueManual, recipeOfPlan, simulatorRecipePlan, tallySoFar, tallyText, type Recipe, type Statement, type StepCheck } from "@/lib/recipe";
 import { recordingFileName, sizeText } from "@/lib/recording";
 
@@ -1107,6 +1109,7 @@ export default function HudScreen() {
                 Plan: <b className="text-white">{plan.name}</b> · {done} of {plan.holes.length} holes done
               </p>
               {recipe && <JobChecks recipe={recipe} plan={plan} job={trackerRef.current?.jobSoFar() ?? null} />}
+              <JobHoles job={trackerRef.current?.jobSoFar() ?? null} />
               <div className="mt-4 flex flex-col gap-3">
                 <BigButton onClick={nextPlan}>Change plan</BigButton>
                 <BigButton
@@ -1297,6 +1300,23 @@ function JobChecks({ recipe, plan, job }: { recipe: Recipe; plan: Plan; job: Ret
         {plan.reviewed ? " · reviewed" : ""}
       </p>
       {job && <p className="mt-1 text-lg text-white/75">Checks: {tallyText(tallySoFar(recipe, job))}</p>}
+    </>
+  );
+}
+
+/** The Job sheet's holes so far (depth, angle, how far from the mark) and what produced the numbers. */
+function JobHoles({ job }: { job: ReturnType<BrowserNav["jobSoFar"]> }) {
+  if (!job) return null;
+  return (
+    <>
+      {job.holes.length > 0 && (
+        <p className="mt-1 font-mono text-base text-white/65">
+          {job.holes.map(holeLine).join(" · ")}
+        </p>
+      )}
+      <p className="mt-1 font-mono text-sm text-white/40" title={harnessId(job)}>
+        {harnessLabel(job)}
+      </p>
     </>
   );
 }

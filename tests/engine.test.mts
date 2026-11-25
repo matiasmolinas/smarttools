@@ -79,3 +79,23 @@ test("an uncalibrated tool keeps the gate closed", () => {
   assert.equal(s.nodes.find((n) => n.id === tool)?.status, "uncalibrated");
   e.free();
 });
+
+test("the core keeps the BLAKE3 of the WebAssembly it runs, from bytes and from a URL", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { hashBytes } = await import("../lib/ledger.ts");
+  const { NavCore } = await import("../lib/engine.ts");
+  const bytes = readFileSync(new URL("../public/engine/nav_core.wasm", import.meta.url));
+  assert.equal(core.wasmHash, hashBytes(bytes));
+  assert.match(core.wasmHash!, /^b3:[0-9a-f]{64}$/);
+  // from a URL, the bytes are fetched (here a stand-in fetch, as the service worker's cached copy would answer)
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(bytes)) as typeof fetch;
+  try {
+    const fromUrl = await NavCore.load("/engine/nav_core.wasm");
+    assert.equal(fromUrl.wasmHash, core.wasmHash);
+    globalThis.fetch = (async () => new Response("gone", { status: 404 })) as typeof fetch;
+    await assert.rejects(NavCore.load("/engine/nav_core.wasm"), /404/);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

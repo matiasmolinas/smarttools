@@ -74,6 +74,22 @@ The camera-side lip is low (8 mm) so it never covers the lens.
    for 20 s. Then rest the tip on **A2**, tap **Calibrate**, circle the drill around the tip for 5 s and twist it
    around the bit for 5 s.
 
+## Tilt and precision (simulated)
+
+How the camera's tilt changes what the phone measures. Drill square on the centre of one sheet, tip on the sheet,
+twelve twists of the drill, 0.3 px of noise on each marker corner, every frame solved on its own (no filter). These
+numbers are simulated and for one sheet (`tests/mount.test.mts`): a real run says what holds.
+
+| Tilt | Markers in view | Angle (RMS) | Depth (RMS) |
+|---|---|---|---|
+| 0° | 6–8 | 0.20° | 0.27 mm |
+| 15° | 14–16 | 0.06° | 0.05 mm |
+| 25° | 16–28 | 0.04° | 0.03 mm |
+
+**Set the tilt between 15° and 25°.** At 0° the tip is out of the image and the angle is three times noisier.
+To change it: loosen the rear M5 wing nut (the one in the arc slot), turn the arm toward the bit, and tighten it again.
+Then calibrate (the app measures the real angle).
+
 ## Before printing: measure your drill
 
 I don't have drawings of the Ingco CDLI20022, so the clamp uses two V-blocks that fit a range of diameters (the script

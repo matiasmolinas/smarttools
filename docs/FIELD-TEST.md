@@ -106,6 +106,11 @@ The printed dock is not ready yet. A provisional mount works for today's measure
    camera looking forward and down along the bit, tilted about 15°.
 3. **The markers in view.** The mount must not cover the camera.
 
+**The tilt.** Set it between 15° and 25° toward the bit. At 0° the tip is out of the image and the angle is about
+three times noisier (simulated, one sheet: see the table in [hardware/dock/README.md](../hardware/dock/README.md)).
+On the printed dock: loosen the rear M5 wing nut (the one in the arc slot), turn the arm toward the bit, tighten.
+Check that the hinge ears do not show at the bottom of the image at 25°; if they do, use 20°.
+
 One way that works:
 - **The block:** a wooden block strapped to the drill's body, behind the torque collar, with 2 hose clamps or heavy
   cable ties, tightened hard.
@@ -178,6 +183,18 @@ To measure the motor's vibration and not your hand's tremor, **the drill must be
 
 If you want, also repeat motor off and motor on with the drill in your hand (not fixed), and save it as another run.
 In your notes, tell me it was handheld: the difference from the fixed run shows how much is hand tremor.
+
+**Publishing a run on /benchmarks.** On the phone, open `/memory` and download the run (or use the file saved in
+step 8). On the computer, in the repository:
+
+```bash
+npm run bench:add -- smarttools-bench-….json            # checks it, writes public/benchmarks/<id>.json, updates the index
+npm run bench:add -- run.json --id redmi-15-fixed --title "Motor off vs on, drill fixed"   # optional id and title
+```
+
+It refuses a file with problems (and names them), a simulated run (unless `--simulation`) and an id already
+published (unless `--replace`). Measured runs are listed first, newest first. Then deploy: the run is online, and
+/benchmarks no longer says that only simulations are published.
 
 > While the Bench panel is open, the app does not extrapolate the pose ("prediction off"). So what is measured as
 > "filtered" is exactly what the gate uses to decide.
