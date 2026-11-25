@@ -3,8 +3,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { A2_MM, BenchRecorder, isBenchRun, poseStats, summarize, type BenchRun, type ToolPose } from "../lib/bench.ts";
+import { readFileSync, readdirSync } from "node:fs";
+import { A2_MM, BenchRecorder, checkBenchRun, indexWith, isBenchRun, poseStats, summarize, type BenchIndex, type BenchIndexEntry, type BenchRun, type ToolPose } from "../lib/bench.ts";
 import { DEMO_PLAN, LIMITS, validatePlan } from "../lib/plan.ts";
 import { BOARD_MARKERS, MARKER_SIZE } from "../lib/board.ts";
 
@@ -92,4 +92,65 @@ test("the demo plan: four valid holes on a 40 mm square, clear of every marker a
     assert.ok(h.depthMm <= LIMITS.depthMm[1]);
     assert.ok(Math.hypot(h.x - A2_MM[0], h.y - A2_MM[1]) > 20, `${h.label} is too close to A2`);
   }
+});
+
+// ---------------- published runs ----------------
+
+const BENCH_DIR = new URL("../public/benchmarks/", import.meta.url);
+
+test("every published run is listed, exists, passes checkBenchRun, and its id and source match the index", () => {
+  const index = JSON.parse(readFileSync(new URL("index.json", BENCH_DIR), "utf8")) as BenchIndex;
+  assert.ok(index.runs.length >= 1);
+  for (const e of index.runs) {
+    const run = JSON.parse(readFileSync(new URL(e.file, BENCH_DIR), "utf8"));
+    assert.deepEqual(checkBenchRun(run), [], e.file);
+    assert.equal(run.id, e.id, `${e.file}: id`);
+    assert.equal(run.source, e.source, `${e.file}: source`);
+  }
+  const files = readdirSync(BENCH_DIR).filter((f) => f.endsWith(".json") && f !== "index.json");
+  assert.deepEqual(files.filter((f) => !index.runs.some((e) => e.file === f)), [], "files missing from the index");
+  // the order indexWith keeps: camera runs before simulations
+  const kinds = index.runs.map((e) => e.source);
+  assert.deepEqual(kinds, [...kinds].sort((a, b) => Number(a !== "camera") - Number(b !== "camera")));
+});
+
+test("checkBenchRun names every problem of a broken run", () => {
+  const good = JSON.parse(readFileSync(new URL("sim-reference.json", BENCH_DIR), "utf8")) as BenchRun;
+  assert.deepEqual(checkBenchRun(good), []);
+  assert.match(checkBenchRun(null)[0], /not a bench run/);
+  assert.match(checkBenchRun({ kind: "smarttools-job" })[0], /not a bench run/);
+  const e = (x: unknown) => checkBenchRun(x).join(" | ");
+  assert.match(e({ ...good, samples: [] }), /no samples/);
+  assert.match(e({ ...good, source: "phone" }), /source must be "camera" or "simulation"/);
+  assert.match(e({ ...good, summary: [...good.summary, { ...good.summary[0], phase: "warm-up" }] }), /phase "warm-up" does not exist/);
+  assert.match(e({ ...good, summary: [{ ...good.summary[0], phase: "toString" }] }), /phase "toString" does not exist/);
+  assert.match(e({ ...good, source: "camera", summary: good.summary.filter((s) => s.phase === "check-a2") }), /needs a motor-off or a motor-on phase/);
+  assert.equal(e({ ...good, source: "simulation", summary: good.summary.filter((s) => s.phase === "check-a2") }), "", "a simulation may have any phases");
+  const nan = structuredClone(good);
+  nan.summary[1].raw!.angleJitterDeg = NaN;
+  nan.summary[0].latencyMs = Infinity;
+  const msg = e(nan);
+  assert.match(msg, /motor-on\.raw\.angleJitterDeg is not a finite number/);
+  assert.match(msg, /motor-off\.latencyMs is not a finite number/);
+  assert.match(e({ ...good, created: "yesterday" }), /created is not a date/);
+});
+
+test("indexWith: camera runs first, newest first, then simulations; the same id is replaced", () => {
+  const ent = (id: string, source: "camera" | "simulation", created?: string): BenchIndexEntry => ({ id, file: `${id}.json`, source, title: id, ...(created ? { created } : {}) });
+  let idx: BenchIndex = { runs: [ent("sim-reference", "simulation"), ent("sim-reference-tip", "simulation")] };
+  idx = indexWith(idx, ent("phone-a", "camera", "2026-12-01T10:00:00.000Z"));
+  assert.deepEqual(idx.runs.map((r) => r.id), ["phone-a", "sim-reference", "sim-reference-tip"]);
+  idx = indexWith(idx, ent("phone-b", "camera", "2026-12-02T10:00:00.000Z"));
+  idx = indexWith(idx, ent("phone-old", "camera", "2026-11-30T10:00:00.000Z"));
+  idx = indexWith(idx, ent("sim-new", "simulation", "2026-12-03T10:00:00.000Z"));
+  assert.deepEqual(idx.runs.map((r) => r.id), ["phone-b", "phone-a", "phone-old", "sim-new", "sim-reference", "sim-reference-tip"]);
+  // replaced, not doubled: the new date moves it
+  idx = indexWith(idx, { ...ent("phone-old", "camera", "2026-12-04T10:00:00.000Z"), title: "again" });
+  assert.equal(idx.runs.filter((r) => r.id === "phone-old").length, 1);
+  assert.deepEqual(idx.runs.slice(0, 3).map((r) => r.id), ["phone-old", "phone-b", "phone-a"]);
+  assert.equal(idx.runs[0].title, "again");
+  // the index given is not changed
+  const before = structuredClone(idx);
+  indexWith(idx, ent("x", "camera", "2026-12-05T10:00:00.000Z"));
+  assert.deepEqual(idx, before);
 });

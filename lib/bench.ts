@@ -277,3 +277,64 @@ export function isBenchRun(x: unknown): x is BenchRun {
   const r = x as Partial<BenchRun> | null;
   return !!r && r.kind === BENCH_KIND && r.v === BENCH_VERSION && Array.isArray(r.samples) && Array.isArray(r.summary);
 }
+
+// ---------------- published runs ----------------
+
+const finiteDeep = (v: unknown, at: string, out: string[]) => {
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) out.push(`summary: ${at} is not a finite number`);
+  } else if (Array.isArray(v)) v.forEach((x, i) => finiteDeep(x, `${at}[${i}]`, out));
+  else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) finiteDeep(x, at ? `${at}.${k}` : k, out);
+};
+
+/** One line per phase of a run: what scripts/bench-sim.mts and scripts/bench-add.mts print. */
+export function phaseLine(s: PhaseSummary): string {
+  const r = s.raw, f = s.filtered;
+  return (
+    `${s.phase.padEnd(10)} tracked ${(s.tracked * 100).toFixed(0)}% · angle jitter raw ${r?.angleJitterDeg.toFixed(3)}° filtered ${f?.angleJitterDeg.toFixed(3)}° · tip raw ${r?.tipJitterMm.toFixed(3)} filtered ${f?.tipJitterMm.toFixed(3)} mm` +
+    (s.a2 ? ` · tip to A2 ${s.a2.distanceMm} mm` : "")
+  );
+}
+
+/** Every problem of a run file, by name (empty when it can be published). */
+export function checkBenchRun(x: unknown): string[] {
+  const r = x as Partial<BenchRun> | null;
+  if (!r || typeof r !== "object" || r.kind !== BENCH_KIND) return [`not a bench run (kind must be ${BENCH_KIND})`];
+  const e: string[] = [];
+  if (r.v !== BENCH_VERSION) e.push(`version ${String(r.v)}, expected ${BENCH_VERSION}`);
+  if (typeof r.id !== "string" || !r.id) e.push("no id");
+  if (typeof r.created !== "string" || Number.isNaN(Date.parse(r.created))) e.push("created is not a date");
+  if (r.source !== "camera" && r.source !== "simulation") e.push(`source must be "camera" or "simulation", not ${JSON.stringify(r.source)}`);
+  if (!Array.isArray(r.samples) || !r.samples.length) e.push("no samples");
+  if (!Array.isArray(r.summary)) e.push("no summary");
+  else {
+    r.summary.forEach((s, i) => {
+      if (!s || typeof s.phase !== "string" || !Object.hasOwn(PHASES, s.phase)) e.push(`summary ${i}: phase ${JSON.stringify(s?.phase)} does not exist`);
+      finiteDeep(s, `${s?.phase ?? i}`, e);
+    });
+    if (r.source === "camera" && !r.summary.some((s) => s?.phase === "motor-off" || s?.phase === "motor-on")) e.push("a camera run needs a motor-off or a motor-on phase");
+  }
+  return e;
+}
+
+/** A run as listed in public/benchmarks/index.json. created: missing on the first published runs. */
+export interface BenchIndexEntry {
+  id: string;
+  file: string;
+  source: "camera" | "simulation";
+  title: string;
+  created?: string;
+}
+export interface BenchIndex {
+  runs: BenchIndexEntry[];
+}
+
+/** The index with this entry in it (an entry with the same id is replaced): camera runs first, newest first, then
+ * simulations, newest first. Entries without a date go after the dated ones of their kind, in the order they had. */
+export function indexWith(index: BenchIndex, entry: BenchIndexEntry): BenchIndex {
+  const runs = [...index.runs.filter((r) => r.id !== entry.id), entry];
+  const at = (r: BenchIndexEntry) => (r.created ? Date.parse(r.created) : -Infinity);
+  const order = runs.map((r, i) => ({ r, i }));
+  order.sort((a, b) => Number(a.r.source !== "camera") - Number(b.r.source !== "camera") || at(b.r) - at(a.r) || a.i - b.i);
+  return { runs: order.map((o) => o.r) };
+}

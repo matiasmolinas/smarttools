@@ -75,6 +75,23 @@ Redmi 15.
    hoja durante 20 s. Después apoyá la punta en **A2**, tocá **Calibrate**, describí círculos con el taladro alrededor de
    la punta durante 5 s y giralo sobre la mecha durante otros 5 s.
 
+## Inclinación y precisión (simulado)
+
+Cómo cambia lo que mide el teléfono según la inclinación de la cámara. Taladro a escuadra sobre el centro de una hoja,
+punta apoyada en la hoja, doce giros del taladro, 0,3 px de ruido en cada esquina de marcador, cada cuadro resuelto por
+separado (sin filtro). Estos números son simulados y para una sola hoja (`tests/mount.test.mts`): una medición real
+dirá cuánto se sostiene.
+
+| Inclinación | Marcadores a la vista | Ángulo (RMS) | Profundidad (RMS) |
+|---|---|---|---|
+| 0° | 6–8 | 0,20° | 0,27 mm |
+| 15° | 14–16 | 0,06° | 0,05 mm |
+| 25° | 16–28 | 0,04° | 0,03 mm |
+
+**Poné la inclinación entre 15° y 25°.** A 0° la punta queda fuera de la imagen y el ángulo tiene el triple de ruido.
+Para cambiarla: aflojá la mariposa M5 de atrás (la de la ranura en arco), girá el brazo hacia la mecha y volvé a
+apretarla. Después calibrá (la app mide el ángulo real).
+
 ## Antes de mandar a imprimir: medí tu taladro
 
 No tengo los planos del Ingco CDLI20022, así que la abrazadera usa dos V que se adaptan a varios diámetros

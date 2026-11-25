@@ -212,7 +212,7 @@ export class BrowserNav {
   private startSimJob(t0: number) {
     const s = this.session, plan = this.simPlan;
     if (!s || !plan || !this.ephemeral) return;
-    this.recorder = new JobRecorder(plan, defaultContext({ source: "simulation" }), (id) => (plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined), {
+    this.recorder = new JobRecorder(plan, defaultContext({ source: "simulation", ...this.harness() }), (id) => (plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined), {
       wall: (t) => Date.now() - (this.now() - t) * 1000,
       t0,
     });
@@ -531,6 +531,12 @@ export class BrowserNav {
     this.pendingResume = draft;
     if (draft && this.session && !this.ephemeral) this.startJob(this.now());
   }
+  /** What built the numbers, for the job's manifest: the app's build and the engine binary's hash, each when known. */
+  private harness(): { build?: string; engineHash?: string } {
+    const build = process.env.NEXT_PUBLIC_BUILD?.trim();
+    const hash = this.core.wasmHash;
+    return { ...(build ? { build } : {}), ...(hash ? { engineHash: hash } : {}) };
+  }
   private startJob(t0: number) {
     const s = this.session;
     if (!s || this.ephemeral) return;
@@ -541,7 +547,7 @@ export class BrowserNav {
     const wall = (t: number) => Date.now() - (this.now() - t) * 1000;
     this.recorder = new JobRecorder(
       this.plan,
-      defaultContext({ phone: { id: this.phone.id, name: this.phone.name, provisional: this.phone.provisional }, calibration: { lens: c.camera, dock: c.tool }, source: "camera" }),
+      defaultContext({ phone: { id: this.phone.id, name: this.phone.name, provisional: this.phone.provisional }, calibration: { lens: c.camera, dock: c.tool }, source: "camera", ...this.harness() }),
       (id) => (this.plan.holes.some((h) => h.label === s.name(id)) ? s.name(id) : undefined),
       { wall, t0, resume },
     );

@@ -10,7 +10,7 @@ import type { Plan } from "./plan.ts";
 
 export const JOB_KIND = "smarttools-job";
 export const JOB_VERSION = 1;
-export const APP_VERSION = "0.0.16";
+export const APP_VERSION = "0.0.17";
 
 /** What runs, for the screen: "SmartTools 0.0.13 · build abc1234 · engine ABI 6". An empty build reads "dev". */
 export function versionLine(build: string | undefined, abi: number = ENGINE_ABI, app: string = APP_VERSION): string {
@@ -50,6 +50,10 @@ export interface JobRecord {
     calibration: { lens: boolean; dock: boolean };
     /** "camera" = a real job; "simulation" = the demo or a test */
     source: "camera" | "simulation";
+    /** the commit the app was built from (NEXT_PUBLIC_BUILD); missing on older jobs */
+    build?: string;
+    /** BLAKE3 of the engine's WebAssembly bytes that ran ("b3:<hex>"); missing on older jobs */
+    engineHash?: string;
     /** how the phone tracked during the job (the alternatives under evaluation): what blame compares */
     tracking?: TrackingSettings;
   };
@@ -131,6 +135,8 @@ export class JobRecorder {
     const maxAngle = sc?.maxAngleDeg ?? Math.max(0, ...drilling.map((x) => x.angleDeg));
     const seatedMm = this.seated.get(name) ?? Math.max(0, ...samples.map((x) => x.depthMm));
     const flagged = this.flags.get(name) ?? (seatedMm > hole.depthMm + 2 ? "too deep" : undefined);
+    // how far the tip was from the mark when drilling started (scoreScrew's, else the first drill sample)
+    const offsetMm = sc?.startOffsetMm ?? samples.find((x) => x.phase === "drill")?.offsetMm;
     this.done.push({
       name,
       face: "sheet",
@@ -139,6 +145,7 @@ export class JobRecorder {
       seatedMm: round2(seatedMm),
       maxAngleDeg: round2(maxAngle),
       ...(flagged ? { flagged } : {}),
+      ...(offsetMm != null && Number.isFinite(offsetMm) ? { offsetMm: round2(offsetMm) } : {}),
       startedAt: iso(this.wall(this.firstT.get(name) ?? t)),
       endedAt: iso(this.wall(t)),
       score: sc?.score ?? null,

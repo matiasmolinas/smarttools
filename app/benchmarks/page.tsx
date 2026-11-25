@@ -21,7 +21,7 @@ const LOG = [
     date: "2026-11-22",
     title: "Filtering at the tip, and a second marker detector",
     body: [
-      "The engine can now filter the tool's pose at the tip instead of the camera's (Tests → filter at tip). In the simulated reference with the motor running, the filtered tip moves 0.160 mm RMS, against 0.319 mm filtering at the camera and 0.225 mm raw; the angle is the same (0.085°). Second simulated run above; the phone runs will say whether it holds.",
+      "The engine can now filter the tool's pose at the tip instead of the camera's (Tests → filter at tip). In the simulated reference with the motor running, the filtered tip moves 0.160 mm RMS, against 0.319 mm filtering at the camera and 0.225 mm raw; the angle is the same (0.085°). Second simulated run above; a measured run on a phone says whether it holds (the list above marks each run measured or simulated).",
       "A marker detector written in Rust and compiled to WebAssembly, as an option next to js-aruco2 (Tests → detector rust, compare on). On rendered frames it finds the same markers with no false or duplicate ids, its corners sit 0.16 px from the truth before refinement (js-aruco2: 1.45 px), the pose is as accurate, and a whole frame takes 3.4 ms instead of 9.2 ms.",
     ],
   },
@@ -30,7 +30,7 @@ const LOG = [
     title: "The bench lab, and what the simulation already shows",
     body: [
       "The phone app (/hud → Bench) now records timed phases (motor off, motor on, drilling, the tip on A2) with every frame's raw pose and the filtered pose the go/no-go gate decides with, plus the accelerometer as a witness of the motor's shake. The navigation never uses the accelerometer: it is purely optical.",
-      "In the simulated reference, with a modelled 35 Hz motor shake, the One Euro filter halves the bit's angular jitter (0.17° → 0.09° RMS), but the filtered tip moves slightly more than the raw one (0.32 vs 0.23 mm RMS). The cause: the filter smooths the camera's pose, rotation more than translation, and 20 cm ahead at the tip those two stop cancelling. The fix is to filter at the tip. The real runs will say how much it matters.",
+      "In the simulated reference, with a modelled 35 Hz motor shake, the One Euro filter halves the bit's angular jitter (0.17° → 0.09° RMS), but the filtered tip moves slightly more than the raw one (0.32 vs 0.23 mm RMS). The cause: the filter smooths the camera's pose, rotation more than translation, and 20 cm ahead at the tip those two stop cancelling. The fix is to filter at the tip. Runs measured on a real drill say how much it matters.",
     ],
   },
 ];

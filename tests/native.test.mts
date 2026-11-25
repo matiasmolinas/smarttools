@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { DEMO_PLAN, validatePlan } from "../lib/plan.ts";
 import { defaultContext, type HoleRecord, type JobRecord, type TrackingSettings } from "../lib/jobrecord.ts";
 import { buildReport } from "../lib/report.ts";
-import { jobLedger } from "../lib/ledger.ts";
+import { canonical, harnessId, harnessLabel, jobLedger, jobManifest } from "../lib/ledger.ts";
 import { blame, bisect, summarize, verifyBundle, type Bundle } from "../lib/vcs.ts";
 import { bindCheck, checkJob, declaredAuthor, drillOf, evaluate, parseRecipe, planFromRecipe, recipeFromJob, recipeFromPlan } from "../lib/recipe.ts";
 import { gateChanges, gateRecipe, glob, type GateConfig } from "../lib/gate.ts";
@@ -158,6 +158,63 @@ test("bisect finds the first bad job in time order and what changed from the las
   assert.deepEqual(r.changed.filter((c) => c.setting.startsWith("tracking")), [{ setting: "tracking.detectPx", from: "640", to: "960" }]);
   assert.ok(r.probes <= 5);
   assert.equal(bisect(rows, () => false), null);
+});
+
+test("the harness fingerprint: build and engine hash reach the manifest only when known, and change its id", () => {
+  const plain = job(20, good);
+  const m0 = jobManifest(plain);
+  // a job without them keeps today's manifest exactly
+  assert.deepEqual(m0.dimensions.app.content, { name: "smarttools", version: plain.context.app, source: "camera" });
+  assert.deepEqual(m0.dimensions.engine.content, { abi: plain.context.engineAbi });
+  const H1 = "b3:" + "1".repeat(64), H2 = "b3:" + "2".repeat(64);
+  const withIt = (engineHash: string, build = "abc1234"): JobRecord => ({ ...plain, context: { ...plain.context, build, engineHash } });
+  const m1 = jobManifest(withIt(H1));
+  assert.deepEqual(m1.dimensions.app.content, { name: "smarttools", version: plain.context.app, source: "camera", build: "abc1234" });
+  assert.deepEqual(m1.dimensions.engine.content, { abi: plain.context.engineAbi, hash: H1 });
+  assert.notEqual(m1.manifest_id, m0.manifest_id);
+  assert.notEqual(jobManifest(withIt(H2)).manifest_id, m1.manifest_id, "another engine binary, another harness");
+  assert.notEqual(jobManifest(withIt(H1, "def5678")).manifest_id, m1.manifest_id, "another build, another harness");
+  assert.equal(harnessId(withIt(H1)), m1.manifest_id);
+  assert.equal(harnessId(plain), m0.manifest_id);
+  assert.match(harnessLabel(plain), /^harness [0-9a-f]{12}$/);
+  assert.equal(harnessLabel(withIt(H1)), `harness ${m1.manifest_id.slice(3, 15)}`);
+  assert.deepEqual(verifyBundle(jobLedger(withIt(H1)) as unknown as Bundle), { ok: true });
+});
+
+test("blame names the engine binary when only its hash differs between good and bad jobs", () => {
+  const H1 = "b3:" + "a".repeat(64), H2 = "b3:" + "b".repeat(64);
+  const on = (j: JobRecord, engineHash: string): JobRecord => ({ ...j, context: { ...j.context, build: "abc1234", engineHash } });
+  const rows = [on(job(20, good, TRACK, 1), H1), on(job(20, good, TRACK, 2), H1), on(job(21, bad, TRACK, 1), H2), on(job(21, bad, TRACK, 2), H2)].map((j) => summarize(jobLedger(j) as unknown as Bundle));
+  const b = blame(rows, "depth.error_mm");
+  assert.equal(b.length, 1, b.map((x) => x.setting).join(", "));
+  assert.equal(b[0].setting, "engine.hash");
+  assert.equal(b[0].weak, false);
+  assert.deepEqual(b[0].groups.map((g) => g.value), [JSON.stringify(H1), JSON.stringify(H2)]);
+});
+
+test("a hole's position error becomes position.error_mm in its step; a hole without it writes the step it always did", () => {
+  const plain = job(20, good);
+  const withPos: JobRecord = { ...plain, holes: plain.holes.map((h, i) => ({ ...h, offsetMm: [0.31, 0.12, 0.5, 0.08][i] })) };
+  const steps = (j: JobRecord) => (jobLedger(j).ledger.filter((e) => e.kind === "step") as { body: { metrics: Record<string, number> } }[]).map((e) => e.body.metrics);
+  assert.deepEqual(steps(withPos).map((m) => m["position.error_mm"]), [0.31, 0.12, 0.5, 0.08]);
+  for (const m of steps(plain)) assert.deepEqual(Object.keys(m).sort(), ["angle.max_deg", "depth.error_mm", "hole.flagged", "hole.score"]);
+  // the old job's ledger is a function of the old fields only: adding then removing the field gives the same bytes
+  const stripped: JobRecord = { ...withPos, holes: withPos.holes.map(({ offsetMm: _, ...h }) => h) };
+  assert.equal(canonical(jobLedger(stripped)), canonical(jobLedger(plain)));
+});
+
+test("a Check can ask for the position: offset or position within N mm", () => {
+  assert.deepEqual(bindCheck("depth within 0.5 mm, angle under 1° and position within 0.75 mm"), { measures: [{ kind: "depth", tolMm: 0.5 }, { kind: "angle", maxDeg: 1 }, { kind: "position", maxMm: 0.75 }], manual: "" });
+  assert.deepEqual(bindCheck("offset under 1 mm").measures, [{ kind: "position", maxMm: 1 }]);
+  assert.deepEqual(bindCheck("position error at most 0,5 mm").measures, [{ kind: "position", maxMm: 0.5 }]);
+  const h = job(20, good).holes[0];
+  const b = bindCheck("position within 0.75 mm");
+  assert.equal(evaluate(b, { ...h, offsetMm: 0.31 }).status, "pass");
+  assert.match(evaluate(b, { ...h, offsetMm: 0.31 }).detail, /position 0\.31 mm \(≤ 0\.75 mm\)/);
+  assert.equal(evaluate(b, { ...h, offsetMm: 0.9 }).status, "fail");
+  // a hole recorded before the position was kept cannot pass it
+  assert.equal(evaluate(b, h).status, "fail");
+  assert.match(evaluate(b, h).detail, /position – /);
 });
 
 // ---------------- gatekeeper: recipes and change sets ----------------

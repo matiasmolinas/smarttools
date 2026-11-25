@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scoreScrew, type ScrewSample } from "../lib/coach.ts";
-import { buildReport, grade, reportHtml } from "../lib/report.ts";
+import { buildReport, grade, holeLine, reportHtml } from "../lib/report.ts";
 
 function run(o: { angle: number; offset: number; wobble: number; time: number }): ScrewSample[] {
   const s: ScrewSample[] = [];
@@ -29,4 +29,23 @@ test("grades and the report's verdict", () => {
   assert.equal(r.verdict, "1 to redo: S2");
   assert.equal(buildReport("x", [ok], 1).verdict, "all 1 within spec (worst 0.10°)");
   assert.ok(reportHtml(r).includes("<td>S2</td>") && reportHtml(r).includes("redo (part moved)"));
+});
+
+test("the report shows each screw's position error only when a screw has one", () => {
+  const ok = { name: "S1", face: "top", size: "M5", plannedMm: 14, seatedMm: 13.9, maxAngleDeg: 0.1 };
+  const old = reportHtml(buildReport("x", [ok], 1, "2026-11-20"));
+  assert.ok(!old.includes("off the mark"));
+  assert.ok(old.includes("<td>0.10°</td><td class=\"good\">good</td>"));
+  const r = buildReport("x", [{ ...ok, offsetMm: 0.31 }, { ...ok, name: "S2" }], 2, "2026-11-20");
+  assert.equal(r.screws[0].offsetMm, 0.31);
+  assert.equal(JSON.parse(JSON.stringify(r)).screws[0].offsetMm, 0.31);
+  const html = reportHtml(r);
+  assert.ok(html.includes("<th>off the mark</th>"));
+  assert.ok(html.includes("<td>0.31 mm</td>") && html.includes("<td>–</td>"));
+});
+
+test("a hole's compact line names its position error only when it has one", () => {
+  const ok = { name: "S1", face: "top", size: "M5", plannedMm: 14, seatedMm: 13.9, maxAngleDeg: 0.1 };
+  assert.equal(holeLine(ok), "S1 13.9/14 mm 0.10°");
+  assert.equal(holeLine({ ...ok, offsetMm: 0.31 }), "S1 13.9/14 mm 0.10° 0.31 mm off the mark");
 });

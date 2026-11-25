@@ -47,7 +47,7 @@ const NUMBERS = [
   { k: "< 0.3°", v: "angle error while driving, 95th percentile" },
   { k: "120 Hz", v: "the engine's clock, on the phone" },
   { k: "0", v: "language-model tokens in the real-time loop" },
-  { k: "347", v: "automated checks: 69 Rust, 225 TypeScript, 53 end-to-end" },
+  { k: "367", v: "automated checks: 69 Rust, 242 TypeScript, 56 end-to-end" },
 ];
 
 type Project = {
